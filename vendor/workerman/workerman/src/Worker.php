@@ -1338,7 +1338,7 @@ class Worker
         }
         $signals = [SIGINT, SIGTERM, SIGHUP, SIGTSTP, SIGQUIT, SIGUSR1, SIGUSR2, SIGIOT, SIGIO];
         foreach ($signals as $signal) {
-            pcntl_signal($signal, [static::class, 'signalHandler'], false);
+            pcntl_signal($signal, static::signalHandler(...), false);
         }
         // ignore
         pcntl_signal(SIGPIPE, SIG_IGN, false);
@@ -1357,7 +1357,7 @@ class Worker
         $signals = [SIGINT, SIGTERM, SIGHUP, SIGTSTP, SIGQUIT, SIGUSR1, SIGUSR2, SIGIOT, SIGIO];
         foreach ($signals as $signal) {
             // Rewrite master process signal.
-            static::$globalEvent->onSignal($signal, [static::class, 'signalHandler']);
+            static::$globalEvent->onSignal($signal, static::signalHandler(...));
         }
     }
 
@@ -1366,7 +1366,7 @@ class Worker
      *
      * @param int $signal
      */
-    protected static function signalHandler(int $signal): void
+    public static function signalHandler(int $signal): void
     {
         switch ($signal) {
             // Stop.
