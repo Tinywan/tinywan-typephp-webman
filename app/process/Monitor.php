@@ -135,15 +135,19 @@ class Monitor
         if (!$lastMtime) {
             $lastMtime = time();
         }
-        clearstatcache();
         if (!is_dir($monitorDir)) {
             if (!is_file($monitorDir)) {
                 return false;
             }
-            $iteratorArr = [new SplFileInfo($monitorDir)];
-            $count = 0;
-            foreach ($iteratorArr as $file) {
-                $count++;
+            $iterator = [new SplFileInfo($monitorDir)];
+        } else {
+            // recursive traversal directory
+            $dirIterator = new RecursiveDirectoryIterator($monitorDir, FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS);
+            $iterator = new RecursiveIteratorIterator($dirIterator);
+        }
+        $count = 0;
+        foreach ($iterator as $file) {
+            $count++;
 
             /** @var SplFileInfo $file */
             if (is_dir($file->getRealPath())) {
