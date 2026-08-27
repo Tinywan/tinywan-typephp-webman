@@ -31,7 +31,7 @@ EOF;
 
     public function view(Request $request)
     {
-        return view('index/view', ['name' => 'webman']);
+        return view('index/view', ['name' => 'TypePHP (TPC) Webman 编译与原生二进制打包实践']);
     }
 
     public function json(Request $request)

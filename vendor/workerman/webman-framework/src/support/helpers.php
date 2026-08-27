@@ -12,25 +12,6 @@ use support\view\ThinkPHP;
 use support\view\Twig;
 use Workerman\Worker;
 
-/**
- * Get the base path of the application
- */
-if (!defined('BASE_PATH')) {
-    if (!$basePath = Phar::running()) {
-        $basePath = getcwd();
-        while ($basePath !== dirname($basePath)) {
-            if (is_dir("$basePath/vendor") && is_file("$basePath/start.php")) {
-                break;
-            }
-            $basePath = dirname($basePath);
-        }
-        if ($basePath === dirname($basePath)) {
-            $basePath = __DIR__ . '/../../../../../';
-        }
-    }
-    define('BASE_PATH', realpath($basePath) ?: $basePath);
-}
-
     /**
      * return the program execute directory
      * @param string $path
