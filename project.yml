@@ -1,0 +1,69 @@
+name: webman-server
+
+sources:
+  - main.php
+  - vendor/psr
+  - vendor/nikic/fast-route/src
+  - vendor/monolog/monolog/src/Monolog/Logger.php
+  - vendor/monolog/monolog/src/Monolog/LogRecord.php
+  - vendor/monolog/monolog/src/Monolog/ResettableInterface.php
+  - vendor/monolog/monolog/src/Monolog/DateTimeImmutable.php
+  - vendor/monolog/monolog/src/Monolog/ErrorHandler.php
+  - vendor/monolog/monolog/src/Monolog/Registry.php
+  - vendor/monolog/monolog/src/Monolog/Utils.php
+  - vendor/monolog/monolog/src/Monolog/Formatter/FormatterInterface.php
+  - vendor/monolog/monolog/src/Monolog/Formatter/NormalizerFormatter.php
+  - vendor/monolog/monolog/src/Monolog/Formatter/LineFormatter.php
+  - vendor/monolog/monolog/src/Monolog/Formatter/JsonFormatter.php
+  - vendor/monolog/monolog/src/Monolog/Handler/HandlerInterface.php
+  - vendor/monolog/monolog/src/Monolog/Handler/Handler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/AbstractHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/AbstractProcessingHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/StreamHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/RotatingFileHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/ErrorLogHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/NullHandler.php
+  - vendor/monolog/monolog/src/Monolog/Handler/FormattableHandlerInterface.php
+  - vendor/monolog/monolog/src/Monolog/Handler/FormattableHandlerTrait.php
+  - vendor/monolog/monolog/src/Monolog/Handler/ProcessableHandlerInterface.php
+  - vendor/monolog/monolog/src/Monolog/Handler/ProcessableHandlerTrait.php
+  - vendor/monolog/monolog/src/Monolog/Processor
+  - vendor/workerman/workerman/src
+  - vendor/workerman/webman-framework/src
+  - vendor/workerman/coroutine/src
+  - app
+
+ignore:
+  - config
+  - public
+  - runtime
+  - app/view
+  - support
+  - vendor/workerman/webman-framework/src/support/bootstrap.php
+  - vendor/workerman/webman-framework/src/start.php
+  - vendor/workerman/webman-framework/src/windows.php
+  - vendor/workerman/webman-framework/src/Install.php
+  - vendor/workerman/webman-framework/src/support/view
+  - vendor/nikic/fast-route/src/bootstrap.php
+  - vendor/workerman/coroutine/tests
+  - vendor/workerman/coroutine/stubs
+  - vendor/workerman/coroutine/src/Barrier/Swow.php
+  - vendor/workerman/coroutine/src/Channel/Swow.php
+  - vendor/workerman/coroutine/src/Context/Swow.php
+  - vendor/workerman/coroutine/src/Coroutine/Swow.php
+  - vendor/workerman/coroutine/src/WaitGroup/Swow.php
+  - vendor/workerman/workerman/src/Events/Swow.php
+  - vendor/workerman/coroutine/src/Pool.php
+  - vendor/workerman/coroutine/src/Utils/DestructionWatcher.php
+  - vendor/nikic/fast-route/src/functions.php
+  - vendor/workerman/webman-framework/src/support/helpers.php
+  - app/model
+  - app/process/Monitor.php
+
+output: build/webman-server
+mode: bin
+optimize: 2
+job: 8
+debug: false
+cxx-flags:
+  - /bigobj
