@@ -90,8 +90,9 @@ cd dist
    - 将 `Worker::stopAll()` 中 `array_walk` 的闭包形参调整为 `static fn (Worker $worker, mixed ...$args) => $worker->stop(false)`。
 2. **支持 `embed` SAPI 运行环境**：
    - 在 `Worker::checkSapiEnv()` 中补充支持 `PHP_SAPI === 'embed'`。
-3. **修复 Windows 下网络接收与错误检查回调的访问控制**：
-   - 将 `Worker` 类中的 `acceptTcpConnection()`、`acceptUdpConnection()`、`checkErrors()` 访问修饰符由 `protected` 调整为 `public`。
+3. **修复网络接收、错误检查与信号处理回调的访问控制及类型兼容（修复 `TypeError`）**：
+   - 将 `Worker` 类中的 `acceptTcpConnection()`、`acceptUdpConnection()`、`checkErrors()` 与 `signalHandler()` 访问修饰符由 `protected` 调整为 `public`，确保在 Event 扩展或全局生命周期中作为 `callable` 回调时具备正确的访问权限。
+   - 使用现代 `static::signalHandler(...)` 第一型可调用语法注册信号。
 
 ---
 
