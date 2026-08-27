@@ -1,0 +1,721 @@
+#include "phpx_test.h"
+#include "phpx_func.h"
+
+using namespace php;
+
+TEST(array, default_constructor_creates_mutable_array) {
+    Array array;
+
+    ASSERT_NE(array.array(), &zend_empty_array);
+    array.append(42);
+    ASSERT_EQ(array.get(0).toInt(), 42);
+}
+
+TEST(array, subscript_assignment_preserves_copy_on_write) {
+    Array original{"original"};
+    Array copy = original;
+
+    copy[0] = "changed";
+
+    ASSERT_STREQ(original.get(0).toCString(), "original");
+    ASSERT_STREQ(copy.get(0).toCString(), "changed");
+}
+
+TEST(array, get_returns_owned_values_and_preserves_php_keys) {
+    Array array;
+    array.set(static_cast<zend_ulong>(0), "first");
+    array.set(String("12"), "numeric");
+    array.set(String("name"), "phpx");
+    array.set(Variant("variant"), "dynamic");
+
+    Variant first = array.get(0);
+    array.set(static_cast<zend_ulong>(0), "changed");
+
+    ASSERT_STREQ(first.toCString(), "first");
+    String numericKey("12");
+    String nameKey("name");
+    ASSERT_STREQ(array.get(numericKey).toCString(), "numeric");
+    ASSERT_STREQ(array.get(nameKey.str()).toCString(), "phpx");
+    ASSERT_STREQ(array.get(Variant("variant")).toCString(), "dynamic");
+    ASSERT_TRUE(array.get(999).isNull());
+    ASSERT_TRUE(array.get(String("missing")).isNull());
+}
+
+TEST(array, variant_keys_preserve_boolean_and_null_write_semantics) {
+    Array array;
+
+    array.setValue(Variant(false), "false-key");
+    array.setValue(Variant(true), "true-key");
+    array.setValue(Variant(), "appended");
+
+    ASSERT_EQ(array.count(), 3);
+    ASSERT_STREQ(array.get(Variant(false)).toCString(), "false-key");
+    ASSERT_STREQ(array.get(Variant(true)).toCString(), "true-key");
+    ASSERT_STREQ(array.get(2).toCString(), "appended");
+    ASSERT_TRUE(array.del(Variant(false)));
+    ASSERT_TRUE(array.get(0).isNull());
+}
+
+TEST(array, subscript_assignment_updates_existing_reference) {
+    Variant value = "original";
+    Reference reference = value.toReference();
+    Variant referenced(reference.const_ptr(), Ctor::CopyRef);
+    Array array;
+    array.append(referenced);
+
+    array[0] = "changed";
+
+    ASSERT_STREQ(reference.toCString(), "changed");
+    ASSERT_TRUE(array.get(0).isReference());
+}
+
+TEST(array, tuple_conversion) {
+    auto values = std::make_tuple(42, String("hello"), true);
+    Array array(values);
+    ASSERT_EQ(array.get(0).toInt(), 42);
+    ASSERT_STREQ(array.get(1).toCString(), "hello");
+    ASSERT_TRUE(array.get(2).toBool());
+
+    array = std::make_tuple(String("updated"), 3.5);
+    ASSERT_EQ(array.count(), 2);
+    ASSERT_STREQ(array.get(0).toCString(), "updated");
+    ASSERT_DOUBLE_EQ(array.get(1).toFloat(), 3.5);
+}
+
+TEST(array, tuple_rvalue_consumes_owned_variants) {
+    auto values = std::make_tuple(Variant("moved"), Variant(42));
+    zend_string *string = Z_STR_P(std::get<0>(values).unwrap_ptr());
+
+    Array array(std::move(values));
+
+    ASSERT_TRUE(std::get<0>(values).isUndef());
+    ASSERT_TRUE(std::get<1>(values).isUndef());
+    ASSERT_EQ(Z_STR_P(array.get(0).unwrap_ptr()), string);
+    ASSERT_STREQ(array.get(0).toCString(), "moved");
+    ASSERT_EQ(array.get(1).toInt(), 42);
+}
+
+TEST(array, tuple_tie_move_assignment_transfers_owned_variants) {
+    auto values = std::make_tuple(Variant("moved"), Variant(42));
+    zend_string *string = Z_STR_P(std::get<0>(values).unwrap_ptr());
+    Variant first;
+    Variant second;
+
+    std::tie(first, second) = std::move(values);
+
+    ASSERT_TRUE(std::get<0>(values).isUndef());
+    ASSERT_TRUE(std::get<1>(values).isUndef());
+    ASSERT_EQ(Z_STR_P(first.unwrap_ptr()), string);
+    ASSERT_EQ(GC_REFCOUNT(string), 1);
+    ASSERT_STREQ(first.toCString(), "moved");
+    ASSERT_EQ(second.toInt(), 42);
+}
+
+TEST(array, tuple_tie_lvalue_assignment_keeps_copy_semantics) {
+    auto values = std::make_tuple(Variant("copied"), Variant(42));
+    zend_string *string = Z_STR_P(std::get<0>(values).unwrap_ptr());
+    Variant first;
+    Variant second;
+
+    std::tie(first, second) = values;
+
+    ASSERT_STREQ(std::get<0>(values).toCString(), "copied");
+    ASSERT_EQ(std::get<1>(values).toInt(), 42);
+    ASSERT_EQ(Z_STR_P(first.unwrap_ptr()), string);
+    ASSERT_EQ(GC_REFCOUNT(string), 2);
+    ASSERT_STREQ(first.toCString(), "copied");
+    ASSERT_EQ(second.toInt(), 42);
+}
+
+TEST(array, append_rvalue_indirect_materializes_value) {
+    Array array{"first"};
+
+    array.append(array.item(0));
+    array[0] = "changed";
+
+    ASSERT_EQ(array.count(), 2);
+    ASSERT_STREQ(array.get(0).toCString(), "changed");
+    ASSERT_STREQ(array.get(1).toCString(), "first");
+}
+
+TEST(array, set_materializes_a_source_bucket_before_structural_mutation) {
+    Array array{"source"};
+
+    // The source is a borrowed pointer into the packed HashTable. Adding a
+    // string key converts that table to mixed storage before Zend consumes the
+    // value, so Array::set() must snapshot the zval first.
+    array.set("named", array.item(0));
+    array[0] = "changed";
+
+    ASSERT_STREQ(array.get(0).toCString(), "changed");
+    ASSERT_STREQ(array.get("named").toCString(), "source");
+}
+
+TEST(array, append_self_creates_value_snapshot) {
+    Array array{1};
+
+    array.append(std::move(array));
+
+    ASSERT_EQ(array.count(), 2);
+    ASSERT_EQ(array.get(0).toInt(), 1);
+    ASSERT_TRUE(array.get(1).isArray());
+    Array snapshot = array.get(1).toArray();
+    ASSERT_EQ(snapshot.count(), 1);
+    ASSERT_EQ(snapshot.get(0).toInt(), 1);
+}
+
+TEST(array, value_writes_dereference_source_references) {
+    Variant source = 1;
+    Reference reference = source.toReference();
+    Variant referenced(reference.const_ptr(), Ctor::CopyRef);
+
+    Array values;
+    values.appendValue(referenced);
+    values.setValue("named", referenced);
+
+    reference = 2;
+    ASSERT_EQ(values.get(0).toInt(), 1);
+    ASSERT_FALSE(values.get(0).isReference());
+    ASSERT_EQ(values.get("named").toInt(), 1);
+    ASSERT_FALSE(values.get("named").isReference());
+
+    Array explicitReference;
+    explicitReference.append(referenced);
+    reference = 3;
+    ASSERT_EQ(explicitReference.get(0).toInt(), 3);
+    ASSERT_TRUE(explicitReference.get(0).isReference());
+}
+
+TEST(array, value_write_dereferences_an_indirect_reference) {
+    Variant source = 10;
+    Reference reference = source.toReference();
+    Variant referenced(reference.const_ptr(), Ctor::CopyRef);
+    Array sourceArray;
+    sourceArray.append(referenced);
+
+    Array copy;
+    copy.appendValue(sourceArray.item(0));
+    reference = 20;
+
+    ASSERT_EQ(copy.get(0).toInt(), 10);
+    ASSERT_FALSE(copy.get(0).isReference());
+    ASSERT_EQ(sourceArray.get(0).toInt(), 20);
+    ASSERT_TRUE(sourceArray.get(0).isReference());
+}
+
+TEST(array, list) {
+    Array array;
+    array.append(50);
+    array.append(30);
+    array.append(100);
+    array.append(10);
+    array.append(90);
+
+    ASSERT_EQ(array.get(2).toInt(), 100);
+    ASSERT_EQ(array[3].toInt(), 10);
+
+    zend_ulong j = 0;
+    for (auto i = array.begin(); i != array.end(); i++) {
+        ASSERT_EQ(i.key().toInt(), j);
+        ASSERT_EQ(i.value().toInt(), array[j].toInt());
+        j++;
+    }
+
+    ASSERT_TRUE(array.begin() == array.begin());
+
+    auto arr2 = array.slice(1, 3);
+    ASSERT_EQ(arr2.count(), 3);
+    ASSERT_EQ(arr2[0].toInt(), 30);
+
+    array.sort();
+    ASSERT_EQ(array[0].toInt(), 10);
+
+    array.append(3.14);
+    ASSERT_EQ(array.count(), 6);
+
+    ASSERT_TRUE(array.exists(4));
+    ASSERT_FALSE(array.exists(999));
+
+    array.clean();
+    ASSERT_EQ(array.count(), 0);
+}
+
+TEST(array, map) {
+    Array array = create_map();
+
+    auto arr2 = array.slice(2, 2);
+    ASSERT_EQ(arr2.count(), 2);
+    ASSERT_EQ(arr2["php"].toInt(), 3);
+
+    auto obj1 = newObject("stdClass");
+    array.set("object", obj1);
+
+    auto obj2 = array.get("object").toObject();
+    ASSERT_EQ(obj1.getId(), obj2.getId());
+
+    ASSERT_TRUE(array.exists("object"));
+    ASSERT_FALSE(array.exists(1990));
+
+    array.set(1990, "world");
+    ASSERT_TRUE(array.exists(1990));
+
+    array.del(1990);
+    ASSERT_FALSE(array.exists(1990));
+
+    array.del("object");
+    ASSERT_FALSE(array.exists("object"));
+}
+
+TEST(array, init) {
+    Array a1 = {
+        "hello",
+        3.1415,
+    };
+
+    ASSERT_EQ(a1.count(), 2);
+    ASSERT_STREQ(a1[0].toCString(), "hello");
+    ASSERT_EQ(a1[1].toFloat(), 3.1415);
+
+    Array a2 = {{"hello", Variant("very good")}, {"world", Variant(33.43)}, {"php", 9999}};
+    ASSERT_EQ(a2.count(), 3);
+    ASSERT_STREQ(a2["hello"].toCString(), "very good");
+    ASSERT_EQ(a2["php"].toInt(), 9999);
+    ASSERT_EQ(a2["world"].toFloat(), 33.43);
+
+    Array a3 = {{1111, Variant("hello")}, {2222, Variant(3.14)}, {3333, 100}};
+    ASSERT_EQ(a3.count(), 3);
+    ASSERT_STREQ(a3[1111].toCString(), "hello");
+    ASSERT_EQ(a3[2222].toFloat(), 3.14);
+    ASSERT_EQ(a3[3333].toFloat(), 100);
+
+    Array a4(null.ptr());
+    ASSERT_EQ(a4.count(), 0);
+}
+
+TEST(array, search) {
+    Array arr = create_list();
+    Variant v1{"php"};
+    Variant v2{"python"};
+    Variant v3{"not-exists"};
+
+    ASSERT_EQ(arr.search(v1).toInt(), 0);
+    ASSERT_EQ(arr.search(v2).toInt(), 3);
+    ASSERT_TRUE(arr.search(v3).isFalse());
+
+    Array arr2 = create_map();
+    Variant v4{3};
+    ASSERT_STREQ(arr2.search(v4).toCString(), "php");
+
+    Array arr3;
+    Variant v5("hello");
+    arr3.set(1990, v5);
+    ASSERT_EQ(arr3.search(v5).toInt(), 1990);
+}
+
+TEST(array, update) {
+    Array arr = create_map();
+    arr["php"] = 999;
+    ASSERT_EQ(arr.get("php").toInt(), 999);
+
+    arr["rust"] = 1000;
+    ASSERT_EQ(arr.get("rust").toInt(), 1000);
+
+    arr.set("java", 666);
+    ASSERT_EQ(arr.get("java").toInt(), 666);
+
+    Array arr2 = create_list();
+    arr2[2] = "golang";
+    ASSERT_STREQ(arr2.get(2).toCString(), "golang");
+
+    arr2[2] = "swift";
+    ASSERT_STREQ(arr2.get(2).toCString(), "swift");
+
+    arr2[5] = "erlang";
+    ASSERT_STREQ(arr2.get(5).toCString(), "erlang");
+
+    arr2[5] = "node.js";
+    ASSERT_STREQ(arr2.get(5).toCString(), "node.js");
+}
+
+TEST(array, nesting) {
+    Array list = create_list();
+    Array map = create_map();
+    list.append(map);
+    ASSERT_EQ(list.count(), 6);
+}
+
+TEST(array, foreach) {
+    Array arr = create_list();
+    std::vector<std::string> list;
+    for (auto i = arr.begin(); i != arr.end(); i++) {
+        list.push_back(i.value().toStdString());
+    }
+    ASSERT_EQ(list.size(), 5);
+
+    arr.del(3);
+    list.clear();
+    for (auto i = arr.begin(); i != arr.end(); i++) {
+        list.push_back(i.value().toStdString());
+    }
+    ASSERT_EQ(list.size(), 4);
+}
+
+TEST(array, foreach2) {
+    Array arr = create_list();
+    for (auto i : arr) {
+        ASSERT_TRUE(i.key.isInt());
+        ASSERT_TRUE(i.value.isString());
+    }
+}
+
+TEST(array, foreach_ref) {
+    Array arr = create_map();
+    for (auto i = arr.begin(); i != arr.end(); i++) {
+        auto ref = i.valueRef();
+        ref *= 3;
+    }
+
+    ASSERT_EQ(arr.get("php").toInt(), 9);
+    ASSERT_EQ(arr.get("node.js").toInt(), 15);
+}
+
+TEST(array, contains) {
+    Array arr = create_list();
+    Variant v1{"php"};
+    ASSERT_TRUE(arr.contains(v1));
+
+    Variant v2{"null"};
+    ASSERT_FALSE(arr.contains(v2));
+}
+
+TEST(array, join) {
+    Array arr = create_list();
+    auto s = arr.join(",");
+    ASSERT_GE(s.length(), 20);
+}
+
+TEST(array, swap) {
+    Variant v;
+    zval zarr;
+    array_init(&zarr);
+    add_next_index_long(&zarr, 199);
+    add_next_index_long(&zarr, 189);
+    v = &zarr;
+    zval_ptr_dtor(&zarr);
+
+    Array arr(v);
+    ASSERT_EQ(arr[0].toInt(), 199);
+    ASSERT_EQ(arr[1].toInt(), 189);
+}
+
+TEST(array, slice) {
+    Array arr = create_list();
+    arr.append("erlang");
+    arr.append("ruby");
+    arr.append("lua");
+
+    auto arr2 = arr.slice(2, 4, true);
+    ASSERT_EQ(arr2.count(), 4);
+    ASSERT_TRUE(arr2.get(2).equals("go"));
+
+    auto arr3 = arr.slice(2, 4, false);
+    ASSERT_EQ(arr3.count(), 4);
+    ASSERT_TRUE(arr3[1].equals("python"));
+
+    auto arr4 = arr.slice(arr.count() + 1);
+    ASSERT_TRUE(arr4.empty());
+
+    auto arr5 = arr.slice(2, -3, false);
+    ASSERT_EQ(arr5.count(), 3);
+
+    Array arr6;
+    arr6[1990] = "hello";
+    arr6[1991] = "world";
+    arr6[2029] = "php";
+    arr6[2099] = "swoole";
+
+    auto arr7 = arr6.slice(1, -1, false);
+    ASSERT_EQ(arr7.count(), 2);
+    ASSERT_STREQ(arr7[0].toCString(), "world");
+    ASSERT_STREQ(arr7[1].toCString(), "php");
+
+    auto arr8 = arr7.slice(1, -4);
+    ASSERT_EQ(arr8.count(), 0);
+}
+
+TEST(array, subscript) {
+    Array arr = create_list();
+
+    auto v1 = arr[0];
+    ASSERT_EQ(v1, "php");
+
+    Array map = create_map();
+    String key = "php";
+    auto v2 = map[key];
+    ASSERT_EQ(v2, 3);
+}
+
+TEST(array, merge) {
+    Array arr1 = create_list();
+    Array arr2 = {"erlang", "ruby", "lua"};
+    arr1.merge(arr2);
+    ASSERT_EQ(arr2.count(), 3);
+    ASSERT_EQ(arr1.count(), 8);
+}
+
+TEST(array, add) {
+    Array a = {{"a", "apple"}, {"b", "banana"}};
+    Array b = {{"a", "pear"}, {"b", "strawberry"}, {"c", "cherry"}};
+    Array c = a + b;
+    ASSERT_EQ(c.length(), 3);
+    ASSERT_TRUE(c.get("c").equals("cherry"));
+
+    Array d = a;
+    ASSERT_EQ(a.length(), 2);
+    d += b;
+    ASSERT_EQ(a.length(), 2);
+    ASSERT_EQ(d.length(), 3);
+    ASSERT_TRUE(d.get("b").equals("banana"));
+
+    Array e = b;
+    ASSERT_EQ(b.length(), 3);
+    e += a;
+    ASSERT_EQ(b.length(), 3);
+    ASSERT_EQ(e.length(), 3);
+    ASSERT_TRUE(e.get("b").equals("strawberry"));
+}
+
+TEST(array, bad_type) {
+    auto arr1 = create_list();
+    try {
+        auto v = arr1.get(2);
+        Array o(v);
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto s = e.call("getMessage");
+        ASSERT_TRUE(str_contains(s, "parameter 1 must be `array`, got `string`").toBool());
+    }
+}
+
+TEST(array, ref) {
+    Array a = {{"a", "apple"}, {"b", "banana"}};
+    var ref = &a;
+    a.set("c", "cherry");
+    ASSERT_EQ(a.count(), 3);
+
+    auto b = ref.toArray();
+    ASSERT_EQ(b.count(), 3);
+    ASSERT_EQ(b.length(), 3);
+    ASSERT_EQ(ref.length(), 3);
+
+    auto c = ref.getRefValue();
+    ASSERT_EQ(c.length(), 3);
+
+    ref.offsetSet("c", "orange");
+    ASSERT_EQ(c.length(), 3);
+    ASSERT_EQ(ref.length(), 3);
+}
+
+TEST(array, ref2) {
+    Array numbers{99, 10, 7};
+    auto ref = numbers.toReference();
+    sort(ref);
+    ASSERT_EQ(ref.offsetGet(0).toInt(), 7);
+}
+
+TEST(array, toArray) {
+    var a = 10;
+    auto arr = toArray(a);
+    ASSERT_EQ(arr.length(), 1);
+    ASSERT_EQ(arr.get(0).toInt(), 10);
+
+    var s = "hello world";
+    auto arr2 = toArray(s);
+    ASSERT_EQ(arr2.length(), 1);
+    ASSERT_STREQ(arr2.get(0).toCString(), "hello world");
+
+    auto arr3 = toArray(arr2);
+    ASSERT_TRUE(same(arr2, arr3));
+}
+
+TEST(array, init3) {
+    php::Array arr;
+
+    Int index = 0L;
+
+    arr = php::Array{{index, php::Var(100L)}};
+    var_dump(arr);
+}
+
+TEST(array, assign) {
+    Array arr1 = create_list();
+    ASSERT_EQ(arr1.length(), 5);
+
+    arr1 = {"erlang", "ruby", "lua"};
+    ASSERT_EQ(arr1.length(), 3);
+
+    ASSERT_TRUE(arr1.isList());
+    arr1 = {{"a", "apple"}, {"b", "banana"}};
+    ASSERT_FALSE(arr1.isList());
+    ASSERT_STREQ(arr1["a"].toCString(), "apple");
+
+    arr1 = {{2020, "apple"}, {1999, "banana"}};
+    ASSERT_STREQ(arr1[1999].toCString(), "banana");
+}
+
+// Test case to cover the array_data_compare function's handling of INDIRECT values
+// The array_data_compare function has specific logic to handle IS_INDIRECT type:
+// if (UNEXPECTED(Z_TYPE_P(first) == IS_INDIRECT)) {
+//     first = Z_INDIRECT_P(first);
+// }
+// if (UNEXPECTED(Z_TYPE_P(second) == IS_INDIRECT)) {
+//     second = Z_INDIRECT_P(second);
+// }
+TEST(array, indirect_handling_in_sort) {
+    // Create an array with various comparable values
+    Array arr;
+    arr.append(30);
+    arr.append(10);
+    arr.append(20);
+    arr.append(5);
+
+    // Perform sort operation which will call array_data_compare
+    // During the sorting algorithm, some internal operations may create INDIRECT references
+    arr.sort();
+
+    // Validate that the array was sorted properly despite potential INDIRECT values
+    ASSERT_EQ(arr.count(), 4);
+    ASSERT_EQ(arr[0].toInt(), 5);  // Smallest value first
+    ASSERT_EQ(arr[1].toInt(), 10);
+    ASSERT_EQ(arr[2].toInt(), 20);
+    ASSERT_EQ(arr[3].toInt(), 30);  // Largest value last
+}
+
+// Another test to verify sorting with mixed data types
+TEST(array, indirect_handling_mixed_types) {
+    // Create array with values that will definitely be compared by array_data_compare
+    Array arr;
+    arr.set("key1", 100);
+    arr.set("key2", 50);
+    arr.set("key3", 75);
+    arr.set("key4", 25);
+
+    // Sort by values, which calls array_data_compare
+    // The internal implementation might use INDIRECT references during the process
+    arr.sort();
+
+    // Verify that the function handles any INDIRECT values properly during comparison
+    ASSERT_EQ(arr.count(), 4);
+
+    // Get values in order and verify they are sorted
+    int values[4];
+    int i = 0;
+    for (auto it = arr.begin(); it != arr.end(); ++it) {
+        values[i++] = it.value().toInt();
+    }
+
+    // Values should be in ascending order
+    ASSERT_EQ(values[0], 25);
+    ASSERT_EQ(values[1], 50);
+    ASSERT_EQ(values[2], 75);
+    ASSERT_EQ(values[3], 100);
+}
+
+TEST(array, array_data_compare) {
+    Bucket b1;
+    Bucket b2;
+
+    zval zv1;
+    ZVAL_LONG(&zv1, 199);
+
+    zval zv2;
+    ZVAL_LONG(&zv2, 283);
+
+    ZVAL_INDIRECT(&b1.val, &zv1);
+    ZVAL_INDIRECT(&b2.val, &zv2);
+
+    ASSERT_EQ(array_data_compare(&b1, &b2), -1);
+}
+
+void dump_buckets(zend_array *ht) {
+    for (int i = 0; i < ht->nNumOfElements; i++) {
+        zend_array *ht2 = ht->arPacked[i].value.arr;
+        ::printf("i=%d, p=%p, arr=%p, rc=%d\n", i, &ht->arPacked[i], ht2, ht2->gc.refcount);
+    }
+}
+
+TEST(array, matrix) {
+    auto row = 2;
+    auto col = 2;
+
+    auto arr = array_fill(0, row + 1, array_fill(0, col + 1, 0));
+    arr.item(1, true).item(1, true) = 99;
+    arr.item(2, true).item(0, true) = 88;
+
+    ASSERT_EQ(arr.item(1).item(1).toInt(), 99);
+    ASSERT_EQ(arr.item(2).item(0).toInt(), 88);
+    ASSERT_EQ(arr.item(0).item(1).toInt(), 0);
+    ASSERT_EQ(arr.item(2).item(2).toInt(), 0);
+}
+
+TEST(array, ref_vargs) {
+    php::Ref tmp_var_0;
+
+    auto array = php::Array({php::Var(1L), php::Var(3L), php::Var(5L)});
+    auto push = php::Array({php::Var(12L), php::Var(33L), php::Var(99L)});
+
+    tmp_var_0 = array.toReference();
+
+    php::Array tmp_var_1{&tmp_var_0};
+    tmp_var_1.merge(push);
+
+    auto tmp = tmp_var_1.get(0);
+    ASSERT_TRUE(tmp.isReference());
+
+    auto fn = getFunction("array_push");
+    php::call(fn, tmp_var_1);
+    ASSERT_EQ(array.count(), 6);
+}
+
+TEST(array, reverse_iteration) {
+    Array arr{1, 2, 3, 4, 5};
+    zend_ulong count = 0;
+    int expected = 5;
+    for (auto it = arr.rbegin(); it != arr.rend(); it--) {
+        ASSERT_EQ(it.value().toInt(), expected--);
+        count++;
+    }
+    ASSERT_EQ(count, 5);
+
+    // Empty array reverse iteration
+    Array empty;
+    count = 0;
+    for (auto it = empty.rbegin(); it != empty.rend(); it--) {
+        count++;
+    }
+    ASSERT_EQ(count, 0);
+
+    // Reverse iteration with gaps (undef buckets)
+    Array sparse;
+    sparse.set(zend_ulong(0), Variant("a"));
+    sparse.set(zend_ulong(10), Variant("b"));
+    sparse.set(zend_ulong(20), Variant("c"));
+    count = 0;
+    for (auto it = sparse.rbegin(); it != sparse.rend(); it--) {
+        count++;
+    }
+    ASSERT_EQ(count, 3);
+}
+
+TEST(array, float_str_key) {
+    Array arr;
+    arr.set("0.1", 2025);
+    arr.set("0.2", 1002);
+    arr.set("0.3", 1999);
+
+    ASSERT_EQ(arr.count(), 3);
+
+    ASSERT_EQ(arr.item("0.1").toInt(), 2025);
+    ASSERT_EQ(arr.item("0.2").toInt(), 1002);
+    ASSERT_EQ(arr.item("0.3").toInt(), 1999);
+}

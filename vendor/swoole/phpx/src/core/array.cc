@@ -1,0 +1,449 @@
+/*
+  +----------------------------------------------------------------------+
+  | PHP-X                                                                |
+  +----------------------------------------------------------------------+
+  | This source file is subject to version 2.0 of the Apache license,    |
+  | that is bundled with this package in the file LICENSE, and is        |
+  | available through the world-wide-web at the following url:           |
+  | http://www.apache.org/licenses/LICENSE-2.0.html                      |
+  | If you did not receive a copy of the Apache2.0 license and are unable|
+  | to obtain it through the world-wide-web, please send a note to       |
+  | license@swoole.com so we can mail you a copy immediately.            |
+  +----------------------------------------------------------------------+
+  | Author: Tianfeng Han  <rango@swoole.com>                             |
+  +----------------------------------------------------------------------+
+*/
+
+#include "phpx.h"
+
+#include "zend_closures.h"
+
+namespace php {
+int array_data_compare(Bucket *f, Bucket *s) {
+    zval result;
+    zval *first = &f->val;
+    zval *second = &s->val;
+
+    if (UNEXPECTED(Z_TYPE_P(first) == IS_INDIRECT)) {
+        first = Z_INDIRECT_P(first);
+    }
+    if (UNEXPECTED(Z_TYPE_P(second) == IS_INDIRECT)) {
+        second = Z_INDIRECT_P(second);
+    }
+    compare_function(&result, first, second);
+
+    return Z_LVAL(result);
+}
+
+void Array::sort(bool renumber) {
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    zend_hash_sort(Z_ARRVAL_P(zarr), array_data_compare, renumber);
+}
+
+Array Array::slice(Int offset, Int length, bool preserve_keys) {
+    if (!prepare_slice(offset, length, count())) {
+        return {};
+    }
+
+    zend_string *string_key;
+    zend_ulong num_key;
+    zval *entry;
+
+    zval return_value;
+    array_init_size(&return_value, (uint32_t) length);
+
+    auto zarr = unwrap_ptr();
+    /* Start at the beginning and go until we hit offset */
+    size_t pos = 0;
+    const size_t end = static_cast<size_t>(offset) + static_cast<size_t>(length);
+    if (!preserve_keys && (Z_ARRVAL_P(zarr)->u.flags & HASH_FLAG_PACKED)) {
+        zend_hash_real_init(Z_ARRVAL_P(&return_value), true);
+        ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(&return_value)) {
+            ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(zarr), entry) {
+                pos++;
+                if (pos <= offset) {
+                    continue;
+                }
+                if (pos > end) {
+                    break;
+                }
+                ZEND_HASH_FILL_ADD(entry);
+                zval_add_ref(entry);
+            }
+            ZEND_HASH_FOREACH_END();
+        }
+        ZEND_HASH_FILL_END();
+    } else {
+        ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(zarr), num_key, string_key, entry) {
+            pos++;
+            if (pos <= offset) {
+                continue;
+            }
+            if (pos > end) {
+                break;
+            }
+
+            if (string_key) {
+                entry = zend_hash_add_new(Z_ARRVAL_P(&return_value), string_key, entry);
+            } else {
+                if (preserve_keys) {
+                    entry = zend_hash_index_add_new(Z_ARRVAL_P(&return_value), num_key, entry);
+                } else {
+                    entry = zend_hash_next_index_insert_new(Z_ARRVAL_P(&return_value), entry);
+                }
+            }
+            zval_add_ref(entry);
+        }
+        ZEND_HASH_FOREACH_END();
+    }
+    return Array(&return_value, Ctor::Move);
+}
+
+void Array::copyFrom(const ArrayList &list) {
+    for (const auto &val : list) {
+        append(val);
+    }
+}
+
+void Array::copyFrom(const StdStrKeyMap &list) {
+    for (const auto &kv : list) {
+        set(String(kv.first), kv.second);
+    }
+}
+
+void Array::copyFrom(const StrKeyMap &list) {
+    for (const auto &kv : list) {
+        set(kv.first, kv.second);
+    }
+}
+
+void Array::copyFrom(const IntKeyMap &list) {
+    for (const auto &kv : list) {
+        set(kv.first, kv.second);
+    }
+}
+
+Array::Array(const ArrayList &list) {
+    initArray(&val, list.size());
+    copyFrom(list);
+}
+
+Array::Array(const StrKeyMap &list) {
+    initArray(&val, list.size());
+    copyFrom(list);
+}
+
+Array::Array(const StdStrKeyMap &list) {
+    initArray(&val, list.size());
+    copyFrom(list);
+}
+
+Array::Array(const IntKeyMap &list) {
+    initArray(&val, list.size());
+    copyFrom(list);
+}
+
+Array &Array::operator=(const ArrayList &list) {
+    rebuild();
+    copyFrom(list);
+    return *this;
+}
+
+Array &Array::operator=(const StrKeyMap &list) {
+    rebuild();
+    copyFrom(list);
+    return *this;
+}
+
+Array &Array::operator=(const StdStrKeyMap &list) {
+    rebuild();
+    copyFrom(list);
+    return *this;
+}
+
+Array &Array::operator=(const IntKeyMap &list) {
+    rebuild();
+    copyFrom(list);
+    return *this;
+}
+
+void Array::set(const Variant &key, const Variant &v) {
+    if (key.isNull()) {
+        append(v);
+    } else if (key.isBool() || key.isInt() || key.isFloat()) {
+        set(key.toInt(), v);
+    } else {
+        auto skey = key.toString();
+        set(skey.str(), v);
+    }
+}
+
+void Array::set(zend_string *str_key, const Variant &v) {
+    // v may borrow a bucket from this array. Converting packed storage to a
+    // mixed HashTable, separating it, or growing it can invalidate that bucket
+    // before Zend copies pData. Snapshot the zval while the source is stable.
+    zval copied;
+    ZVAL_COPY(&copied, v.direct_ptr());
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    zend_symtable_update(Z_ARRVAL_P(zarr), str_key, &copied);
+}
+
+void Array::set(zend_ulong i, const Variant &v) {
+    zval copied;
+    ZVAL_COPY(&copied, v.direct_ptr());
+
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    add_index_zval(zarr, i, &copied);
+}
+
+void Array::setValue(const Variant &key, const Variant &v) {
+    Variant value(v.direct_ptr());
+    set(key, value);
+}
+
+void Array::appendValue(const Variant &v) {
+    Variant value(v.direct_ptr());
+    append(std::move(value));
+}
+
+void Array::appendValue(Variant &&v) {
+    if (UNEXPECTED(v.isReference()) || UNEXPECTED(v.isIndirect())) {
+        appendValue(static_cast<const Variant &>(v));
+    } else {
+        append(std::move(v));
+    }
+}
+
+void Array::append(const Variant &v) {
+    zval copied;
+    zval_copy(&copied, v.direct_ptr());
+
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    add_next_index_zval(zarr, &copied);
+}
+
+void Array::append(Variant &&v) {
+    if (static_cast<Variant *>(this) == &v) {
+        append(static_cast<const Variant &>(v));
+        return;
+    }
+
+    // Moving an indirect wrapper verbatim would store a pointer to an array
+    // bucket or object property. The move constructor materializes such values
+    // before structural array mutation can invalidate the borrowed address.
+    Variant owned(std::move(v));
+    zval moved;
+    owned.moveTo(&moved);
+
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    add_next_index_zval(zarr, &moved);
+}
+
+Variant Array::get(const Variant &key) const {
+    if (key.isBool() || key.isInt() || key.isFloat()) {
+        return get(static_cast<zend_ulong>(key.toInt()));
+    }
+
+    auto str_key = key.toString();
+    return get(str_key.str());
+}
+
+bool Array::del(zend_ulong index) {
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    return zend_hash_index_del(Z_ARRVAL_P(zarr), index) == SUCCESS;
+}
+
+bool Array::del(const Variant &key) {
+    if (key.isBool() || key.isInt() || key.isFloat()) {
+        return del(key.toInt());
+    } else {
+        auto zarr = unwrap_ptr();
+        SEPARATE_ARRAY(zarr);
+        auto skey = key.toString();
+        return zend_symtable_del(Z_ARRVAL_P(zarr), skey.str()) == SUCCESS;
+    }
+}
+
+Variant Array::search(const Variant &_other_var, bool strict) const {
+    for (auto i = begin(); i != end(); i++) {
+        if (i.value().equals(_other_var, strict)) {
+            return i.key();
+        }
+    }
+    return false;
+}
+
+bool Array::contains(const Variant &_other_var, bool strict) const {
+    for (auto i = begin(); i != end(); i++) {
+        if (i.value().equals(_other_var, strict)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+String Array::join(const String &delim) {
+    zval retval;
+    ZVAL_UNDEF(&retval);
+    php_implode(delim.str(), HASH_OF(unwrap_ptr()), &retval);
+    if (UNEXPECTED(EG(exception) != nullptr)) {
+        if (!Z_ISUNDEF(retval)) {
+            zval_ptr_dtor(&retval);
+        }
+        throwErrorIfOccurred();
+        return {};
+    }
+    return String(&retval, Ctor::Move);
+}
+
+void Array::merge(const Array &source) {
+    auto zarr = unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    php_array_merge(Z_ARRVAL_P(zarr), source.array());
+}
+
+Variant ArrayIterator::key() const {
+    if (HT_IS_PACKED(array_)) {
+        return (zend_long) idx_;
+    } else {
+        auto *bucket = HT_HASH_TO_BUCKET(array_, idx_);
+        if (bucket->key) {
+            return {bucket->key};
+        } else {
+            return {static_cast<zend_long>(bucket->h)};
+        }
+    }
+}
+
+Reference ArrayIterator::valueRef() {
+    Variant value(current(), Ctor::Indirect);
+    return value.toReference();
+}
+
+void ArrayIterator::skipUndefBucket() {
+    while (idx_ < array_->nNumUsed) {
+        zval *cur = current();
+        if (!cur || Z_TYPE_P(cur) == IS_UNDEF) {
+            ++idx_;
+            continue;
+        }
+        break;
+    }
+}
+
+void ArrayIterator::skipUndefBucketBackwards() {
+    while (idx_ < array_->nNumUsed) {
+        zval *cur = current();
+        if (!cur || Z_TYPE_P(cur) == IS_UNDEF) {
+            if (idx_ == 0) {
+                idx_ = array_->nNumUsed;
+                break;
+            }
+            --idx_;
+            continue;
+        }
+        break;
+    }
+}
+
+ArrayItem::ArrayItem(Array &_array, zend_ulong _index, const String &_key)
+    : array_(_array), index_(_index), key_(_key) {
+    zval *zv;
+    zend_array *ht = array_.array();
+
+    if (key_.str() != zend_empty_string) {
+        zv = zend_symtable_find(ht, key_.str());
+    } else {
+        zv = zend_hash_index_find(ht, index_);
+    }
+    if (zv) {
+        ZVAL_INDIRECT(&val, zv);
+    } else {
+        ZVAL_NULL(&val);
+    }
+}
+
+ArrayItem &ArrayItem::operator=(const Variant &v) {
+    zval copied;
+    zval_copy(&copied, v.direct_ptr());
+
+    auto zarr = array_.unwrap_ptr();
+    SEPARATE_ARRAY(zarr);
+    zend_array *ht = Z_ARR_P(zarr);
+    zval *new_zv;
+    if (key_.str() != zend_empty_string) {
+        new_zv = zend_symtable_find(ht, key_.str());
+    } else {
+        new_zv = zend_hash_index_find(ht, index_);
+    }
+    if (new_zv != nullptr) {
+        Variant target(new_zv, Z_ISREF_P(new_zv) ? Ctor::CopyRef : Ctor::Indirect);
+        target.copyFrom(&copied);
+        zval_ptr_dtor(&copied);
+    } else if (key_.str() != zend_empty_string) {
+        new_zv = zend_symtable_update(ht, key_.str(), &copied);
+    } else {
+        new_zv = zend_hash_index_update(ht, index_, &copied);
+    }
+    ZVAL_INDIRECT(&val, new_zv);
+
+    return *this;
+}
+
+static String to_array{ZEND_STRL("toArray"), true};
+static String to_array_lower{ZEND_STRL("toarray"), true};
+
+Array toArray(const Variant &v) {
+    zval result;
+    zval *expr = NO_CONST_V(v);
+
+    if (v.isArray()) {
+        return Array(expr);
+    }
+
+    if (Z_TYPE_P(expr) != IS_OBJECT || Z_OBJCE_P(expr) == zend_ce_closure) {
+        if (Z_TYPE_P(expr) != IS_NULL) {
+            ZVAL_ARR(&result, zend_new_array(1));
+            expr = zend_hash_index_add_new(Z_ARRVAL(result), 0, expr);
+            if (IS_CONST == IS_CONST) {
+                if (UNEXPECTED(Z_OPT_REFCOUNTED_P(expr))) Z_ADDREF_P(expr);
+            } else {
+                if (Z_OPT_REFCOUNTED_P(expr)) Z_ADDREF_P(expr);
+            }
+        } else {
+            ZVAL_EMPTY_ARRAY(&result);
+        }
+    } else if (zend_hash_find_ptr(&Z_OBJCE_P(expr)->function_table, to_array_lower.str())) {
+        Variant obj(expr);
+        Variant ret = obj.call(to_array);
+        if (!ret.isArray()) {
+            throwError("toArray() method must return an array, got %s", ret.typeStr());
+        }
+        return Array(ret.unwrap_ptr());
+    } else if (Z_OBJ_P(expr)->properties == NULL && Z_OBJ_HT_P(expr)->get_properties_for == NULL &&
+               Z_OBJ_HT_P(expr)->get_properties == zend_std_get_properties) {
+        /* Optimized version without rebuilding properties HashTable */
+        ZVAL_ARR(&result, zend_std_build_object_properties_array(Z_OBJ_P(expr)));
+    } else {
+        HashTable *obj_ht = zend_get_properties_for(expr, ZEND_PROP_PURPOSE_ARRAY_CAST);
+        if (obj_ht) {
+            /* fast copy */
+            ZVAL_ARR(&result,
+                     zend_proptable_to_symtable(
+                         obj_ht,
+                         (Z_OBJCE_P(expr)->default_properties_count ||
+                          Z_OBJ_P(expr)->handlers != &std_object_handlers || GC_IS_RECURSIVE(obj_ht))));
+            zend_release_properties(obj_ht);
+        } else {
+            ZVAL_EMPTY_ARRAY(&result);
+        }
+    }
+    return Array(&result, Ctor::Move);
+}
+}  // namespace php

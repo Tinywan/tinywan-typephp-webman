@@ -1,0 +1,1160 @@
+/*
+  +----------------------------------------------------------------------+
+  | PHP-X                                                                |
+  +----------------------------------------------------------------------+
+  | This source file is subject to version 2.0 of the Apache license,    |
+  | that is bundled with this package in the file LICENSE, and is        |
+  | available through the world-wide-web at the following url:           |
+  | http://www.apache.org/licenses/LICENSE-2.0.html                      |
+  | If you did not receive a copy of the Apache2.0 license and are unable|
+  | to obtain it through the world-wide-web, please send a note to       |
+  | license@swoole.com so we can mail you a copy immediately.            |
+  +----------------------------------------------------------------------+
+  | Author: Tianfeng Han  <rango@swoole.com>                             |
+  +----------------------------------------------------------------------+
+*/
+
+#include "phpx.h"
+#include "phpx_fake_scope_guard.h"
+#include "runtime_init.h"
+
+extern "C" {
+#include "zend_observer.h"
+#include "zend_property_hooks.h"
+}
+
+#ifdef ZTS
+#include <mutex>
+#endif
+
+namespace php {
+void initDecimalContext();
+
+const char *box_res_name = "php::box";
+DebugInfo debug_info{
+    false,
+    {},
+    0,
+};
+
+// Resolved user functions live for one request. In ZTS each worker owns an
+// independent request, so sharing this map would let one RSHUTDOWN free cache
+// entries while another thread is still calling through them.
+THREAD_LOCAL static zend_array *func_cache_map = nullptr;
+
+void error(int level, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    php_verror(nullptr, "", level, format, args);
+    va_end(args);
+}
+
+void echo(const char *format, ...) {
+    va_list args;
+    char *buffer;
+
+    va_start(args, format);
+    const size_t size = vspprintf(&buffer, 0, format, args);
+    PHPWRITE(buffer, size);
+    efree(buffer);
+    va_end(args);
+}
+
+void echo(const String &str) {
+    if (EXPECTED(str.isString())) {
+        PHPWRITE(str.data(), str.length());
+    }
+}
+
+void echo(const Variant &val) {
+    echo(val.toString());
+}
+
+void echo(Int val) {
+    echo(ZEND_LONG_FMT, val);
+}
+
+void echo(Float val) {
+    echo("%f", val);
+}
+
+String concat(const Variant &a, const Variant &b) {
+    return a.concat(b);
+}
+
+String concat(const ArgList &args) {
+    size_t count = args.size();
+    if (count == 0) {
+        return String();
+    }
+
+    if (count == 1) {
+        auto item = *args.begin();
+        return item.toString();
+    }
+
+    std::vector<zend_string *> items(count);
+    size_t total_len = 0;
+    size_t index = 0;
+
+    for (auto const &item : args) {
+        auto str = zval_get_string(NO_CONST_V(item));
+        if (UNEXPECTED(EG(exception) != nullptr)) {
+            zend_string_release(str);
+            for (size_t i = 0; i < index; ++i) {
+                zend_string_release(items[i]);
+            }
+            throwErrorIfOccurred();
+            return {};
+        }
+        const size_t length = ZSTR_LEN(str);
+        if (UNEXPECTED(length > ZSTR_MAX_LEN - total_len)) {
+            zend_string_release(str);
+            for (size_t i = 0; i < index; ++i) {
+                zend_string_release(items[i]);
+            }
+            zend_throw_error(nullptr, "String size overflow");
+            throwErrorIfOccurred();
+            return {};
+        }
+        items[index++] = str;
+        total_len += length;
+    }
+
+    zend_string *result_str = zend_string_alloc(total_len, 0);
+    char *dst = ZSTR_VAL(result_str);
+
+    for (auto part : items) {
+        size_t len = ZSTR_LEN(part);
+        memcpy(dst, ZSTR_VAL(part), len);
+        dst += len;
+        zend_string_release(part);
+    }
+    *dst = '\0';
+
+    return String{result_str, Ctor::Move};
+}
+
+Variant global(const String &name) {
+    zend_is_auto_global(name.str());
+    zval *var = zend_hash_find_ind(&EG(symbol_table), name.str());
+    if (!var) {
+        return {};
+    }
+    if (zval_is_ref(var)) {
+        return {var, Ctor::CopyRef};
+    } else {
+        return {var, Ctor::Indirect};
+    }
+}
+
+void initGlobal(const String &name, Variant &var) {
+    auto gvar = global(name);
+    var.unset();
+    if (gvar.isNull()) {
+        auto ref = newReference();
+        Z_TRY_ADDREF_P(ref.ptr());
+        zend_hash_add_new(&EG(symbol_table), name.str(), ref.ptr());
+        var.copyRef(&ref);
+    } else if (gvar.isReference()) {
+        var.copyRef(&gvar);
+    } else {
+        Ref ref = gvar.toReference();
+        var.copyRef(&ref);
+    }
+}
+
+void unsetGlobal(const String &name) {
+    zend_hash_del(&EG(symbol_table), name.str());
+}
+
+void pushDebugFrame(const char *file, int lineno, const char *function) {
+    if (!debug_info.enable || debug_info.depth >= PHPX_MAX_DEBUG_DEPTH) {
+        return;
+    }
+    auto &frame = debug_info.frames[debug_info.depth++];
+    frame.file = file;
+    frame.line = lineno;
+    frame.function = function;
+}
+
+void popDebugFrame() {
+    if (debug_info.depth > 0) {
+        debug_info.depth--;
+    }
+}
+
+void traceDebugInfo(const char *file, int lineno) {
+    if (!debug_info.enable) {
+        return;
+    }
+    if (debug_info.depth == 0) {
+        pushDebugFrame(file, lineno, nullptr);
+    } else {
+        auto &frame = debug_info.frames[debug_info.depth - 1];
+        frame.file = file;
+        frame.line = lineno;
+    }
+}
+
+void enableDebugInfo(bool enable) {
+    debug_info.enable = enable;
+}
+
+void augmentException() {
+    if (!debug_info.enable || debug_info.depth == 0 || !EG(exception)) {
+        return;
+    }
+
+    FakeScopeGuard fake_scope_guard{EG(exception)->ce};
+
+    // Set file/line from the innermost frame
+    auto &top = debug_info.frames[debug_info.depth - 1];
+    zval tmp;
+    ZVAL_STRING(&tmp, top.file ? top.file : "");
+    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_FILE), &tmp);
+    zval_ptr_dtor(&tmp);
+
+    ZVAL_LONG(&tmp, top.line);
+    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
+
+    // Build backtrace array in zend_fetch_debug_backtrace format
+    // Each frame: {file, line, function, class?, type?, args}
+    Array trace;
+    for (int i = debug_info.depth - 1; i >= 0; i--) {
+        auto &frame = debug_info.frames[i];
+
+        Array entry;
+        entry.set(ZSTR_KNOWN(ZEND_STR_FILE), String(frame.file ? frame.file : ""));
+        entry.set(ZSTR_KNOWN(ZEND_STR_LINE), frame.line);
+
+        const char *func = frame.function ? frame.function : "";
+        const char *colon = func ? strstr(func, "::") : nullptr;
+
+        if (colon && colon > func) {
+            // ClassName::methodName
+            entry.set(ZSTR_KNOWN(ZEND_STR_CLASS), String(func, colon - func));
+            entry.set(ZSTR_KNOWN(ZEND_STR_TYPE), String("::"));
+            entry.set(ZSTR_KNOWN(ZEND_STR_FUNCTION), String(colon + 2));
+        } else {
+            entry.set(ZSTR_KNOWN(ZEND_STR_FUNCTION), String(func));
+        }
+
+        entry.set(ZSTR_KNOWN(ZEND_STR_ARGS), Array());
+
+        trace.append(entry);
+    }
+
+    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_TRACE), trace.ptr());
+}
+
+Variant constant(const String &name) {
+    auto c = zend_get_constant_ex(name.str(), zend_get_executed_scope(), ZEND_FETCH_CLASS_EXCEPTION);
+    throwErrorIfOccurred();
+    return Variant{c};
+}
+
+Variant constant(const String &name, ConstantLookup lookup) {
+    uint32_t flags = ZEND_FETCH_CLASS_EXCEPTION;
+    if (lookup == ConstantLookup::UnqualifiedInNamespace) {
+        flags |= IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE;
+    }
+    auto c = zend_get_constant_ex(name.str(), zend_get_executed_scope(), flags);
+    throwErrorIfOccurred();
+    return Variant{c};
+}
+
+Variant constant(const String &cls, const String &name) {
+    auto c = zend_get_class_constant_ex(cls.str(), name.str(), getClassEntrySafe(cls), ZEND_FETCH_CLASS_SILENT);
+    throwErrorIfOccurred();
+    return Variant{c};
+}
+
+Variant constant(zend_class_entry *ce, const String &name) {
+    if (ce == nullptr) {
+        return {zend_get_constant(name.str())};
+    }
+
+    auto constant_name = name.str();
+    zval *ret_constant = NULL;
+    auto c = (zend_class_constant *) zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), constant_name);
+    if (c == NULL) {
+        throwError("Undefined constant %s::%s", ZSTR_VAL(ce->name), ZSTR_VAL(constant_name));
+        ret_constant = NULL;
+    } else {
+        ret_constant = &c->value;
+    }
+    return ret_constant;
+}
+
+static String checkedClassConstantName(const Variant &name) {
+    if (UNEXPECTED(!name.isString())) {
+        zend_type_error("Cannot use value of type %s as class constant name", name.typeStr());
+        throwErrorIfOccurred();
+        return {};
+    }
+    return String(name);
+}
+
+Variant classConstant(zend_class_entry *ce, const Variant &name, zend_class_entry *scope) {
+    if (UNEXPECTED(ce == nullptr)) {
+        return {};
+    }
+    const String constant_name = checkedClassConstantName(name);
+    if (UNEXPECTED(EG(exception))) {
+        return {};
+    }
+
+    if (zend_string_equals_ci(constant_name.str(), ZSTR_KNOWN(ZEND_STR_CLASS))) {
+        return String(ce->name);
+    }
+
+    auto value = zend_get_class_constant_ex(ce->name, constant_name.str(), scope, ZEND_FETCH_CLASS_EXCEPTION);
+    throwErrorIfOccurred();
+    return Variant(value);
+}
+
+Variant classConstant(const Variant &target, const Variant &name, zend_class_entry *scope) {
+    zend_class_entry *ce;
+    if (target.isObject()) {
+        ce = target.ce();
+    } else if (target.isString()) {
+        ce = getClassEntrySafe(String(target));
+        if (UNEXPECTED(ce == nullptr)) {
+            return {};
+        }
+    } else {
+        throwError("Class name must be a valid object or a string");
+        return {};
+    }
+    return classConstant(ce, name, scope);
+}
+
+bool updateConstant(const String &cls, const String &name, const Variant &data) {
+    auto ce = getClassEntrySafe(cls);
+    if (!ce) {
+        return false;
+    }
+    return updateConstant(ce, name, data);
+}
+
+bool updateConstant(zend_class_entry *ce, const String &name, const Variant &data) {
+    auto constant_name = name.str();
+    zval *ret_constant = NULL;
+    auto c = (zend_class_constant *) zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), constant_name);
+    if (c != NULL) {
+        zval old = c->value;
+        ZVAL_COPY(&c->value, data.const_ptr());
+        zval_ptr_dtor(&old);
+        throwErrorIfOccurred();
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void exit(const Variant &status) {
+    if (status.isInt()) {
+        EG(exit_status) = status.toInt();
+    } else {
+        auto zv = NO_CONST_V(status);
+        zend_print_zval(zv, 0);
+        EG(exit_status) = 0;
+    }
+    zend_throw_graceful_exit();
+    throwErrorIfOccurred();
+}
+
+static void box_dtor(zend_resource *res) {
+    auto box = static_cast<Box *>(res->ptr);
+    box->destroy();
+}
+
+THREAD_LOCAL static bool request_active = false;
+static int box_res_id = 0;
+#ifdef ZTS
+static std::once_flag process_init_once;
+#else
+static bool process_initialized = false;
+#endif
+
+static void initializeBoxResource() noexcept {
+    box_res_id = zend_fetch_list_dtor_id(box_res_name);
+    if (box_res_id == 0) {
+        box_res_id = zend_register_list_destructors_ex(box_dtor, nullptr, box_res_name, 0);
+    }
+    // Resource registration only fails when Zend cannot extend its process-
+    // global destructor table. PHPX cannot safely create any Box afterwards,
+    // so this is an unrecoverable runtime initialization failure.
+    if (UNEXPECTED(box_res_id <= 0)) {
+        std::fputs("PHPX fatal error: failed to register the php::box resource destructor\n", stderr);
+        std::fflush(stderr);
+        std::abort();
+    }
+}
+
+static void initializeProcessState() noexcept {
+    const auto initialize = []() noexcept {
+        initializeBoxResource();
+        detail::initializeClosureCarrierHandlers();
+        python::initializeNativeApi();
+    };
+#ifdef ZTS
+    // Every worker enters request_init(), but Zend's resource registry and
+    // PHPX's immutable handler/API tables belong to the process. call_once()
+    // both serializes their construction and safely publishes the results.
+    std::call_once(process_init_once, initialize);
+#else
+    // NTS has no competing request threads, so avoid mutex/atomic machinery.
+    if (UNEXPECTED(!process_initialized)) {
+        initialize();
+        process_initialized = true;
+    }
+#endif
+}
+
+int getBoxResourceId() {
+    return box_res_id;
+}
+
+void request_init() {
+    if (request_active) {
+        return;
+    }
+    initializeProcessState();
+    initDecimalContext();
+    nativeGcRequestInit();
+    request_active = true;
+}
+
+void request_shutdown() {
+    if (!request_active) {
+        return;
+    }
+    // Native finalizers are user code: they may access TypePHP globals and
+    // perform cached dynamic calls. Run them before tearing down any PHPX
+    // request cache; the embedding module clears its own globals afterwards.
+    nativeGcRequestShutdown();
+    if (func_cache_map) {
+        zend_hash_destroy(func_cache_map);
+        pefree(func_cache_map, 1);
+        func_cache_map = nullptr;
+    }
+    request_active = false;
+}
+
+Variant throwException(const String &class_name, const char *message, int code) {
+    return throwException(getClassEntrySafe(class_name), message, code);
+}
+
+Variant throwException(zend_class_entry *ce, const char *message, int code) {
+    zend_throw_exception(ce, message, code);
+    throwErrorIfOccurred();
+    return {};
+}
+
+Variant throwException(const Object &e) {
+    if (UNEXPECTED(!instanceof_function(e.ce(), zend_ce_throwable))) {
+        zend_throw_error(NULL, "Cannot throw objects that do not implement Throwable");
+        throwErrorIfOccurred();
+        return {};
+    }
+    auto zv = NO_CONST_V(e);
+    zval_add_ref(zv);
+    EG(exception) = Z_OBJ_P(zv);
+    throwErrorIfOccurred();
+    return {};
+}
+
+Object catchException() {
+    if (!EG(exception)) {
+        return Object{};
+    }
+    zval zv;
+    ZVAL_OBJ(&zv, EG(exception));
+    Variant result{&zv};
+    zend_clear_exception();
+    return result;
+}
+
+Int toSize(const String &str) {
+    zend_string *errstr;
+    Int size = zend_ini_parse_quantity(str.str(), &errstr);
+    if (errstr) {
+        error(E_WARNING, "failed to parse '%s' to size, Error: %s", str.data(), ZSTR_VAL(errstr));
+        zend_string_release(errstr);
+    }
+    return size;
+}
+
+static void free_fci_cache(zval *el) {
+    pefree((zend_fcall_info_cache *) Z_PTR_P(el), 1);
+}
+
+zend_function *getFunction(const String &name) {
+    zend_fcall_info_cache fcc;
+    zval *fn = NO_CONST_V(name);
+
+    if (!zend_is_callable_ex(fn, nullptr, 0, nullptr, &fcc, nullptr)) {
+        auto callable_name = zend_get_callable_name_ex(fn, nullptr);
+        zend_throw_error(NULL, "function '%s' is undefined.", ZSTR_VAL(callable_name));
+        zend_string_release_ex(callable_name, 0);
+    }
+    throwErrorIfOccurred();
+
+    return fcc.function_handler;
+}
+
+zend_function *getMethod(const String &class_name, const String &name) {
+    const auto ce = getClassEntrySafe(class_name);
+    if (UNEXPECTED(!ce)) {
+        return nullptr;
+    }
+    return getMethod(ce, name);
+}
+
+zend_function *getMethod(zend_class_entry *ce, const String &name) {
+    auto lmname = zend_string_tolower(name.str());
+    auto zv = zend_hash_find(&ce->function_table, lmname);
+    zend_string_release(lmname);
+    if (UNEXPECTED(zv == nullptr)) {
+        throwError("method '%s::%s' is undefined.", ZSTR_VAL(ce->name), name.data());
+        return nullptr;
+    }
+    return (zend_function *) Z_PTR_P(zv);
+}
+
+static void call_function_impl(const zval *zobject,
+                               const zval *function_name,
+                               zval *retval_ptr,
+                               uint32_t param_count,
+                               zval params[],
+                               zend_array *named_params = nullptr,
+                               const CallableScope *explicit_scope = nullptr) {
+    zend_fcall_info fci;
+
+    fci.size = sizeof(fci);
+    if (zobject) {
+        fci.object = Z_OBJ_P(zobject);
+    } else {
+        fci.object = nullptr;
+    }
+    zval_copy_value(&fci.function_name, function_name);
+    fci.retval = retval_ptr;
+    fci.param_count = param_count;
+    fci.params = params;
+    fci.named_params = named_params;
+
+    zend_fcall_info_cache fcc;
+    zend_fcall_info_cache *fci_cache = nullptr;
+    bool with_cache = explicit_scope == nullptr && Z_TYPE_P(function_name) == IS_STRING && !zobject;
+    char *error = NULL;
+
+    if (with_cache) {
+        if (UNEXPECTED(func_cache_map == nullptr)) {
+            func_cache_map = (zend_array *) pemalloc(sizeof(zend_array), 1);
+            zend_hash_init(func_cache_map, 0, NULL, free_fci_cache, 0);
+        } else {
+            fci_cache = (zend_fcall_info_cache *) zend_hash_find_ptr(func_cache_map, Z_STR_P(function_name));
+        }
+    }
+
+    bool callable = fci_cache != nullptr;
+    if (!callable && explicit_scope != nullptr) {
+        callable = explicit_scope->resolve(&fci.function_name, fci.object, &fcc, &error);
+    } else if (!callable) {
+        callable = zend_is_callable_ex(&fci.function_name, fci.object, 0, NULL, &fcc, &error);
+    }
+
+    if (!callable) {
+        ZEND_ASSERT(error && "Should have error if not callable");
+        auto callable_name = zend_get_callable_name_ex(&fci.function_name, fci.object);
+        zend_throw_error(NULL, "Invalid callback %s, %s", ZSTR_VAL(callable_name), error);
+        efree(error);
+        zend_string_release_ex(callable_name, 0);
+    } else if (fci_cache == nullptr) {
+        fci_cache = &fcc;
+        // Zend releases CALL_VIA_TRAMPOLINE handlers after the call, while
+        // NEVER_CACHE handlers are explicitly unsuitable for persistent
+        // fcall caches. Keeping either pointer here would make the next call
+        // access freed or otherwise transient state.
+        const uint32_t non_cacheable_flags = ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_NEVER_CACHE;
+        if (with_cache && EXPECTED(!(fcc.function_handler->common.fn_flags & non_cacheable_flags))) {
+            auto _cache = (zend_fcall_info_cache *) pemalloc(sizeof(fcc), 1);
+            *_cache = fcc;
+            zend_hash_update_ptr(func_cache_map, Z_STR_P(function_name), _cache);
+        }
+    }
+
+    if (callable) {
+        zend_call_function(&fci, fci_cache);
+    }
+
+    throwErrorIfOccurred();
+}
+
+Variant call_impl(const zval *object, const zval *func, Args &args, zend_array *named_args) {
+    Variant retval{};
+    call_function_impl(object, func, retval.ptr(), args.count(), args.ptr(), named_args);
+    return retval;
+}
+
+Variant call_impl(const zval *object, const zval *func) {
+    Variant retval{};
+    call_function_impl(object, func, retval.ptr(), 0, nullptr);
+    return retval;
+}
+
+Variant callScoped(
+    const Variant &object, const Variant &func, const CallableScope &scope, Args &args, zend_array *named_args) {
+    if (UNEXPECTED(!object.isObject())) {
+        throwError("call method `%s` on %s", func.toCString(), object.typeStr());
+        return {};
+    }
+    if (UNEXPECTED(!scope.isValid())) {
+        throwError("Explicit callable scope must not be null");
+        return {};
+    }
+
+    Variant retval{};
+    call_function_impl(
+        object.unwrap_ptr(), func.unwrap_ptr(), retval.ptr(), args.count(), args.ptr(), named_args, &scope);
+    return retval;
+}
+
+Variant callScoped(const Variant &func, const CallableScope &scope, Args &args, zend_array *named_args) {
+    if (UNEXPECTED(!scope.isValid())) {
+        throwError("Explicit callable scope must not be null");
+        return {};
+    }
+
+    Variant retval{};
+    call_function_impl(nullptr, func.unwrap_ptr(), retval.ptr(), args.count(), args.ptr(), named_args, &scope);
+    return retval;
+}
+
+Variant callScoped(const Variant &func, const CallableScope &scope, Array &args, zend_array *named_args) {
+    Args call_args(args);
+    return callScoped(func, scope, call_args, named_args);
+}
+
+Variant callScoped(const Variant &func, const CallableScope &scope, const ArgList &args, zend_array *named_args) {
+    Args call_args(args);
+    return callScoped(func, scope, call_args, named_args);
+}
+
+Variant callScoped(
+    const Variant &object, const Variant &func, const CallableScope &scope, Array &args, zend_array *named_args) {
+    Args call_args(args);
+    return callScoped(object, func, scope, call_args, named_args);
+}
+
+Variant callScoped(const Variant &object,
+                   const Variant &func,
+                   const CallableScope &scope,
+                   const ArgList &args,
+                   zend_array *named_args) {
+    Args call_args(args);
+    return callScoped(object, func, scope, call_args, named_args);
+}
+
+Variant call(const Variant &func, Array &args, zend_array *named_args) {
+    Args _args(args);
+    return call_impl(nullptr, func.unwrap_ptr(), _args, named_args);
+}
+
+Variant call(const Variant &func, Args &args, zend_array *named_args) {
+    return call_impl(nullptr, func.unwrap_ptr(), args, named_args);
+}
+
+Variant call(const Variant &func, const ArgList &args, zend_array *named_args) {
+    Args _args(args);
+    return call_impl(nullptr, func.unwrap_ptr(), _args, named_args);
+}
+
+Variant call(zend_function *func, zend_array *named_args) {
+    Variant retval{};
+    zend_call_known_function(func, nullptr, func->common.scope, retval.ptr(), 0, nullptr, named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_function *func, Args &_args, zend_array *named_args) {
+    Variant retval{};
+    zend_call_known_function(func, nullptr, func->common.scope, retval.ptr(), _args.count(), _args.ptr(), named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_function *func, const ArgList &args, zend_array *named_args) {
+    Args _args(args);
+    return call(func, _args, named_args);
+}
+
+Variant call(zend_function *func, Array &args, zend_array *named_args) {
+    Args _args(args);
+    return call(func, _args, named_args);
+}
+
+namespace {
+
+thread_local zend_class_entry *lexical_call_scope = nullptr;
+
+class LexicalCallScopeGuard final {
+  public:
+    explicit LexicalCallScopeGuard(zend_class_entry *scope) : previous_(lexical_call_scope) {
+        lexical_call_scope = scope;
+    }
+
+    ~LexicalCallScopeGuard() {
+        lexical_call_scope = previous_;
+    }
+
+  private:
+    zend_class_entry *previous_;
+};
+
+}  // namespace
+
+zend_class_entry *detail::getLexicalCallScope() {
+    return lexical_call_scope;
+}
+
+Variant call(zend_class_entry *ce, zend_function *func, zend_array *named_args) {
+    Variant retval{};
+    LexicalCallScopeGuard scope_guard{ce};
+    zend_call_known_function(func, nullptr, ce, retval.ptr(), 0, nullptr, named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_class_entry *ce, zend_function *func, Args &args, zend_array *named_args) {
+    Variant retval{};
+    LexicalCallScopeGuard scope_guard{ce};
+    zend_call_known_function(func, nullptr, ce, retval.ptr(), args.count(), args.ptr(), named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_class_entry *ce, zend_function *func, const ArgList &args, zend_array *named_args) {
+    Args _args(args);
+    return call(ce, func, _args, named_args);
+}
+
+#define ZEND_FAKE_OP_ARRAY ((zend_op_array *) (intptr_t) -1)
+
+static zend_never_inline zend_op_array *ZEND_FASTCALL zend_include_or_eval(zend_string *inc_filename,
+                                                                           const int type,
+                                                                           const char *eval_filename = nullptr) {
+    zend_op_array *new_op_array = nullptr;
+    switch (type) {
+    case ZEND_INCLUDE_ONCE:
+    case ZEND_REQUIRE_ONCE: {
+        zend_file_handle file_handle;
+        zend_string *resolved_path = zend_resolve_path(inc_filename);
+        if (EXPECTED(resolved_path)) {
+            if (zend_hash_exists(&EG(included_files), resolved_path)) {
+                new_op_array = ZEND_FAKE_OP_ARRAY;
+                zend_string_release_ex(resolved_path, false);
+                break;
+            }
+        } else if (UNEXPECTED(EG(exception))) {
+            break;
+        } else {
+            resolved_path = zend_string_copy(inc_filename);
+        }
+
+        zend_stream_init_filename_ex(&file_handle, resolved_path);
+        if (SUCCESS == zend_stream_open(&file_handle)) {
+            if (!file_handle.opened_path) {
+                file_handle.opened_path = zend_string_copy(resolved_path);
+            }
+
+            if (zend_hash_add_empty_element(&EG(included_files), file_handle.opened_path)) {
+                new_op_array =
+                    zend_compile_file(&file_handle, (type == ZEND_INCLUDE_ONCE ? ZEND_INCLUDE : ZEND_REQUIRE));
+            } else {
+                new_op_array = ZEND_FAKE_OP_ARRAY;
+            }
+        } else if (!EG(exception)) {
+            zend_message_dispatcher((type == ZEND_INCLUDE_ONCE) ? ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
+                                    ZSTR_VAL(inc_filename));
+        }
+        zend_destroy_file_handle(&file_handle);
+        zend_string_release_ex(resolved_path, false);
+    } break;
+    case ZEND_EVAL: {
+        if (eval_filename) {
+            new_op_array = zend_compile_string(inc_filename, eval_filename, ZEND_COMPILE_POSITION_AFTER_OPEN_TAG);
+        } else {
+            char *eval_desc = zend_make_compiled_string_description("eval()");
+            new_op_array = zend_compile_string(inc_filename, eval_desc, ZEND_COMPILE_POSITION_AFTER_OPEN_TAG);
+            efree(eval_desc);
+        }
+    } break;
+    case ZEND_INCLUDE:
+    case ZEND_REQUIRE:
+    default:
+        new_op_array = compile_filename(type, inc_filename);
+        break;
+    }
+
+    return new_op_array;
+}
+
+static void execute_with_symbol_table(zend_op_array *op_array, zval *return_value, zend_array *symbol_table) {
+    if (UNEXPECTED(EG(exception) != nullptr)) {
+        return;
+    }
+
+    zend_execute_data *previous_execute_data = EG(current_execute_data);
+    void *object_or_called_scope = zend_get_this_object(previous_execute_data);
+    uint32_t call_info = ZEND_CALL_TOP_CODE | ZEND_CALL_HAS_SYMBOL_TABLE;
+    if (object_or_called_scope != nullptr) {
+        call_info |= ZEND_CALL_HAS_THIS;
+    } else {
+        object_or_called_scope = zend_get_called_scope(previous_execute_data);
+    }
+
+    zend_execute_data *execute_data = zend_vm_stack_push_call_frame(
+        call_info, reinterpret_cast<zend_function *>(op_array), 0, object_or_called_scope);
+    execute_data->symbol_table = symbol_table;
+    zend_init_code_execute_data(execute_data, op_array, return_value);
+    ZEND_OBSERVER_FCALL_BEGIN(execute_data);
+    zend_execute_ex(execute_data);
+    // Observer end handlers are called by ZEND_RETURN. The VM has already
+    // detached CVs from the explicit symbol table before returning here.
+    zend_vm_stack_free_call_frame(execute_data);
+}
+
+static Variant include_impl(zend_string *filename,
+                            const int type,
+                            const char *eval_filename = nullptr,
+                            zend_array *symbol_table = nullptr) {
+    Variant result;
+    zend_op_array *new_op_array = zend_include_or_eval(filename, type, eval_filename);
+
+    if (UNEXPECTED(new_op_array == ZEND_FAKE_OP_ARRAY)) {
+        return true;
+    } else if (EXPECTED(new_op_array != nullptr && EG(exception) == nullptr)) {
+        if (symbol_table != nullptr) {
+            execute_with_symbol_table(new_op_array, result.ptr(), symbol_table);
+        } else {
+            zend_execute(new_op_array, result.ptr());
+        }
+    }
+
+    if (EXPECTED(new_op_array != nullptr)) {
+        destroy_op_array(new_op_array);
+        efree_size(new_op_array, sizeof(zend_op_array));
+    } else {
+        result = false;
+    }
+    throwErrorIfOccurred();
+
+    return result;
+}
+
+Variant include(Variant file, IncludeType type) {
+    // A compiled function called by ZendVM may throw directly through this
+    // frame. Detach the request-allocated argument before entering ZendVM, and
+    // keep only persistent path storage alive during the included execution.
+    std::string path = file.toStdString();
+    file.unset();
+    PersistentZendString stable_file(path);
+    return include_impl(stable_file.get(), type);
+}
+
+Variant include(Variant file, IncludeType type, const Array &scope) {
+    std::string path = file.toStdString();
+    file.unset();
+    PersistentZendString stable_file(path);
+    return include_impl(stable_file.get(), type, nullptr, Z_ARR_P(scope.const_ptr()));
+}
+
+Variant eval(const String &script, const char *filename) {
+    return include_impl(script.str(), ZEND_EVAL, filename);
+}
+
+bool equals(const Variant &a, const Variant &b) {
+    return compare(a, b) == 0;
+}
+
+bool same(const Variant &a, const Variant &b) {
+    return zend_is_identical(NO_CONST_V(a), NO_CONST_V(b));
+}
+
+Int compare(const Variant &a, const Variant &b) {
+    return zend_compare(NO_CONST_V(a), NO_CONST_V(b));
+}
+
+bool empty(const Variant &v, const OperationChain &list, Variant &tmp) {
+    tmp = v;
+    size_t index = 0;
+    const size_t total = list.size();
+    for (const auto &expr : list) {
+        const bool is_last = ++index == total;
+        if (expr.first == ArrayDimFetch) {
+            if (tmp.isString()) {
+                if (!tmp.offsetExists(expr.second)) {
+                    tmp = Variant();
+                    return true;
+                }
+            } else if (tmp.isObject()) {
+                Object object(tmp);
+                if (is_last) {
+                    return !object.offsetExists(expr.second, 1);
+                }
+                tmp = object.offsetGet(expr.second, BP_VAR_IS);
+                if (tmp.isNull() || tmp.isUndef()) {
+                    return true;
+                }
+                continue;
+            } else if (!tmp.isArray()) {
+                return true;
+            }
+            tmp = tmp.item(expr.second);
+        } else if (expr.first == PropertyFetch) {
+            if (!tmp.isObject()) {
+                return true;
+            } else {
+                Object o(tmp);
+                tmp = o.attr(expr.second, AttrMode::Isset);
+            }
+        } else {
+            abort();
+        }
+        if (!tmp) {
+            return true;
+        }
+    }
+    return !tmp;
+}
+
+bool empty(const Variant &v, const OperationChain &list) {
+    Variant tmp;
+    return empty(v, list, tmp);
+}
+
+static bool exists_impl(const Variant &v, const OperationChain &list, Variant &tmp, bool fetch_last_value) {
+    tmp = v;
+    if (tmp.isNull() || tmp.isUndef()) {
+        return false;
+    }
+
+    size_t index = 0;
+    const size_t total = list.size();
+    for (const auto &expr : list) {
+        const bool is_last = ++index == total;
+        if (expr.first == ArrayDimFetch) {
+            if (tmp.isString()) {
+                if (!tmp.offsetExists(expr.second)) {
+                    tmp = Variant();
+                    return false;
+                }
+            } else if (tmp.isObject()) {
+                Object object(tmp);
+                if (is_last) {
+                    if (!object.offsetExists(expr.second)) {
+                        tmp = Variant();
+                        return false;
+                    }
+                    if (!fetch_last_value) {
+                        return true;
+                    }
+                    tmp = object.offsetGet(expr.second, BP_VAR_IS);
+                    return !tmp.isNull() && !tmp.isUndef();
+                }
+                tmp = object.offsetGet(expr.second, BP_VAR_IS);
+                if (tmp.isNull() || tmp.isUndef()) {
+                    return false;
+                }
+                continue;
+            } else if (!tmp.isArray()) {
+                return false;
+            }
+            tmp = tmp.item(expr.second);
+            if (tmp.isNull()) {
+                return false;
+            }
+        } else if (expr.first == PropertyFetch) {
+            if (!tmp.isObject()) {
+                return false;
+            } else {
+                Object o(tmp);
+                if (is_last) {
+                    if (!o.propertyExists(expr.second.toString(), PROP_ISSET)) {
+                        tmp = Variant();
+                        return false;
+                    }
+                    if (!fetch_last_value) {
+                        return true;
+                    }
+                    tmp = o.attr(expr.second, AttrMode::Get);
+                    return !tmp.isNull() && !tmp.isUndef();
+                }
+                tmp = o.attr(expr.second, AttrMode::Isset);
+                if (tmp.isNull() || tmp.isUndef()) {
+                    return false;
+                }
+            }
+        } else {
+            abort();
+        }
+    }
+
+    return true;
+}
+
+bool exists(const Variant &v, const OperationChain &list, Variant &tmp) {
+    return exists_impl(v, list, tmp, true);
+}
+
+bool exists(const Variant &v, const OperationChain &list) {
+    Variant tmp;
+    return exists_impl(v, list, tmp, false);
+}
+
+Reference toReference(const Variant &v, const OperationChain &list) {
+    std::vector<Variant> path;
+    path.reserve(list.size());
+    // Keep the root and every direct array/property access bound to the
+    // original zval. Variant's regular copy/move operations intentionally
+    // apply PHP value-assignment semantics and would detach these wrappers.
+    // A by-reference function parameter stores an IS_REFERENCE wrapper in the
+    // PHPX Reference object. Pointing an INDIRECT zval at that wrapper creates
+    // an INDIRECT -> REFERENCE chain, while Variant::item()/attr() deliberately
+    // unwrap only to the actual PHP value. Bind the traversal root to the
+    // referenced value itself so writes keep aliasing the caller's storage.
+    path.emplace_back(v.unwrap_ptr(), Ctor::Indirect);
+
+    const size_t total = list.size();
+    size_t count = 0;
+
+    for (const auto &expr : list) {
+        auto &tmp = path.back();
+        if (count == total - 1) {
+            if (expr.first == ArrayDimFetch) {
+                return tmp.itemRef(expr.second);
+            } else {
+                return tmp.attrRef(expr.second);
+            }
+        } else {
+            Variant next =
+                expr.first == ArrayDimFetch ? tmp.item(expr.second, true) : tmp.attr(expr.second, AttrMode::Update);
+            if (next.isIndirect()) {
+                path.emplace_back(next.direct_ptr(), Ctor::Indirect);
+            } else {
+                path.emplace_back(std::move(next));
+            }
+            count++;
+        }
+    }
+
+    return {};
+}
+
+Variant getStaticProperty(const Object &object, const String &prop) {
+    return getStaticProperty(object.ce(), prop);
+}
+
+Variant getStaticProperty(const String &class_name, const String &prop) {
+    const auto ce = getClassEntry(class_name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined.", class_name.toCString());
+        return {};
+    }
+    return getStaticProperty(ce, prop);
+}
+
+Variant getStaticProperty(zend_class_entry *ce, const String &prop) {
+    auto rv = zend_read_static_property_ex(ce, prop.str(), true);
+    throwErrorIfOccurred();
+    if (rv == nullptr) {
+        return {};
+    }
+    return {rv, zval_wrap(rv)};
+}
+
+Variant getStaticProperty(zend_class_entry *ce, uint32_t offset) {
+    if (UNEXPECTED(CE_STATIC_MEMBERS(ce) == NULL)) {
+        zend_class_init_statics(ce);
+    }
+    auto rv = CE_STATIC_MEMBERS(ce) + offset;
+    return Variant{rv, zval_wrap(rv)};
+}
+
+Reference getStaticPropertyRef(const String &class_name, const String &prop) {
+    const auto ce = getClassEntry(class_name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined.", class_name.toCString());
+        return {};
+    }
+    return getStaticPropertyRef(ce, prop);
+}
+
+Reference getStaticPropertyRef(zend_class_entry *ce, const String &prop) {
+    zend_property_info *prop_info = nullptr;
+    zval *rv;
+    do {
+        FakeScopeGuard scope_guard{ce};
+        rv = zend_std_get_static_property_with_info(ce, prop.str(), BP_VAR_IS, &prop_info);
+    } while (0);
+    throwErrorIfOccurred();
+    if (rv == nullptr) {
+        return {};
+    }
+    if (Z_TYPE_P(rv) == IS_REFERENCE) {
+        return Reference{rv};
+    }
+
+    Variant member{rv, zval_wrap(rv)};
+    auto ref = member.toReference();
+    if (prop_info && ZEND_TYPE_IS_SET(prop_info->type)) {
+        ZEND_REF_ADD_TYPE_SOURCE(ref.reference(), prop_info);
+    }
+    return ref;
+}
+
+bool hasStaticProperty(const String &class_name, const String &prop) {
+    const auto ce = getClassEntry(class_name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined.", class_name.toCString());
+        return {};
+    }
+    return zend_hash_exists(&ce->properties_info, prop.str());
+}
+
+bool setStaticProperty(const String &class_name, const String &prop, const Variant &v) {
+    const auto ce = getClassEntry(class_name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined.", class_name.toCString());
+        return {};
+    }
+    auto rc = zend_update_static_property_ex(ce, prop.str(), NO_CONST_V(v));
+    throwErrorIfOccurred();
+    return rc == SUCCESS;
+}
+
+uint32_t getPropertyOffset(const String &class_name, const String &prop) {
+    const auto ce = getClassEntry(class_name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined.", class_name.toCString());
+        return 0;
+    }
+    return getPropertyOffset(ce, prop);
+}
+
+uint32_t getPropertyOffset(zend_class_entry *ce, const String &prop) {
+    zend_property_info *prop_info;
+    do {
+        FakeScopeGuard fake_scope_guard{ce};
+        prop_info = zend_get_property_info(ce, prop.str(), 1);
+    } while (0);
+    if (UNEXPECTED(!prop_info)) {
+        throwError("property '%s::%s' is undefined.", ce->name->val, prop.toCString());
+        return 0;
+    }
+    return prop_info->offset;
+}
+}  // namespace php

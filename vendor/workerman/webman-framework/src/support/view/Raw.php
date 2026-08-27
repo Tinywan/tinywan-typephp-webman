@@ -61,19 +61,17 @@ class Raw implements View
         $app = $app === null ? ($request->app ?? '') : $app;
         $baseViewPath = $plugin ? base_path() . "/plugin/$plugin/app" : app_path();
         $__template_path__ = $template[0] === '/' ? base_path() . "$template.$viewSuffix" : ($app === '' ? "$baseViewPath/view/$template.$viewSuffix" : "$baseViewPath/$app/view/$template.$viewSuffix");
-        if(isset($request->_view_vars)) {
-            extract((array)$request->_view_vars);
+        $mergedVars = isset($request->_view_vars) ? array_merge((array)$request->_view_vars, $vars) : $vars;
+        if (!is_file($__template_path__)) {
+            return '';
         }
-        extract($vars);
-        ob_start();
-        // Try to include php file.
-        try {
-            include $__template_path__;
-        } catch (Throwable $e) {
-            ob_end_clean();
-            throw $e;
+        $__content__ = file_get_contents($__template_path__);
+        foreach ($mergedVars as $__k__ => $__v__) {
+            $__content__ = str_replace('<?=htmlspecialchars($' . $__k__ . ')?>', htmlspecialchars((string)$__v__), $__content__);
+            $__content__ = str_replace('<?=' . '$' . $__k__ . '?>', (string)$__v__, $__content__);
+            $__content__ = str_replace('<?php echo htmlspecialchars($' . $__k__ . '); ?>', htmlspecialchars((string)$__v__), $__content__);
+            $__content__ = str_replace('<?php echo $' . $__k__ . '; ?>', (string)$__v__, $__content__);
         }
-
-        return ob_get_clean();
+        return $__content__;
     }
 }

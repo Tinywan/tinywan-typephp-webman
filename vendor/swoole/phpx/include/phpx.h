@@ -1,0 +1,2457 @@
+/*
+  +----------------------------------------------------------------------+
+  | PHP-X                                                                |
+  +----------------------------------------------------------------------+
+  | This source file is subject to version 2.0 of the Apache license,    |
+  | that is bundled with this package in the file LICENSE, and is        |
+  | available through the world-wide-web at the following url:           |
+  | http://www.apache.org/licenses/LICENSE-2.0.html                      |
+  | If you did not receive a copy of the Apache2.0 license and are unable|
+  | to obtain it through the world-wide-web, please send a note to       |
+  | license@swoole.com so we can mail you a copy immediately.            |
+  +----------------------------------------------------------------------+
+  | Author: Tianfeng Han  <rango@swoole.com>                             |
+  +----------------------------------------------------------------------+
+*/
+
+#pragma once
+
+/**
+ * Do not trust any header files of PHP, its internal implementation is very chaotic,
+ * which must be wrapped in extern "C" {}
+ */
+extern "C" {
+#include "php.h"
+#include "zend_ini.h"
+#include "zend_enum.h"
+#include "zend_interfaces.h"
+#include "zend_exceptions.h"
+
+#include <ext/standard/php_standard.h>
+}
+
+#include "phpx_types.h"
+#include "phpx_compat.h"
+
+#if PHP_VERSION_ID < 80400
+#error "PHPX requires PHP 8.4 or later."
+#endif
+
+#include <unordered_map>
+#include <string>
+#include <vector>
+#include <functional>
+#include <map>
+#include <memory>
+#include <array>
+#include <initializer_list>
+#include <stdexcept>
+#include <string_view>
+#include <type_traits>
+#include <tuple>
+#include <utility>
+
+/**
+ * All API names must be in lowercase camel case.
+ */
+#define PHPX_API PHPAPI
+#define PHPX_UNSAFE
+
+#include "phpx_native_gc.h"
+
+#define IS_STR_OFFSET_SET (1 << 5)
+
+/**
+ * !!! Unsafe conversion, discarding const modifier. There are many errors in the php src source code.
+ * Many function parameters are read-only zvals, and the const modifier should be added.
+ * However, the php code does not do this, resulting in C++ code unable to implement safe const functions.
+ */
+#define NO_CONST_V(_v) const_cast<zval *>(_v.unwrap_ptr())
+#define NO_CONST_Z(_z) const_cast<zval *>(_z)
+#define NO_CONST_UNWRAP_Z(_z) const_cast<zval *>(unwrap_zval(_z))
+
+namespace php {
+
+enum TrimMode {
+    TRIM_LEFT = 1,
+    TRIM_RIGHT = 2,
+    TRIM_BOTH = 3,
+};
+
+enum IncludeType {
+    INCLUDE = ZEND_INCLUDE,
+    INCLUDE_ONCE = ZEND_INCLUDE_ONCE,
+    REQUIRE = ZEND_REQUIRE,
+    REQUIRE_ONCE = ZEND_REQUIRE_ONCE,
+};
+
+/**
+ * Owns a persistent zend_string independently of the request memory pool.
+ *
+ * Use this type when a Zend string must remain valid while execution may
+ * unwind through a request shutdown. It deliberately does not derive from
+ * Variant because the regular zval destructor only supports request strings.
+ */
+class PersistentZendString final {
+    struct Deleter final {
+        void operator()(zend_string *value) const noexcept {
+            zend_string_release(value);
+        }
+    };
+
+    std::unique_ptr<zend_string, Deleter> value_;
+
+  public:
+    explicit PersistentZendString(const std::string &value)
+        : value_(zend_string_init(value.data(), value.size(), true)) {}
+
+    PersistentZendString(const PersistentZendString &) = delete;
+    PersistentZendString &operator=(const PersistentZendString &) = delete;
+    PersistentZendString(PersistentZendString &&) noexcept = default;
+    PersistentZendString &operator=(PersistentZendString &&) noexcept = default;
+
+    zend_string *get() const noexcept {
+        return value_.get();
+    }
+};
+
+enum PropertyOperation {
+    PROP_ISSET = ZEND_PROPERTY_ISSET,
+    PROP_EMPTY = ZEND_PROPERTY_NOT_EMPTY,
+    PROP_EXISTS = ZEND_PROPERTY_EXISTS,
+};
+
+PHPX_API void error(int level, const char *format, ...);
+PHPX_API void echo(const char *format, ...);
+PHPX_API void echo(const String &str);
+PHPX_API void echo(const Variant &val);
+PHPX_API void echo(Int val);
+PHPX_API void echo(Float val);
+PHPX_API Variant global(const String &name);
+enum class ConstantLookup {
+    UnqualifiedInNamespace,
+};
+PHPX_API Variant constant(const String &name);
+PHPX_API Variant constant(const String &name, ConstantLookup lookup);
+PHPX_API Variant constant(const String &cls, const String &name);
+PHPX_API Variant constant(zend_class_entry *ce, const String &name);
+PHPX_API Variant classConstant(const Variant &target, const Variant &name, zend_class_entry *scope = nullptr);
+PHPX_API Variant classConstant(zend_class_entry *ce, const Variant &name, zend_class_entry *scope = nullptr);
+PHPX_API bool updateConstant(const String &cls, const String &name, const Variant &data);
+PHPX_API bool updateConstant(zend_class_entry *ce, const String &name, const Variant &data);
+PHPX_API void initGlobal(const String &name, Variant &var);
+PHPX_API void unsetGlobal(const String &name);
+PHPX_API Variant include(Variant file, IncludeType type = INCLUDE);
+PHPX_API Variant include(Variant file, IncludeType type, const Array &scope);
+PHPX_API Variant eval(const String &script, const char *filename = nullptr);
+PHPX_API Variant call(const Variant &func, Args &args, zend_array *named_args = nullptr);
+PHPX_API Variant call(const Variant &func, Array &args, zend_array *named_args = nullptr);
+PHPX_API Variant call(const Variant &func, const ArgList &args, zend_array *named_args = nullptr);
+
+/** Reusable lexical and late-bound context used while Zend resolves callables. */
+class CallableScope final {
+  public:
+    // Borrowed for this context's stack lifetime. TypePHP methods are persistent;
+    // a Closure's function remains valid while its owning Closure is alive.
+    CallableScope(zend_function *caller_function, zend_class_entry *called_scope, zend_object *this_object)
+        : caller_function_(caller_function), called_scope_(called_scope), this_object_(this_object) {
+        if (caller_function == nullptr) {
+            return;
+        }
+
+        uint32_t call_info = ZEND_CALL_TOP_FUNCTION;
+        void *object_or_called_scope =
+            called_scope ? static_cast<void *>(called_scope) : static_cast<void *>(lexicalScope());
+        if (this_object != nullptr) {
+            call_info |= ZEND_CALL_HAS_THIS;
+            object_or_called_scope = this_object;
+        }
+        zend_vm_init_call_frame(&frame_, call_info, caller_function, 0, object_or_called_scope);
+    }
+
+    CallableScope(const CallableScope &) = delete;
+    CallableScope &operator=(const CallableScope &) = delete;
+    CallableScope(CallableScope &&) = delete;
+    CallableScope &operator=(CallableScope &&) = delete;
+
+    bool isValid() const noexcept {
+        return caller_function_ != nullptr && lexicalScope() != nullptr;
+    }
+
+    zend_class_entry *lexicalScope() const noexcept {
+        return caller_function_ ? caller_function_->common.scope : nullptr;
+    }
+
+    zend_class_entry *calledScope() const noexcept {
+        return called_scope_ ? called_scope_ : lexicalScope();
+    }
+
+    zend_object *thisObject() const noexcept {
+        return this_object_;
+    }
+
+    bool resolve(zval *callable, zend_object *object, zend_fcall_info_cache *cache, char **error) const {
+        ZEND_ASSERT(caller_function_ != nullptr);
+        ZEND_ASSERT(lexicalScope() != nullptr);
+        return zend_is_callable_at_frame(callable, object, &frame_, 0, cache, error);
+    }
+
+  private:
+    zend_function *caller_function_;
+    zend_class_entry *called_scope_;
+    zend_object *this_object_;
+    mutable zend_execute_data frame_{};
+};
+
+PHPX_API Variant callScoped(const Variant &func,
+                            const CallableScope &scope,
+                            Args &args,
+                            zend_array *named_args = nullptr);
+PHPX_API Variant callScoped(const Variant &func,
+                            const CallableScope &scope,
+                            Array &args,
+                            zend_array *named_args = nullptr);
+PHPX_API Variant callScoped(const Variant &func,
+                            const CallableScope &scope,
+                            const ArgList &args = {},
+                            zend_array *named_args = nullptr);
+PHPX_API Variant callScoped(const Variant &object,
+                            const Variant &func,
+                            const CallableScope &scope,
+                            Args &args,
+                            zend_array *named_args = nullptr);
+PHPX_API Variant callScoped(const Variant &object,
+                            const Variant &func,
+                            const CallableScope &scope,
+                            Array &args,
+                            zend_array *named_args = nullptr);
+PHPX_API Variant callScoped(const Variant &object,
+                            const Variant &func,
+                            const CallableScope &scope,
+                            const ArgList &args = {},
+                            zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_function *func, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_function *func, Args &_args, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_function *func, Array &args, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_function *func, const ArgList &args, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_class_entry *ce, zend_function *func, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_class_entry *ce, zend_function *func, Args &args, zend_array *named_args = nullptr);
+PHPX_API Variant call(zend_class_entry *ce, zend_function *func, const ArgList &args, zend_array *named_args = nullptr);
+PHPX_API Variant throwException(const String &class_name, const char *message, int code = 0);
+PHPX_API Variant throwException(zend_class_entry *ce, const char *message, int code = 0);
+PHPX_API Variant throwException(const Object &e);
+PHPX_API bool empty(const Variant &v, const OperationChain &list);
+PHPX_API bool empty(const Variant &v, const OperationChain &list, Variant &result);
+PHPX_API bool exists(const Variant &v, const OperationChain &list);
+PHPX_API bool exists(const Variant &v, const OperationChain &list, Variant &result);
+PHPX_API Reference toReference(const Variant &v, const OperationChain &list);
+
+PHPX_API void pushDebugFrame(const char *file, int lineno, const char *function = nullptr);
+PHPX_API void popDebugFrame();
+PHPX_API void traceDebugInfo(const char *file, int lineno);
+PHPX_API void enableDebugInfo(bool enable = true);
+
+void augmentException();
+
+inline void throwErrorIfOccurred() {
+    if (UNEXPECTED(EG(exception) != nullptr)) {
+        augmentException();
+        throw EG(exception);
+    }
+}
+
+inline void throwError(const char *format) {
+    zend_throw_error(NULL, "%s", format);
+    throwErrorIfOccurred();
+}
+
+template <typename... Args>
+inline void throwError(const char *format, Args &&...args) {
+    zend_throw_error(NULL, format, std::forward<Args>(args)...);
+    throwErrorIfOccurred();
+}
+
+inline void throwExceptionEx(zend_class_entry *ce, int code, const char *format) {
+    zend_throw_exception_ex(ce, code, "%s", format);
+    throwErrorIfOccurred();
+}
+
+template <typename... Args>
+inline void throwExceptionEx(zend_class_entry *ce, int code, const char *format, Args &&...args) {
+    zend_throw_exception_ex(ce, code, format, std::forward<Args>(args)...);
+    throwErrorIfOccurred();
+}
+
+PHPX_API Object catchException();
+PHPX_API String concat(const Variant &a, const Variant &b);
+PHPX_API String concat(const ArgList &args);
+PHPX_API void exit(const Variant &status);
+PHPX_API bool same(const Variant &a, const Variant &b);
+PHPX_API bool equals(const Variant &a, const Variant &b);
+PHPX_API Int compare(const Variant &a, const Variant &b);
+PHPX_API Variant getStaticProperty(const Object &object, const String &prop);
+PHPX_API Variant getStaticProperty(const String &class_name, const String &prop);
+PHPX_API Variant getStaticProperty(zend_class_entry *ce, uint32_t offset);
+PHPX_API Variant getStaticProperty(zend_class_entry *ce, const String &prop);
+PHPX_API Reference getStaticPropertyRef(const String &class_name, const String &prop);
+PHPX_API Reference getStaticPropertyRef(zend_class_entry *ce, const String &prop);
+PHPX_API bool setStaticProperty(const String &class_name, const String &prop, const Variant &value);
+PHPX_API bool hasStaticProperty(const String &class_name, const String &prop);
+PHPX_API uint32_t getPropertyOffset(const String &class_name, const String &prop);
+PHPX_API uint32_t getPropertyOffset(zend_class_entry *ce, const String &prop);
+
+PHPX_API Int toSize(const String &str);
+PHPX_API Array toArray(const Variant &v);
+PHPX_API Object toObject(const Variant &v);
+PHPX_API Object toObject(const Variant &v, const String &class_name);
+
+Resource *getResource(const std::string &name);
+
+void request_init();
+void request_shutdown();
+int array_data_compare(Bucket *f, Bucket *s);
+bool prepare_slice(Int &offset, Int &length, size_t total);
+Variant call_impl(const zval *object, const zval *func, Args &args, zend_array *named_args = nullptr);
+Variant call_impl(const zval *object, const zval *func);
+
+#ifdef ZTS
+#define THREAD_LOCAL thread_local
+#else
+#define THREAD_LOCAL
+#endif
+
+extern PHPX_API const char *box_res_name;
+
+PHPX_API int getBoxResourceId();
+
+#define PHPX_MAX_DEBUG_DEPTH 64
+
+struct DebugFrame {
+    const char *file;
+    int line;
+    const char *function;
+};
+
+struct DebugInfo {
+    bool enable;
+    DebugFrame frames[PHPX_MAX_DEBUG_DEPTH];
+    int depth;
+};
+
+extern DebugInfo debug_info;
+
+static inline const zval *unwrap_zval(const zval *val) {
+    switch (Z_TYPE_P(val)) {
+    case IS_REFERENCE:
+        return Z_REFVAL_P(val);
+    case IS_INDIRECT:
+        return Z_INDIRECT_P(val);
+    default:
+        return val;
+    }
+}
+
+static inline zval *unwrap_zval(zval *val) {
+    return const_cast<zval *>(unwrap_zval(const_cast<const zval *>(val)));
+}
+
+static inline zval *undef() {
+    return &EG(uninitialized_zval);
+}
+
+static inline bool zval_is_string(const zval *v) {
+    return Z_TYPE_P(v) == IS_STRING;
+}
+
+static inline bool zval_is_array(const zval *v) {
+    return Z_TYPE_P(v) == IS_ARRAY;
+}
+
+static inline bool zval_is_object(const zval *v) {
+    return Z_TYPE_P(v) == IS_OBJECT;
+}
+
+static inline bool zval_is_undef(const zval *v) {
+    return Z_TYPE_P(v) == IS_UNDEF;
+}
+
+static inline bool zval_is_null(const zval *v) {
+    return Z_TYPE_P(v) == IS_NULL;
+}
+
+static inline bool zval_is_ref(const zval *v) {
+    return Z_TYPE_P(v) == IS_REFERENCE;
+}
+
+static inline bool zval_is_indirect(const zval *v) {
+    return Z_TYPE_P(v) == IS_INDIRECT;
+}
+
+static inline uint32_t zval_ref_count(const zval *v) {
+    return Z_REFCOUNT_P(v);
+}
+
+static inline void zval_copy_value(zval *dst, const zval *src) {
+    ZVAL_COPY_VALUE(dst, src);
+}
+
+static inline void zval_copy(zval *dst, const zval *src) {
+    ZVAL_COPY(dst, src);
+}
+
+static inline void zval_try_add_ref(zval *v) {
+    Z_TRY_ADDREF_P(v);
+}
+
+enum class Ctor {
+    Copy,
+    CopyRef,
+    Indirect,
+    Move,
+};
+
+static inline Ctor zval_wrap(zval *v) {
+    return zval_is_ref(v) ? Ctor::CopyRef : Ctor::Indirect;
+}
+
+static inline void deref(zval *v) {
+    if (UNEXPECTED(zval_is_ref(v))) {
+        zend_reference *ref = Z_REF_P(v);
+        if (zval_ref_count(v) == 1) {
+            zval_copy_value(v, &ref->val);
+            efree_size(ref, sizeof(zend_reference));
+        } else {
+            zval_copy(v, &ref->val);
+            GC_DELREF(ref);
+        }
+    }
+}
+
+#ifndef Z_TYPE_EXTRA_P
+#define Z_TYPE_EXTRA(zval) (zval).u1.v.u.extra
+#define Z_TYPE_EXTRA_P(zval_p) Z_TYPE_EXTRA(*(zval_p))
+#endif
+
+static inline Int safeIndex(Int index, Int size) {
+    if (UNEXPECTED(index < 0 || index >= size)) {
+        throwError("Array index out of bounds: index " ZEND_LONG_FMT ", size " ZEND_LONG_FMT, index, size);
+        return -1;
+    }
+    return index;
+}
+
+template <typename T, std::size_t N>
+class StdArray {
+  private:
+    std::array<T, N> data_{};
+
+  public:
+    StdArray() = default;
+    StdArray(std::initializer_list<T> init) : data_{} {
+        if (UNEXPECTED(init.size() > N)) {
+            throwError("Too many initializers for std array");
+            std::abort();
+        }
+        std::copy(init.begin(), init.end(), data_.begin());
+    }
+    void offsetSet(Int index, const T &value) {
+        data_[safeIndex(index, N)] = value;
+    }
+    void offsetSet(Int index, T &&value) {
+        data_[safeIndex(index, N)] = std::move(value);
+    }
+    const T &offsetGet(Int index) const {
+        return data_[safeIndex(index, N)];
+    }
+    T &offsetGet(Int index) {
+        return data_[safeIndex(index, N)];
+    }
+    void offsetUnset(Int index) {
+        data_[safeIndex(index, N)] = T{};
+    }
+    constexpr std::size_t size() const noexcept {
+        return N;
+    }
+    T &operator[](std::size_t index) {
+        return data_[index];
+    }
+    const T &operator[](std::size_t index) const {
+        return data_[index];
+    }
+    T &at(Int index) {
+        return offsetGet(index);
+    }
+    const T &at(Int index) const {
+        return offsetGet(index);
+    }
+    void fill(const T &value) {
+        data_.fill(value);
+    }
+    auto begin() noexcept {
+        return data_.begin();
+    }
+    auto end() noexcept {
+        return data_.end();
+    }
+    auto begin() const noexcept {
+        return data_.begin();
+    }
+    auto end() const noexcept {
+        return data_.end();
+    }
+};
+
+class StdContainerIterationState {
+  public:
+    class Guard {
+      private:
+        std::size_t *active_iterators_;
+
+      public:
+        explicit Guard(std::size_t &active_iterators) noexcept : active_iterators_(&active_iterators) {
+            ++*active_iterators_;
+        }
+        Guard(const Guard &) = delete;
+        Guard &operator=(const Guard &) = delete;
+        Guard(Guard &&other) noexcept : active_iterators_(other.active_iterators_) {
+            other.active_iterators_ = nullptr;
+        }
+        Guard &operator=(Guard &&) = delete;
+        ~Guard() {
+            if (active_iterators_ != nullptr) {
+                --*active_iterators_;
+            }
+        }
+    };
+
+  private:
+    mutable std::size_t active_iterators_ = 0;
+
+  protected:
+    void assertStructureMutable() const {
+        if (UNEXPECTED(active_iterators_ != 0)) {
+            throwError("Cannot structurally modify std container during foreach");
+            std::abort();
+        }
+    }
+
+  public:
+    StdContainerIterationState() = default;
+    StdContainerIterationState(const StdContainerIterationState &) noexcept {}
+    StdContainerIterationState(StdContainerIterationState &&) noexcept {}
+    StdContainerIterationState &operator=(const StdContainerIterationState &) noexcept {
+        return *this;
+    }
+    StdContainerIterationState &operator=(StdContainerIterationState &&) noexcept {
+        return *this;
+    }
+    Guard iterationGuard() const noexcept {
+        return Guard(active_iterators_);
+    }
+};
+
+template <typename T>
+class StdVector : public StdContainerIterationState {
+  private:
+    std::vector<T> data_;
+
+  public:
+    StdVector() = default;
+    explicit StdVector(std::size_t size) : data_(size) {}
+    StdVector(std::initializer_list<T> init) : data_(init) {}
+    StdVector(const StdVector &other) : data_(other.data_) {}
+    StdVector(StdVector &&other) {
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+    }
+    StdVector &operator=(const StdVector &other) {
+        assertStructureMutable();
+        data_ = other.data_;
+        return *this;
+    }
+    StdVector &operator=(StdVector &&other) {
+        assertStructureMutable();
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+        return *this;
+    }
+    void push_back(const T &value) {
+        assertStructureMutable();
+        data_.push_back(value);
+    }
+    void push_back(T &&value) {
+        assertStructureMutable();
+        data_.push_back(std::move(value));
+    }
+    void offsetSet(Int index, const T &value) {
+        data_[safeIndex(index, data_.size())] = value;
+    }
+    void offsetSet(Int index, T &&value) {
+        data_[safeIndex(index, data_.size())] = std::move(value);
+    }
+    const T &offsetGet(Int index) const {
+        return data_[safeIndex(index, data_.size())];
+    }
+    T &offsetGet(Int index) {
+        return data_[safeIndex(index, data_.size())];
+    }
+    void offsetUnset(Int index) {
+        data_[safeIndex(index, data_.size())] = T{};
+    }
+    std::size_t size() const noexcept {
+        return data_.size();
+    }
+    T &operator[](Int index) {
+        return offsetGet(index);
+    }
+    const T &operator[](Int index) const {
+        return offsetGet(index);
+    }
+    void fill(const T &value) {
+        std::fill(data_.begin(), data_.end(), value);
+    }
+    auto begin() noexcept {
+        return data_.begin();
+    }
+    auto end() noexcept {
+        return data_.end();
+    }
+    auto begin() const noexcept {
+        return data_.begin();
+    }
+    auto end() const noexcept {
+        return data_.end();
+    }
+};
+
+struct StdStringLess {
+    bool operator()(const String &a, const String &b) const;
+};
+
+struct StdStringHash {
+    std::size_t operator()(const String &key) const;
+};
+
+struct StdStringEqual {
+    bool operator()(const String &a, const String &b) const;
+};
+
+template <typename K, typename T>
+class StdOrderedMap : public StdContainerIterationState {
+  private:
+    using Compare = typename std::conditional<std::is_same<K, String>::value, StdStringLess, std::less<K>>::type;
+    std::map<K, T, Compare> data_;
+
+  public:
+    StdOrderedMap() = default;
+    StdOrderedMap(const StdOrderedMap &other) : data_(other.data_) {}
+    StdOrderedMap(StdOrderedMap &&other) {
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+    }
+    StdOrderedMap &operator=(const StdOrderedMap &other) {
+        assertStructureMutable();
+        data_ = other.data_;
+        return *this;
+    }
+    StdOrderedMap &operator=(StdOrderedMap &&other) {
+        assertStructureMutable();
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+        return *this;
+    }
+    void offsetSet(const K &key, const T &value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            iterator->second = value;
+            return;
+        }
+        assertStructureMutable();
+        data_.emplace(key, value);
+    }
+    void offsetSet(const K &key, T &&value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            iterator->second = std::move(value);
+            return;
+        }
+        assertStructureMutable();
+        data_.emplace(key, std::move(value));
+    }
+    const T &offsetGet(const K &key) const {
+        auto iterator = data_.find(key);
+        if (UNEXPECTED(iterator == data_.end())) {
+            throwError("Undefined std container key");
+            std::abort();
+        }
+        return iterator->second;
+    }
+    T &offsetGet(const K &key) {
+        return const_cast<T &>(static_cast<const StdOrderedMap &>(*this).offsetGet(key));
+    }
+    T &offsetGetForUpdate(const K &key) {
+        return offsetGetForUpdate(key, T{});
+    }
+    T &offsetGetForUpdate(const K &key, const T &default_value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            return iterator->second;
+        }
+        assertStructureMutable();
+        return data_.emplace(key, default_value).first->second;
+    }
+    template <typename Factory>
+    T &offsetGetForUpdateLazy(const K &key, Factory &&factory) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            return iterator->second;
+        }
+        assertStructureMutable();
+        return data_.emplace(key, std::forward<Factory>(factory)()).first->second;
+    }
+    void offsetUnset(const K &key) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            assertStructureMutable();
+            data_.erase(iterator);
+        }
+    }
+    std::size_t size() const noexcept {
+        return data_.size();
+    }
+    T &operator[](const K &key) {
+        return offsetGetForUpdate(key);
+    }
+    const T &operator[](const K &key) const {
+        return offsetGet(key);
+    }
+    auto begin() noexcept {
+        return data_.begin();
+    }
+    auto end() noexcept {
+        return data_.end();
+    }
+    auto begin() const noexcept {
+        return data_.begin();
+    }
+    auto end() const noexcept {
+        return data_.end();
+    }
+};
+
+template <typename K, typename T>
+class StdMap : public StdContainerIterationState {
+  private:
+    using Hash = typename std::conditional<std::is_same<K, String>::value, StdStringHash, std::hash<K>>::type;
+    using Equal = typename std::conditional<std::is_same<K, String>::value, StdStringEqual, std::equal_to<K>>::type;
+    std::unordered_map<K, T, Hash, Equal> data_;
+
+  public:
+    StdMap() = default;
+    StdMap(const StdMap &other) : data_(other.data_) {}
+    StdMap(StdMap &&other) {
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+    }
+    StdMap &operator=(const StdMap &other) {
+        assertStructureMutable();
+        data_ = other.data_;
+        return *this;
+    }
+    StdMap &operator=(StdMap &&other) {
+        assertStructureMutable();
+        other.assertStructureMutable();
+        data_ = std::move(other.data_);
+        return *this;
+    }
+    void offsetSet(const K &key, const T &value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            iterator->second = value;
+            return;
+        }
+        assertStructureMutable();
+        data_.emplace(key, value);
+    }
+    void offsetSet(const K &key, T &&value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            iterator->second = std::move(value);
+            return;
+        }
+        assertStructureMutable();
+        data_.emplace(key, std::move(value));
+    }
+    const T &offsetGet(const K &key) const {
+        auto iterator = data_.find(key);
+        if (UNEXPECTED(iterator == data_.end())) {
+            throwError("Undefined std container key");
+            std::abort();
+        }
+        return iterator->second;
+    }
+    T &offsetGet(const K &key) {
+        return const_cast<T &>(static_cast<const StdMap &>(*this).offsetGet(key));
+    }
+    T &offsetGetForUpdate(const K &key) {
+        return offsetGetForUpdate(key, T{});
+    }
+    T &offsetGetForUpdate(const K &key, const T &default_value) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            return iterator->second;
+        }
+        assertStructureMutable();
+        return data_.emplace(key, default_value).first->second;
+    }
+    template <typename Factory>
+    T &offsetGetForUpdateLazy(const K &key, Factory &&factory) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            return iterator->second;
+        }
+        assertStructureMutable();
+        return data_.emplace(key, std::forward<Factory>(factory)()).first->second;
+    }
+    void offsetUnset(const K &key) {
+        auto iterator = data_.find(key);
+        if (iterator != data_.end()) {
+            assertStructureMutable();
+            data_.erase(iterator);
+        }
+    }
+    std::size_t size() const noexcept {
+        return data_.size();
+    }
+    T &operator[](const K &key) {
+        return offsetGetForUpdate(key);
+    }
+    const T &operator[](const K &key) const {
+        return offsetGet(key);
+    }
+    auto begin() noexcept {
+        return data_.begin();
+    }
+    auto end() noexcept {
+        return data_.end();
+    }
+    auto begin() const noexcept {
+        return data_.begin();
+    }
+    auto end() const noexcept {
+        return data_.end();
+    }
+};
+
+template <typename T>
+struct is_std_array : std::false_type {};
+
+template <typename T, std::size_t N>
+struct is_std_array<StdArray<T, N>> : std::true_type {};
+
+template <typename T>
+struct is_std_vector : std::false_type {};
+
+template <typename T>
+struct is_std_vector<StdVector<T>> : std::true_type {};
+
+template <typename T>
+struct is_std_ordered_map : std::false_type {};
+
+template <typename K, typename T>
+struct is_std_ordered_map<StdOrderedMap<K, T>> : std::true_type {};
+
+template <typename T>
+struct is_std_map : std::false_type {};
+
+template <typename K, typename T>
+struct is_std_map<StdMap<K, T>> : std::true_type {};
+
+template <typename T>
+struct is_std_container : std::integral_constant<bool,
+                                                 is_std_array<T>::value || is_std_vector<T>::value ||
+                                                     is_std_ordered_map<T>::value || is_std_map<T>::value> {};
+
+template <typename T, std::size_t N, typename U>
+static inline void initializeStdContainer(StdArray<T, N> &container, const U &value) {
+    if constexpr (is_std_array<T>::value) {
+        for (auto &item : container) {
+            initializeStdContainer(item, value);
+        }
+    } else {
+        container.fill(value);
+    }
+}
+
+template <typename T, typename U>
+static inline void initializeStdContainer(StdVector<T> &container, const U &value) {
+    container.fill(value);
+}
+
+template <typename T>
+inline constexpr bool is_integral_non_bool_v =
+    std::is_integral_v<std::decay_t<T>> && !std::is_same_v<std::decay_t<T>, bool>;
+
+template <typename T>
+inline constexpr bool is_floating_point_v = std::is_floating_point_v<std::decay_t<T>>;
+
+template <typename T>
+inline constexpr bool is_arithmetic_non_bool_v = is_integral_non_bool_v<T> || is_floating_point_v<T>;
+
+template <typename T, typename Ret = int>
+using enable_if_integral_non_bool = std::enable_if_t<is_integral_non_bool_v<T>, Ret>;
+
+template <typename T, typename Ret = int>
+using enable_if_floating_point = std::enable_if_t<is_floating_point_v<T>, Ret>;
+
+template <typename T, typename Ret = int>
+using enable_if_arithmetic_non_bool = std::enable_if_t<is_arithmetic_non_bool_v<T>, Ret>;
+
+class Variant {
+  protected:
+    zval val;
+    void destroy() {
+        zval *target = unwrap_ptr();
+        zval old;
+        ZVAL_COPY_VALUE(&old, target);
+        if (target == &val) {
+            val = {};
+        } else {
+            // Indirect values may point into a HashTable bucket. Preserve u2,
+            // which contains the bucket collision-chain metadata.
+            ZVAL_UNDEF(target);
+        }
+        zval_ptr_dtor(&old);
+        throwErrorIfOccurred();
+    }
+    void addRef() {
+        Z_TRY_ADDREF_P(&val);
+    }
+    // Raw counterpart of addRef(). It only drops a previously acquired
+    // reference and does not destroy the zval; normal ownership release must
+    // continue to use destroy() or the Variant destructor.
+    void delRef() {
+        Z_TRY_DELREF_P(&val);
+    }
+    void setByteOfStr(char c) {
+        SEPARATE_STRING(zv());
+        Z_STRVAL_P(zv())[Z_FE_POS_P(ptr())] = c;
+        zend_string_forget_hash_val(Z_STR_P(zv()));
+    }
+    void setStr(zend_string *s) {
+        if (ZSTR_IS_INTERNED(s)) {
+            ZVAL_INTERNED_STR(&val, s);
+        } else {
+            ZVAL_NEW_STR(&val, s);
+        }
+    }
+    bool isByteOfStr() {
+        return isIndirect() && isString() && (Z_TYPE_EXTRA_P(ptr()) & IS_STR_OFFSET_SET);
+    }
+
+  public:
+    Variant() noexcept {
+        ZVAL_NULL(&val);
+    }
+    Variant(std::nullptr_t) noexcept {
+        ZVAL_NULL(&val);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant(T v) noexcept {
+        ZVAL_LONG(&val, static_cast<zend_long>(v));
+    }
+    template <typename T, enable_if_floating_point<T> = 0>
+    Variant(T v) noexcept {
+        ZVAL_DOUBLE(&val, static_cast<double>(v));
+    }
+    Variant(bool v) noexcept {
+        ZVAL_BOOL(&val, v);
+    }
+    Variant(const char *str) {
+        setStr(zend_string_init_fast(str, strlen(str)));
+    }
+    Variant(const char *str, size_t len) {
+        setStr(zend_string_init_fast(str, len));
+    }
+    /**
+     * !!! [UNSAFE] `persistent` argument
+     * When `persistent` is `true`, it will never be released until the process exits.
+     * Please note that this approach is intended solely for global constant objects.
+     */
+    Variant(const char *str, size_t len, bool persistent) {
+        if (persistent) {
+            ZVAL_NEW_STR(&val, zend_string_init(str, len, persistent));
+            /**
+             * There is a flaw in PHP's design: persistent strings cause assertion failures upon destruction.
+             * By incrementing the reference count once, these strings are never released,
+             * and are instead reclaimed automatically by the operating system when the process terminates.
+             */
+            addRef();
+            /**
+             * Persistent string must have its hash value precomputed. This string may be used for hash lookups in a
+             * multi-threaded environment. If the hash value is null and requires calculation, it may lead to
+             * multi-thread contention.
+             */
+            zend_string_hash_val(Z_STR(val));
+        } else {
+            setStr(zend_string_init_fast(str, len));
+        }
+    }
+    Variant(const std::string &str) {
+        setStr(zend_string_init_fast(str.c_str(), str.length()));
+    }
+    Variant(const zval *v, Ctor method = Ctor::Copy) noexcept {
+        /**
+         * Many ZendAPIs return null-pointer instead of null value, and it is too laborious to carefully
+         * discern whether each API will return an empty pointer. Therefore, it is necessary to detect whether the
+         * incoming zval pointer is empty in the constructor, and if so, initialize it to null.
+         */
+        if (UNEXPECTED(v == nullptr)) {
+            ZVAL_NULL(&val);
+            return;
+        }
+
+        ZVAL_DEINDIRECT(v);
+        switch (method) {
+        case Ctor::Copy:
+            ZVAL_DEREF(v);
+            zval_copy(&val, v);
+            break;
+        case Ctor::CopyRef:
+            zval_copy(&val, v);
+            break;
+            /**
+             * The value of v must be the address of an array element, or the address of an object property
+             */
+        case Ctor::Indirect:
+            ZVAL_INDIRECT(&val, const_cast<zval *>(v));
+            break;
+            /**
+             * The v must be a new reference, created using `array_init()` or `object_init()`, or `zend_string_init()`,
+             * after which the ownership of the zval pointer is transferred to the Variant.
+             */
+        case Ctor::Move:
+        default:
+            memcpy(&val, v, sizeof(val));
+            break;
+        }
+    }
+    Variant(zend_array *arr, Ctor method = Ctor::Copy) noexcept {
+        ZVAL_ARR(&val, arr);
+        if (method == Ctor::Copy) {
+            addRef();
+        }
+    }
+    Variant(zend_string *s, Ctor method = Ctor::Copy) noexcept {
+        ZVAL_STR(&val, s);
+        if (method == Ctor::Copy) {
+            addRef();
+        }
+    }
+    Variant(zval *v, zend_long offset, Ctor method) noexcept {
+        assert(method == Ctor::Indirect);
+        assert(zval_is_string(v));
+        ZVAL_INDIRECT(&val, v);
+        Z_TYPE_EXTRA(val) |= IS_STR_OFFSET_SET;
+        Z_FE_POS(val) = static_cast<uint32_t>(offset);
+    }
+    Variant(const Variant &v) : Variant(v.unwrap_ptr()) {}
+    Variant(Variant &&v) noexcept {
+        if (v.isIndirect()) {
+            memcpy(&val, v.zv(), sizeof(zval));
+            addRef();
+        } else {
+            memcpy(&val, v.const_ptr(), sizeof(zval));
+        }
+        v.val = {};
+    }
+    Variant(Variant *v) : Variant() {
+        copyRef(v);
+    }
+    Variant(const Reference *ref);
+    Variant(Box *v) {
+        zend_resource *res = zend_register_resource(v, getBoxResourceId());
+        ZVAL_RES(&val, res);
+    }
+    /**
+     * !!! [UNSAFE]
+     * This constructor is unsafe and should be used with caution.
+     * The `res` Must be a new reference passed in from outside;
+     * it no longer requires adding application logic and is solely used for the newResource invocation.
+     */
+    Variant(zend_resource *res) {
+        ZVAL_RES(ptr(), res);
+    }
+    ~Variant();
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator=(T v) {
+        destroy();
+        ZVAL_LONG(unwrap_ptr(), static_cast<zend_long>(v));
+        return *this;
+    }
+    template <typename T, enable_if_floating_point<T> = 0>
+    Variant &operator=(T v) {
+        destroy();
+        ZVAL_DOUBLE(unwrap_ptr(), static_cast<double>(v));
+        return *this;
+    }
+    Variant &operator=(bool v) {
+        destroy();
+        ZVAL_BOOL(unwrap_ptr(), v);
+        return *this;
+    }
+    Variant &operator=(const std::string &str) {
+        if (UNEXPECTED(isByteOfStr())) {
+            setByteOfStr(str.at(0));
+        } else {
+            destroy();
+            ZVAL_STRINGL(unwrap_ptr(), str.c_str(), str.length());
+        }
+        return *this;
+    }
+    Variant &operator=(const char *str) {
+        if (UNEXPECTED(isByteOfStr())) {
+            setByteOfStr(str[0]);
+        } else {
+            destroy();
+            ZVAL_STRING(unwrap_ptr(), str);
+        }
+        return *this;
+    }
+    Variant &operator=(zend_string *v) {
+        destroy();
+        ZVAL_STR(unwrap_ptr(), zend_string_copy(v));
+        return *this;
+    }
+    void copyFrom(const zval *src);
+    /**
+     * Calling this method will change the type of src from value type to reference type. It also refers to the same
+     * block of zend_reference memory as the current Variant object. Any modifications to the value of zend_reference
+     * will affect all Variant objects.
+     */
+    void copyRef(Variant *v);
+    Variant &operator=(const zval *v);
+    Variant &operator=(const Variant &v);
+    Variant &operator=(Variant &&v);
+    Variant &operator=(Variant *v);
+    void rebindReference(const Variant &reference);
+    Variant &operator=(std::nullptr_t) {
+        destroy();
+        ZVAL_NULL(unwrap_ptr());
+        return *this;
+    }
+    void unset();
+    zval *ptr() noexcept {
+        return &val;
+    }
+    PHPX_UNSAFE zend_array *array() const noexcept {
+        return Z_ARRVAL_P(unwrap_ptr());
+    }
+    PHPX_UNSAFE zend_reference *reference() const noexcept {
+        return Z_REF(val);
+    }
+    PHPX_UNSAFE zval *refval() const noexcept {
+        return Z_REFVAL(val);
+    }
+    PHPX_UNSAFE zend_class_entry *ce() const noexcept {
+        return Z_OBJCE_P(unwrap_ptr());
+    }
+    PHPX_UNSAFE zend_object *object() const noexcept {
+        return Z_OBJ_P(unwrap_ptr());
+    }
+    zend_object *checkedObject(const char *operation) const {
+        if (UNEXPECTED(!isObject())) {
+            throwError("%s on %s", operation, typeStr());
+            return nullptr;
+        }
+        return object();
+    }
+    PHPX_UNSAFE zval *zv() const noexcept {
+        return Z_INDIRECT(val);
+    }
+    const zval *const_ptr() const noexcept {
+        return &val;
+    }
+    const zval *unwrap_ptr() const noexcept {
+        return unwrap_zval(&val);
+    }
+    const zval *direct_ptr() const noexcept {
+        return isIndirect() ? zv() : &val;
+    }
+    zval *unwrap_ptr() noexcept {
+        return unwrap_zval(&val);
+    }
+    zval *direct_ptr() noexcept {
+        return isIndirect() ? zv() : &val;
+    }
+    void debug();
+    void print() const;
+    int getRefCount() const;
+    int type() const noexcept {
+        return Z_TYPE_P(unwrap_ptr());
+    }
+    const char *typeStr() const {
+        return type() > 0 ? zend_get_type_by_const(type()) : "undef";
+    }
+    bool isString() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_STRING;
+    }
+    bool isArray() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_ARRAY;
+    }
+    bool isObject() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_OBJECT;
+    }
+    bool isInt() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_LONG;
+    }
+    bool isFloat() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_DOUBLE;
+    }
+    bool isBool() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_TRUE || Z_TYPE_P(unwrap_ptr()) == IS_FALSE;
+    }
+    bool isFalse() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_FALSE;
+    }
+    bool isTrue() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_TRUE;
+    }
+    bool isNull() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_NULL;
+    }
+    bool isUndef() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_UNDEF;
+    }
+    bool isResource() const {
+        return Z_TYPE_P(unwrap_ptr()) == IS_RESOURCE;
+    }
+    bool isBox() const {
+        if (UNEXPECTED(!isResource())) {
+            return false;
+        }
+        auto res = Z_RES_P(unwrap_ptr());
+        if (UNEXPECTED(res->type != getBoxResourceId())) {
+            return false;
+        }
+        return true;
+    }
+    bool isReference() const {
+        return Z_TYPE_P(direct_ptr()) == IS_REFERENCE;
+    }
+    bool isIndirect() const {
+        return Z_TYPE_P(const_ptr()) == IS_INDIRECT;
+    }
+    bool isScalar() const {
+        return isBool() || isInt() || isFloat() || isString();
+    }
+    bool isNumeric() const;
+    bool empty() const {
+        return toBool() == false;
+    }
+    std::string toStdString() const;
+    String toString() const;
+    const char *toCString() const {
+        if (!isString()) {
+            return "";
+        }
+        return Z_STRVAL_P(unwrap_ptr());
+    }
+    Int toInt() const {
+        return zval_get_long(const_cast<zval *>(unwrap_ptr()));
+    }
+    double toFloat() const {
+        return zval_get_double(const_cast<zval *>(unwrap_ptr()));
+    }
+    bool toBool() const {
+        return zval_is_true(const_cast<zval *>(unwrap_ptr()));
+    }
+    Array toArray() const;
+    Object toObject() const;
+    size_t length() const;
+    template <class T>
+    T *toResource(const char *name) {
+        if (!isResource()) {
+            throwError("This variant is not a resource type.");
+            return nullptr;
+        }
+        void *_ptr = nullptr;
+        Resource *_c = getResource(name);
+        if (_c == nullptr) {
+            return nullptr;
+        }
+        if ((_ptr = zend_fetch_resource(Z_RES_P(unwrap_ptr()), name, _c->type)) == nullptr) {
+            throwError("The `%s` type of resource is undefined.", name);
+            return nullptr;
+        }
+        return static_cast<T *>(_ptr);
+    }
+    template <class T>
+    T *toBox();
+    Reference toReference();
+    Variant getRefValue() const;
+    Variant operator*() const {
+        return getRefValue();
+    }
+
+    /**
+     * Transfers this value into unowned zval storage. The destination must not
+     * contain a live value. Indirect values are materialized so the destination
+     * never borrows an array element or object property address.
+     */
+    void moveTo(zval *dest);
+
+    void deref() {
+        php::deref(direct_ptr());
+    }
+
+    Variant offsetGet(zend_long offset) const;
+    Variant offsetGet(const Variant &key) const;
+    bool offsetExists(zend_long offset) const;
+    bool offsetExists(const Variant &key) const;
+    void offsetSet(zend_long offset, const Variant &value);
+    void offsetSet(const Variant &key, const Variant &value);
+    void offsetUnset(zend_long offset);
+    void offsetUnset(const Variant &key);
+
+    Variant getProperty(const Variant &name) const;
+    Variant getProperty(zend_string *prop_name) const;
+    void setProperty(const Variant &name, const Variant &value) const;
+    void setProperty(zend_string *prop_name, const Variant &value) const;
+    void unsetProperty(const Variant &name);
+    void unsetProperty(zend_string *prop_name);
+
+    /**
+     * These methods are unsafe. They only support arrays or objects, and will use the address of the zval in the
+     * These array elements or object properties to return an Indirect object. When assigning a value to this object, it
+     * will directly modify the values of the array elements or object properties. These methods are not safe; it is
+     * essential to ensure that the zval pointer already exists and has not been unset. Please note that after
+     * performing write operations on an array or object, the address of the zend_array or object property table may
+     * change, and the zval address pointed to by the Indirect object may become an invalid address.
+     */
+    Variant item(zend_long offset, bool update = false);
+    Variant item(const Variant &key, bool update = false);
+    Reference itemRef(zend_long offset);
+    Reference itemRef(const Variant &key);
+    Variant newItem();
+    Reference attrRef(const String &name);
+    Variant attr(const Variant &name, AttrMode mode = AttrMode::Get) const;
+    Variant attr(uintptr_t offset, AttrMode mode = AttrMode::Get) const {
+        auto member_p = OBJ_PROP(checkedObject("Attempt to read property"), offset);
+        return Variant{member_p, zval_wrap(member_p)};
+    }
+    /**
+     * call object methods
+     */
+    Variant call(const Variant &fn) {
+        if (UNEXPECTED(!isObject())) {
+            throwError("call method `%s` on %s", fn.toCString(), typeStr());
+            return {};
+        }
+        return call_impl(unwrap_ptr(), fn.unwrap_ptr());
+    }
+    Variant call(const Variant &fn, Args &args, zend_array *named_args = nullptr) {
+        if (UNEXPECTED(!isObject())) {
+            throwError("call method `%s` on %s", fn.toCString(), typeStr());
+            return {};
+        }
+        return call_impl(unwrap_ptr(), fn.unwrap_ptr(), args, named_args);
+    }
+    Variant call(const Variant &fn, Array &args, zend_array *named_args = nullptr);
+    Variant call(const Variant &fn, const ArgList &args, zend_array *named_args = nullptr);
+    Variant call(zend_function *fn);
+    Variant call(zend_function *fn, Args &args, zend_array *named_args = nullptr);
+    Variant call(zend_function *fn, Array &args, zend_array *named_args = nullptr);
+    Variant call(zend_function *fn, const ArgList &args, zend_array *named_args = nullptr);
+
+    bool operator==(const Variant &v) const {
+        return equals(v);
+    }
+    bool operator!=(const Variant &v) const {
+        return !equals(v);
+    }
+    bool operator<(const Variant &v) const;
+    bool operator>(const Variant &v) const;
+    bool operator<=(const Variant &v) const;
+    bool operator>=(const Variant &v) const;
+
+    bool equals(const Variant &v, bool strict = false) const;
+    bool almostEquals(const Variant &v, double eps = 1e-9) const {
+        return std::fabs(toFloat() - v.toFloat()) <= eps;
+    }
+
+    bool same(const Variant &v) const {
+        return equals(v, true);
+    }
+    Variant serialize();
+    Variant unserialize();
+    bool isCallable();
+
+    // Incrementing/Decrementing Operators
+    Variant &operator++();
+    Variant &operator--();
+    Variant operator++(int);
+    Variant operator--(int);
+    // Binary operators
+    Variant &operator+=(const Variant &);
+    Variant &operator-=(const Variant &);
+    Variant &operator/=(const Variant &);
+    Variant &operator*=(const Variant &);
+    Variant &operator%=(const Variant &);
+    Variant &operator<<=(const Variant &);
+    Variant &operator>>=(const Variant &);
+    Variant &operator&=(const Variant &);
+    Variant &operator|=(const Variant &);
+    Variant &operator^=(const Variant &);
+    Variant operator+(const Variant &) const;
+    Variant operator-(const Variant &) const;
+    Variant operator*(const Variant &) const;
+    Variant operator/(const Variant &) const;
+    Variant operator%(const Variant &) const;
+    Variant operator<<(const Variant &) const;
+    Variant operator>>(const Variant &) const;
+    Variant operator&(const Variant &) const;
+    Variant operator|(const Variant &) const;
+    Variant operator^(const Variant &) const;
+    // Unary operators
+    Variant operator~() const;
+    Variant operator-() const;
+    bool operator!() const noexcept {
+        return !toBool();
+    }
+    // Exponential expression
+    Variant pow(const Variant &) const;
+    // Concatenates two strings, return new string.
+    String concat(const Variant &) const;
+    // String: Adding a substring to the end of a string,
+    // Array: Appending elements to an array,
+    // Object: If there is an offsetSet method, it indicates that elements are being appended.
+    // Other type: throw exception
+    void append(const Variant &);
+
+    Variant operator()() const;
+    explicit operator bool() const noexcept {
+        return toBool();
+    }
+    Variant operator()(const std::initializer_list<Variant> &args) const;
+};
+
+template <typename T>
+Variant newResource(const char *name, T *v) {
+    const auto _c = getResource(name);
+    if (!_c) {
+        throwError("%s type of resource is undefined.", name);
+        return {};
+    }
+    zend_resource *res = zend_register_resource(static_cast<void *>(v), _c->type);
+    return {res};
+}
+
+#ifndef ZEND_HASH_ELEMENT
+#define ZEND_HASH_ELEMENT(ht, idx) &HT_HASH_TO_BUCKET(ht, idx)->val
+#endif
+
+class String : public Variant {
+    void checkString();
+    void copyFrom(Int v) {
+        ZVAL_STR(unwrap_ptr(), zend_long_to_str(v));
+    }
+    void copyFrom(Float v) {
+        ZVAL_STR(unwrap_ptr(), zend_strpprintf(0, "%.*G", (int) EG(precision), v));
+    }
+    void copyFrom(bool v) {
+        if (v) {
+            ZVAL_STR(unwrap_ptr(), zend_string_init("1", 1, false));
+        } else {
+            ZVAL_EMPTY_STRING(unwrap_ptr());
+        }
+    }
+
+  public:
+    String() {
+        ZVAL_EMPTY_STRING(&val);
+    }
+    String(const zval *v, Ctor method = Ctor::Copy) : Variant(v, method) {
+        checkString();
+    }
+    String(const Variant &v) : String(v.const_ptr()) {}
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    explicit String(T v) {
+        copyFrom(static_cast<Int>(v));
+    }
+    template <typename T, enable_if_floating_point<T> = 0>
+    explicit String(T v) {
+        copyFrom(static_cast<Float>(v));
+    }
+    explicit String(bool v) {
+        copyFrom(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator=(T v) {
+        destroy();
+        copyFrom(static_cast<Int>(v));
+        return *this;
+    }
+    template <typename T, enable_if_floating_point<T> = 0>
+    Variant &operator=(T v) {
+        destroy();
+        copyFrom(static_cast<Float>(v));
+        return *this;
+    }
+    Variant &operator=(bool v) {
+        destroy();
+        copyFrom(v);
+        return *this;
+    }
+    String(zend_string *v, Ctor method = Ctor::Copy) {
+        if (method == Ctor::Copy) {
+            ZVAL_STR(ptr(), zend_string_copy(v));
+        } else {
+            ZVAL_STR(ptr(), v);
+        }
+    }
+    String(const std::string &v) : Variant(v) {}
+    String(const char *v) : Variant(v) {}
+    String(const char *str, size_t len) : Variant(str, len) {}
+    String(const char *str, size_t len, bool persistent) : Variant(str, len, persistent) {}
+    bool isNumeric() const {
+        return is_numeric_string(data(), length(), nullptr, nullptr, false) != 0;
+    }
+    size_t length() const {
+        return Z_STRLEN_P(unwrap_ptr());
+    }
+    bool empty() const {
+        return length() == 0;
+    }
+    const char *data() const {
+        return Z_STRVAL_P(unwrap_ptr());
+    }
+    String offsetGet(Int _offset) const;
+    String offsetGet(const Variant &_offset) const {
+        return offsetGet(_offset.toInt());
+    }
+    void offsetSet(Int _offset, const Variant &value);
+    void offsetSet(const Variant &_offset, const Variant &value) {
+        offsetSet(_offset.toInt(), value);
+    }
+    Int hashCode() const {
+        return static_cast<Int>(zend_string_hash_val(str()));
+    }
+    Array match(const String &regx, Int flags = 0, Int start_offset = 0);
+    Array matchAll(const String &regx, Int flags = 0, Int start_offset = 0);
+    static Int normalizeOffset(Int _offset, size_t len) {
+        if (_offset < 0) {
+            // Avoid signed overflow for ZEND_LONG_MIN.
+            size_t distance = static_cast<size_t>(-(_offset + 1)) + 1;
+            if (UNEXPECTED(distance > len)) {
+                return -1;
+            }
+            return static_cast<Int>(len - distance);
+        } else {
+            if (UNEXPECTED(static_cast<size_t>(_offset) >= len)) {
+                return -1;
+            }
+        }
+        return _offset;
+    }
+    Int offset(Int _offset) const {
+        return normalizeOffset(_offset, length());
+    }
+    bool equals(const char *s, size_t slen) const {
+        return length() == slen && memcmp(data(), s, slen) == 0;
+    }
+    bool equals(const std::string &s) const {
+        return equals(s.c_str(), s.length());
+    }
+    bool equals(const char *s) const {
+        return equals(s, strlen(s));
+    }
+    bool equals(const String &s, bool ci = false) const;
+    bool equals(const Variant &v, bool ci = false) const {
+        return Variant::equals(v, ci);
+    }
+    bool operator==(const String &v) const {
+        return equals(v);
+    }
+    static String format(const char *format, ...);
+    String trim(const char *what = " \t\n\r\v\0", TrimMode mode = TRIM_BOTH) const;
+    String lower() const;
+    String upper() const;
+    String base64Encode() const;
+    String base64Decode() const;
+    String escape(const int flags = ENT_QUOTES | ENT_SUBSTITUTE, const char *charset = PHP_DEFAULT_CHARSET) const;
+    String unescape(const int flags = ENT_QUOTES | ENT_SUBSTITUTE, const char *charset = PHP_DEFAULT_CHARSET) const;
+    zend_string *str() const {
+        return Z_STR_P(unwrap_ptr());
+    }
+    Array split(const String &delim, zend_long limit = ZEND_LONG_MAX) const;
+    String substr(Int _offset, Int _length = -1) const;
+    String stripTags(const String &allow, bool allow_tag_spaces = false) const;
+    String addSlashes() const;
+    String stripSlashes() const;
+    String basename(const String &suffix) const;
+    String dirname() const;
+    void print() const;
+};
+
+inline bool StdStringLess::operator()(const String &a, const String &b) const {
+    return zend_binary_strcmp(a.data(), a.length(), b.data(), b.length()) < 0;
+}
+
+inline std::size_t StdStringHash::operator()(const String &key) const {
+    return zend_string_hash_val(key.str());
+}
+
+inline bool StdStringEqual::operator()(const String &a, const String &b) const {
+    return zend_string_equals(a.str(), b.str());
+}
+
+class ArrayKeyValue {
+  public:
+    Variant key;
+    Variant value;
+    ArrayKeyValue(Variant _key, Variant _value) : key(std::move(_key)), value(std::move(_value)) {}
+};
+
+/**
+ * A non-owning iterator over an Array HashTable.
+ *
+ * Like standard C++ container iterators, it must not outlive its Array and is
+ * invalidated by structural mutation. Use ForeachIterator when PHP foreach
+ * mutation and reference semantics are required.
+ */
+class ArrayIterator {
+    zend_array *array_;
+    zend_ulong idx_;
+
+  public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = ArrayKeyValue;
+    using difference_type = std::ptrdiff_t;
+    using reference = value_type;
+    using pointer = void;
+
+    ArrayIterator(zend_array *array, zend_ulong idx, bool skip_forward = true) {
+        array_ = array;
+        idx_ = idx;
+        if (skip_forward) {
+            skipUndefBucket();
+        } else {
+            skipUndefBucketBackwards();
+        }
+    }
+    ArrayIterator operator++(int) {
+        ArrayIterator tmp = *this;
+        next();
+        return tmp;
+    }
+    ArrayIterator &operator++() {
+        next();
+        return *this;
+    }
+    ArrayIterator operator--(int) {
+        ArrayIterator tmp = *this;
+        prev();
+        return tmp;
+    }
+    ArrayIterator &operator--() {
+        prev();
+        return *this;
+    }
+    value_type operator*() const {
+        return {key(), value()};
+    }
+    bool operator!=(const ArrayIterator &b) const {
+        return b.index() != index();
+    }
+    bool operator==(const ArrayIterator &b) const {
+        return b.index() == index();
+    }
+    Variant key() const;
+    Variant value() const {
+        return {current(), Ctor::CopyRef};
+    }
+    Reference valueRef();
+    zend_ulong index() const {
+        return idx_;
+    }
+    void next() {
+        ++idx_;
+        skipUndefBucket();
+    }
+    void prev() {
+        if (UNEXPECTED(!array_ || idx_ >= array_->nNumUsed)) {
+            return;
+        }
+        if (idx_ == 0) {
+            idx_ = array_->nNumUsed;
+            return;
+        }
+        --idx_;
+        skipUndefBucketBackwards();
+    }
+    zval *current() const {
+        if (UNEXPECTED(!array_ || idx_ >= array_->nNumUsed)) {
+            return nullptr;
+        } else {
+            return ZEND_HASH_ELEMENT(array_, idx_);
+        }
+    }
+
+  private:
+    void skipUndefBucket();
+
+  public:
+    void skipUndefBucketBackwards();
+};
+
+class ArrayItem : public Variant {
+  private:
+    Array &array_;
+    zend_ulong index_;
+    String key_;
+
+  public:
+    ArrayItem(Array &_array, zend_ulong _index, const String &_key);
+    ArrayItem &operator=(const Variant &v);
+};
+
+class Array : public Variant {
+    static void initArray(zval *array, size_t size = 0) {
+        if (size == 0) {
+            array_init(array);
+        } else {
+            array_init_size(array, (uint32_t) size);
+        }
+    }
+
+    void copyFrom(const ArrayList &list);
+    void copyFrom(const StrKeyMap &list);
+    void copyFrom(const StdStrKeyMap &list);
+    void copyFrom(const IntKeyMap &list);
+
+    template <typename T, std::size_t N>
+    void copyFrom(const StdArray<T, N> &arr) {
+        for (std::size_t i = 0; i < N; ++i) {
+            if constexpr (is_std_container<T>::value) {
+                set(i, Array(arr[i]));
+            } else {
+                set(i, Variant(arr[i]));
+            }
+        }
+    }
+
+    template <typename T>
+    void copyFrom(const StdVector<T> &arr) {
+        for (std::size_t i = 0; i < arr.size(); ++i) {
+            if constexpr (is_std_container<T>::value) {
+                set(i, Array(arr[i]));
+            } else {
+                set(i, Variant(arr[i]));
+            }
+        }
+    }
+
+    template <typename K, typename T>
+    void copyFrom(const StdOrderedMap<K, T> &map) {
+        for (const auto &item : map) {
+            if constexpr (is_std_container<T>::value) {
+                set(Variant(item.first), Array(item.second));
+            } else {
+                set(Variant(item.first), Variant(item.second));
+            }
+        }
+    }
+
+    template <typename K, typename T>
+    void copyFrom(const StdMap<K, T> &map) {
+        for (const auto &item : map) {
+            if constexpr (is_std_container<T>::value) {
+                set(Variant(item.first), Array(item.second));
+            } else {
+                set(Variant(item.first), Variant(item.second));
+            }
+        }
+    }
+
+    template <typename Tuple>
+    void copyFromTuple(Tuple &&values) {
+        std::apply([this](auto &&...value) { (append(Variant(std::forward<decltype(value)>(value))), ...); },
+                   std::forward<Tuple>(values));
+    }
+
+    void checkArray() {
+        if (isNull() || isUndef()) {
+            initArray(unwrap_ptr());
+        } else if (!isArray()) {
+            throwError("parameter 1 must be `array`, got `%s`", typeStr());
+        }
+    }
+
+    void rebuild(size_t size = 0) {
+        destroy();
+        initArray(unwrap_ptr(), size);
+    }
+
+  public:
+    Array() {
+        initArray(&val);
+    }
+    explicit Array(size_t N) {
+        initArray(&val, N);
+    }
+    Array(const zval *v, Ctor method = Ctor::Copy) : Variant(v, method) {
+        checkArray();
+    }
+    Array(const Variant &v) : Array(v.const_ptr()) {}
+    Array(const ArrayList &list);
+    Array(const StrKeyMap &list);
+    Array(const StdStrKeyMap &list);
+    Array(const IntKeyMap &list);
+    Array(Variant *v) : Variant(v) {}
+
+    template <typename T, std::size_t N>
+    Array(const StdArray<T, N> &arr) {
+        initArray(&val, N);
+        copyFrom(arr);
+    }
+
+    template <typename T>
+    Array(const StdVector<T> &arr) {
+        initArray(&val, arr.size());
+        copyFrom(arr);
+    }
+
+    template <typename K, typename T>
+    Array(const StdOrderedMap<K, T> &map) {
+        initArray(&val, map.size());
+        copyFrom(map);
+    }
+
+    template <typename K, typename T>
+    Array(const StdMap<K, T> &map) {
+        initArray(&val, map.size());
+        copyFrom(map);
+    }
+
+    template <typename... Ts>
+    Array(const std::tuple<Ts...> &values) {
+        initArray(&val, sizeof...(Ts));
+        copyFromTuple(values);
+    }
+
+    template <typename... Ts>
+    Array(std::tuple<Ts...> &&values) {
+        initArray(&val, sizeof...(Ts));
+        copyFromTuple(std::move(values));
+    }
+
+    Array &operator=(const ArrayList &list);
+    Array &operator=(const StrKeyMap &list);
+    Array &operator=(const StdStrKeyMap &list);
+    Array &operator=(const IntKeyMap &list);
+
+    template <typename T, std::size_t N>
+    Array &operator=(const StdArray<T, N> &arr) {
+        rebuild(N);
+        copyFrom(arr);
+        return *this;
+    }
+
+    template <typename T>
+    Array &operator=(const StdVector<T> &arr) {
+        rebuild(arr.size());
+        copyFrom(arr);
+        return *this;
+    }
+
+    template <typename K, typename T>
+    Array &operator=(const StdOrderedMap<K, T> &map) {
+        rebuild(map.size());
+        copyFrom(map);
+        return *this;
+    }
+
+    template <typename K, typename T>
+    Array &operator=(const StdMap<K, T> &map) {
+        rebuild(map.size());
+        copyFrom(map);
+        return *this;
+    }
+
+    template <typename... Ts>
+    Array &operator=(const std::tuple<Ts...> &values) {
+        rebuild();
+        copyFromTuple(values);
+        return *this;
+    }
+
+    template <typename... Ts>
+    Array &operator=(std::tuple<Ts...> &&values) {
+        rebuild();
+        copyFromTuple(std::move(values));
+        return *this;
+    }
+
+    void set(zend_ulong i, const Variant &v);
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    void set(T i, const Variant &v) {
+        set(static_cast<zend_ulong>(i), v);
+    }
+    void set(const Variant &key, const Variant &v);
+    void set(zend_string *str_key, const Variant &v);
+    void set(const String &key, const Variant &v) {
+        set(key.str(), v);
+    }
+    void set(const char *key, const Variant &v) {
+        set(String(key), v);
+    }
+    // PHP's ordinary array writes dereference the source zval. The lower-level
+    // set()/append() APIs deliberately preserve references for explicit =& use.
+    void setValue(const Variant &key, const Variant &v);
+    void appendValue(const Variant &v);
+    void appendValue(Variant &&v);
+    void append(const Variant &v);
+    void append(Variant &&v);
+    Variant get(const Variant &key) const;
+    Variant get(zend_string *str_key) const {
+        // PHP array access converts numeric string keys to integer keys.
+        // CopyRef materializes an owned read value and enables the generated
+        // assignment to transfer it without an indirect-wrapper slow path.
+        return {zend_symtable_find(array(), str_key), Ctor::CopyRef};
+    }
+    Variant get(const String &key) const {
+        return get(key.str());
+    }
+    Variant get(const char *key) const {
+        return get(String(key));
+    }
+    Variant get(zend_ulong i) const {
+        return {zend_hash_index_find(array(), i), Ctor::CopyRef};
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant get(T i) const {
+        return get(static_cast<zend_ulong>(i));
+    }
+    ArrayItem operator[](zend_ulong i) {
+        return {*this, i, String{}};
+    }
+    ArrayItem operator[](const String &key) {
+        return {*this, 0, key};
+    }
+    bool del(zend_ulong index);
+    bool del(const Variant &key);
+    void clean() {
+        auto zarr = unwrap_ptr();
+        SEPARATE_ARRAY(zarr);
+        zend_hash_clean(Z_ARRVAL_P(zarr));
+    }
+    bool exists(zend_ulong index) const {
+        return zend_hash_index_exists(array(), index);
+    }
+    bool exists(const String &key) const {
+        return zend_symtable_exists(array(), key.str());
+    }
+    ArrayIterator begin() const {
+        return {array(), 0};
+    }
+    ArrayIterator end() const {
+        const auto ht = array();
+        return {ht, ht->nNumUsed};
+    }
+    ArrayIterator rbegin() const {
+        const auto ht = array();
+        if (ht->nNumUsed == 0) {
+            return {ht, ht->nNumUsed};
+        }
+        return {ht, ht->nNumUsed - 1, false};
+    }
+    ArrayIterator rend() const {
+        const auto ht = array();
+        return {ht, ht->nNumUsed};
+    }
+    size_t count() const {
+        return zend_hash_num_elements(array());
+    }
+    bool empty() const {
+        return count() == 0;
+    }
+    bool isList() const {
+        return zend_array_is_list(array());
+    }
+    Variant search(const Variant &_other_var, bool strict = false) const;
+    bool contains(const Variant &_other_var, bool strict = false) const;
+    String join(const String &delim);
+    void merge(const Array &source);
+    void sort(bool renumber = true);
+    Array slice(Int offset, Int length = -1, bool preserve_keys = false);
+};
+
+class Args {
+    // Zend consumes arguments as a real contiguous zval array. Storing
+    // Variant wrappers and reinterpret_casting their addresses to zval* relies
+    // on non-portable object layout and makes pointer arithmetic formally UB.
+    std::vector<zval> params;
+
+    void release() noexcept {
+        for (auto &param : params) {
+            zval_ptr_dtor(&param);
+        }
+        params.clear();
+    }
+
+  public:
+    Args() = default;
+    explicit Args(size_t n) {
+        params.reserve(n);
+    }
+    Args(const Args &other) : Args(other.params.size()) {
+        try {
+            for (const auto &param : other.params) {
+                append(&param);
+            }
+        } catch (...) {
+            release();
+            throw;
+        }
+    }
+    Args(Args &&other) noexcept {
+        params.swap(other.params);
+    }
+    Args &operator=(const Args &other) {
+        if (this != &other) {
+            Args copy(other);
+            params.swap(copy.params);
+        }
+        return *this;
+    }
+    Args &operator=(Args &&other) noexcept {
+        if (this != &other) {
+            release();
+            params.swap(other.params);
+        }
+        return *this;
+    }
+    ~Args() noexcept {
+        release();
+    }
+    explicit Args(const ArgList &args) : Args(args.size()) {
+        for (const auto &arg : args) {
+            append(arg.const_ptr());
+        }
+    }
+    explicit Args(Array &args) : Args(args.count()) {
+        for (const auto &arg : args) {
+            append(arg.value.const_ptr());
+        }
+    }
+    void appendUnpacked(const Array &args) {
+        for (const auto &arg : args) {
+            append(arg.value.const_ptr());
+        }
+    }
+    void append(const zval *zv) {
+        ZVAL_DEINDIRECT(zv);
+        params.emplace_back();
+        ZVAL_COPY(&params.back(), zv);
+    }
+    void append(const Variant &v) {
+        append(v.const_ptr());
+    }
+    uint32_t count() const {
+        // Zend represents argument counts as uint32_t. A call with more than
+        // UINT32_MAX arguments is not practically constructible, so keep the
+        // append hot path branch-free and narrow only at this API boundary.
+        return static_cast<uint32_t>(params.size());
+    }
+    bool exists(const size_t i) const {
+        return i < count();
+    }
+    bool empty() const {
+        return params.empty();
+    }
+    zval *ptr() {
+        return params.data();
+    }
+    Variant get(size_t i) const;
+    void set(size_t i, const Variant &value) {
+        if (i < params.size()) {
+            zval *target = &params[i];
+            Variant slot(target, Z_ISREF_P(target) ? Ctor::CopyRef : Ctor::Indirect);
+            slot = value;
+        }
+    }
+    Array toArray() const;
+    Variant operator[](size_t i) const {
+        return get(i);
+    }
+};
+
+PHPX_API extern zend_function *getFunction(const String &name);
+PHPX_API extern zend_function *getMethod(const String &class_name, const String &name);
+PHPX_API extern zend_function *getMethod(zend_class_entry *ce, const String &name);
+
+static inline Variant call(const Variant &func) {
+    return call_impl(nullptr, func.const_ptr());
+}
+
+static inline zend_class_entry *getClassEntry(const String &name) {
+    return zend_lookup_class(name.str());
+}
+
+static inline zend_class_entry *getClassEntrySafe(const String &name) {
+    zend_class_entry *ce = getClassEntry(name);
+    if (UNEXPECTED(!ce)) {
+        throwError("class '%s' is undefined", name.data());
+    }
+    return ce;
+}
+
+class Object : public Variant {
+    void checkObject() const {
+        if (!isUndef() && !isNull() && !isObject()) {
+            throwError("parameter 1 must be `object`, got `%s`", typeStr());
+        }
+    }
+
+  public:
+    Object(const zval *v, Ctor method = Ctor::Copy) : Variant(v, method) {
+        checkObject();
+    }
+    Object(zend_object *o, Ctor method = Ctor::Copy) {
+        ZVAL_OBJ(&val, o);
+        if (method == Ctor::Copy) {
+            addRef();
+        }
+    }
+    Object(const Variant &v, Ctor method = Ctor::Copy) : Object(v.unwrap_ptr(), method) {}
+    Object() = default;
+    zend_class_entry *parent_ce() {
+        return checkedObject("Cannot access parent class")->ce->parent;
+    }
+    Variant callParentMethod(const String &func) {
+        return callParentMethod(func, {});
+    }
+    Variant callParentMethod(const String &func, const ArgList &args);
+
+    bool offsetExists(const Variant &offset, int check_empty = 0) const;
+    bool offsetExists(zend_long offset, int check_empty = 0);
+    Variant offsetGet(const Variant &offset, int type = BP_VAR_R);
+    Variant offsetGet(zend_long offset, int type = BP_VAR_R);
+    void offsetSet(const Variant &offset, const Variant &value);
+    void offsetSet(zend_long offset, const Variant &value);
+    void offsetUnset(const Variant &offset);
+    void offsetUnset(zend_long offset);
+    Variant get(const String &name) const;
+    void set(const String &name, const Variant &v) const {
+        setProperty(name.str(), v);
+    }
+
+    template <class T>
+    T *oGet(const String &name, const char *resource_name) {
+        auto prop = get(name);
+        return prop.toResource<T>(resource_name);
+    }
+
+    template <class T>
+    void oSet(const String &name, const char *resource_name, T *ptr) {
+        set(name, newResource<T>(resource_name, ptr));
+    }
+
+    Array getProperties() const {
+        auto ht = zend_std_get_properties(checkedObject("Cannot get properties"));
+        if (UNEXPECTED(!ht)) {
+            return Array{};
+        }
+        return Array(ht);
+    }
+
+    String getClassName() const {
+        return checkedObject("Cannot get class name")->ce->name;
+    }
+    uint32_t getId() const {
+        return checkedObject("Cannot get object id")->handle;
+    }
+    String hash() const;
+    zend_long count();
+    bool methodExists(const String &name) const {
+        auto lcname = name.lower();
+        return zend_hash_exists(&checkedObject("Cannot inspect object methods")->ce->function_table, lcname.str());
+    }
+    bool propertyExists(const String &name, PropertyOperation op = PROP_EXISTS) const;
+    bool instanceOf(const String &name) const;
+    bool instanceOf(const zend_class_entry *ce_) const {
+        return instanceof_function(checkedObject("Cannot inspect object class")->ce, ce_);
+    }
+    Object clone() const;
+};
+
+class Reference : public Variant {
+    void copyRef(const zval *zv);
+
+    void checkRef() {
+        if (zval_is_null(&val) || zval_is_undef(&val)) {
+            ref_init(&val);
+        } else if (!isReference()) {
+            throwError("parameter 1 must be `reference`, got `%s`", typeStr());
+        }
+    }
+
+    static void ref_init(zval *arg) {
+        ZVAL_NEW_EMPTY_REF(arg);
+        ZVAL_NULL(Z_REFVAL_P(arg));
+    }
+
+  public:
+    Reference() noexcept {
+        ref_init(&val);
+    }
+    Reference(std::nullptr_t) noexcept {
+        ref_init(&val);
+    }
+    Reference(const Reference &v) noexcept {
+        zval_copy(&val, v.const_ptr());
+    }
+    Reference(Reference &&v) noexcept = default;
+    Reference(const zval *v, Ctor method = Ctor::CopyRef) : Variant(v, method) {
+        checkRef();
+    }
+    Reference &operator=(const Reference &v);
+    Reference &operator=(Reference &&v);
+    Reference &operator=(Reference *);
+    Reference &operator=(const Variant &v);
+};
+
+/**
+ * Consume an owned PHP value at a proven last-use site.
+ *
+ * Unlike Variant's move constructor, this helper preserves PHP value
+ * semantics for references and indirect zvals by routing through the safe
+ * move-assignment operator. It is intentionally unavailable for Reference:
+ * callers forwarding a PHP by-reference parameter must preserve its wrapper.
+ */
+template <typename T,
+          std::enable_if_t<std::is_same_v<T, Variant> || std::is_same_v<T, String> || std::is_same_v<T, Array> ||
+                               std::is_same_v<T, Object>,
+                           int> = 0>
+static inline T takeValue(T &source) {
+    T result;
+    static_cast<Variant &>(result) = std::move(static_cast<Variant &>(source));
+    return result;
+}
+
+/**
+ * A single-pass cursor over PHP arrays and objects.
+ *
+ * Traversable objects use their Zend iterator implementation. Plain objects
+ * traverse their live property table with visibility evaluated in `scope`.
+ * Calling next() advances the cursor; keys are resolved lazily by key().
+ */
+class ForeachIterator {
+    enum class Mode : uint8_t {
+        None,
+        ArraySnapshot,
+        HashTable,
+        ObjectIterator,
+    };
+
+    Variant iterable_;
+    Variant array_;
+    Variant key_;
+    zend_object_iterator *object_iterator_ = nullptr;
+    HashTable *hash_table_ = nullptr;
+    zend_class_entry *scope_ = nullptr;
+    zval *value_ = nullptr;
+    uint32_t hash_iterator_ = UINT32_MAX;
+    zend_ulong position_ = 0;
+    zend_ulong current_position_ = 0;
+    Mode mode_ = Mode::None;
+    bool started_ = false;
+    bool by_ref_ = false;
+    bool key_ready_ = false;
+    bool plain_object_ = false;
+    bool declared_property_ = false;
+
+    bool nextArraySnapshot();
+    bool nextHashTable();
+    bool nextObject();
+    bool isPropertyVisible(const Bucket *bucket, const zval *value) const;
+    Variant getHashKey() const;
+
+  public:
+    explicit ForeachIterator(const Variant &iterable, bool by_ref = false, zend_class_entry *scope = nullptr);
+    ~ForeachIterator();
+
+    ForeachIterator(const ForeachIterator &) = delete;
+    ForeachIterator &operator=(const ForeachIterator &) = delete;
+    ForeachIterator(ForeachIterator &&) = delete;
+    ForeachIterator &operator=(ForeachIterator &&) = delete;
+
+    bool next();
+    Variant key();
+    Variant value() const;
+    Reference valueRef();
+    void assignValueRef(Variant &target);
+};
+
+class Box {
+  public:
+    Box() = default;
+    void destroy() const {
+        delete this;
+    }
+    uint32_t getTypeInfo() {
+        return type_info;
+    }
+    uint32_t getExtraInfo() {
+        return extra_info;
+    }
+
+  protected:
+    // Keep metadata as one 8-byte block. extra_info is an ABI/layout reserve
+    // for future Box metadata even when a concrete Box only uses type_info.
+    uint32_t type_info = 0;
+    uint32_t extra_info = 0;
+    virtual ~Box() = default;
+};
+
+template <class T>
+T *Variant::toBox() {
+    static_assert(std::is_base_of_v<Box, T>, "T must derive from php::Box");
+    if (UNEXPECTED(!isResource())) {
+        throwError("This variant is not a resource type.");
+        return nullptr;
+    }
+    auto res = Z_RES_P(unwrap_ptr());
+    if (UNEXPECTED(res->type != getBoxResourceId())) {
+        throwError("This resource is not type of `%s`.", box_res_name);
+        return nullptr;
+    }
+    auto *typed_box = dynamic_cast<T *>(static_cast<Box *>(res->ptr));
+    if (UNEXPECTED(typed_box == nullptr)) {
+        throwError("This box resource has an unexpected concrete type.");
+        return nullptr;
+    }
+    return typed_box;
+}
+
+template <typename ContainerType>
+class StdContainerBox : public Box {
+  public:
+    ContainerType container;
+
+    StdContainerBox() = default;
+    explicit StdContainerBox(uint32_t type_id) : container{} {
+        type_info = type_id;
+    }
+    template <typename... Args>
+    StdContainerBox(uint32_t type_id, Args &&...args) : container(std::forward<Args>(args)...) {
+        type_info = type_id;
+    }
+};
+
+static inline Reference newReference() {
+    return Reference{};
+}
+
+static inline Reference newReference(const Variant &v) {
+    Reference ref;
+    zval_copy(ref.refval(), v.const_ptr());
+    return ref;
+}
+
+static inline Reference getEmptyArrayRef() {
+    Reference ref;
+    array_init(ref.refval());
+    return ref;
+}
+
+template <typename T, std::size_t N>
+static inline Array toArray(const StdArray<T, N> &arr) {
+    Array result(arr);
+    return result;
+}
+
+template <typename T>
+static inline Array toArray(const StdVector<T> &arr) {
+    Array result(arr);
+    return result;
+}
+
+template <typename K, typename T>
+static inline Array toArray(const StdOrderedMap<K, T> &map) {
+    Array result(map);
+    return result;
+}
+
+template <typename K, typename T>
+static inline Array toArray(const StdMap<K, T> &map) {
+    Array result(map);
+    return result;
+}
+
+static inline Object toObject(const Variant &v, zend_class_entry *ce) {
+    if (UNEXPECTED(!v.isObject())) {
+        throwExceptionEx(zend_ce_type_error, 0, "The parameter `object` must be `object`, got `%s`", v.typeStr());
+        return {};
+    }
+    if (UNEXPECTED(!instanceof_function(v.ce(), ce))) {
+        throwExceptionEx(zend_ce_type_error,
+                         0,
+                         "The parameter `object` must be instance of class `%s`, object of `%s` given",
+                         ZSTR_VAL(ce->name),
+                         ZSTR_VAL(v.ce()->name));
+        return {};
+    }
+    return Object{v.unwrap_ptr()};
+}
+
+extern PHPX_API Variant null;
+extern PHPX_API Object null_object;
+extern PHPX_API Int zero;
+extern PHPX_API Variant true_;
+extern PHPX_API Variant false_;
+
+extern Object newClosure(const ClosureFn &fn,
+                         const ArgList &uses = {},
+                         const Object &_this = {},
+                         zend_class_entry *scope = nullptr,
+                         std::initializer_list<const char *> parameter_names = {});
+extern PHPX_API Variant prepareScopedCallback(const Variant &callable, const CallableScope &scope);
+extern PHPX_API Object makeScopedCallable(const Variant &callable, const CallableScope &scope);
+extern PHPX_API Variant normalizeCallableClass(const Variant &callable, const CallableScope &scope);
+extern PHPX_API void normalizeCallableClass(Args &args, size_t index, const CallableScope &scope);
+
+extern Object newObject(zend_class_entry *ce);
+extern Object newObject(zend_class_entry *ce, Args &args, zend_array *named_args = nullptr);
+extern Object newObject(zend_class_entry *ce, const ArgList &args, zend_array *named_args = nullptr);
+extern Object newObject(zend_class_entry *ce, Array &args, zend_array *named_args = nullptr);
+
+static inline Object newObject(const String &name) {
+    return newObject(getClassEntrySafe(name));
+}
+
+static inline Object newObject(const String &name, const ArgList &args, zend_array *named_args = nullptr) {
+    return newObject(getClassEntrySafe(name), args, named_args);
+}
+
+static inline Object newObject(const String &name, Args &args, zend_array *named_args = nullptr) {
+    return newObject(getClassEntrySafe(name), args, named_args);
+}
+
+static inline Object newObject(const String &name, Array &args, zend_array *named_args = nullptr) {
+    return newObject(getClassEntrySafe(name), args, named_args);
+}
+
+static inline Object newObject(const Variant &name, Args &args, zend_array *named_args = nullptr) {
+    return newObject(name.toString(), args, named_args);
+}
+
+static inline Object getEnumCase(zend_class_entry *ce, const String &name) {
+    return {zend_enum_get_case(ce, name.str())};
+}
+
+static inline String getEnumCaseName(Object &obj) {
+    return {zend_enum_fetch_case_name(obj.object()), Ctor::Indirect};
+}
+}  // namespace php

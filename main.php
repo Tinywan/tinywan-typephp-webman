@@ -8,11 +8,6 @@ function main(): void
         define('BASE_PATH', getcwd());
     }
 
-    $autoload = getcwd() . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
-    if (file_exists($autoload)) {
-        require_once $autoload;
-    }
-
     ini_set('display_errors', 'on');
     error_reporting(E_ALL);
 
@@ -36,8 +31,8 @@ function main(): void
         \Workerman\Coroutine\Context\Fiber::initContext();
     }
 
-    // 1. 加载配置
-    App::loadAllConfig(['route', 'container']);
+    // 1. 加载配置（排除 route 延迟加载，加载 container）
+    \support\App::loadAllConfig(['route']);
 
     $errorReporting = config('app.error_reporting');
     if (isset($errorReporting)) {
@@ -56,11 +51,16 @@ function main(): void
 
     // 3. 配置 Workerman 服务属性
     $serverConfig = config('server', []);
-    Worker::$pidFile = $serverConfig['pid_file'] ?? (runtime_path() . '/webman.pid');
-    Worker::$stdoutFile = $serverConfig['stdout_file'] ?? (runtime_path() . '/logs/stdout.log');
-    Worker::$logFile = $serverConfig['log_file'] ?? (runtime_path() . '/logs/workerman.log');
+    \Workerman\Worker::$pidFile = $serverConfig['pid_file'] ?? (runtime_path() . '/webman.pid');
+    \Workerman\Worker::$stdoutFile = $serverConfig['stdout_file'] ?? (runtime_path() . '/logs/stdout.log');
+    \Workerman\Worker::$logFile = $serverConfig['log_file'] ?? (runtime_path() . '/logs/workerman.log');
 
-    // 4. 启动 Webman HTTP 进程
+    // 4. 加载中间件与路由表
+    \Webman\Middleware::load(config('middleware', []));
+    \Webman\Middleware::load(['__static__' => config('static.middleware', [])]);
+    \Webman\Route::load([config_path()]);
+
+    // 5. 启动 Webman HTTP 进程
     $process = config('process', []);
     if (isset($process['webman'])) {
         worker_start('webman', $process['webman']);
@@ -71,5 +71,5 @@ function main(): void
     }
 
     // 5. 进入事件循环监听
-    Worker::runAll();
+    \Workerman\Worker::runAll();
 }

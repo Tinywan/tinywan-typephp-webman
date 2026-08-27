@@ -31,7 +31,7 @@ class Context implements ContextInterface
     /**
      * @var class-string<ContextInterface>
      */
-    protected static string $driver;
+    protected static string $driver = Context\Fiber::class;
 
     /**
      * @inheritDoc

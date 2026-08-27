@@ -1,5 +1,17 @@
 <?php
 
+use Webman\App;
+use Webman\Config;
+use Webman\Route;
+use support\Container;
+use support\Request;
+use support\Response;
+use support\view\Raw;
+use support\view\Blade;
+use support\view\ThinkPHP;
+use support\view\Twig;
+use Workerman\Worker;
+
 
 
     /**
@@ -255,7 +267,7 @@
      */
     function request()
     {
-        return App::request();
+        return \Webman\App::request();
     }
 
 
@@ -267,7 +279,7 @@
      */
     function config(?string $key = null, mixed $default = null)
     {
-        return Config::get($key, $default);
+        return \Webman\Config::get($key, $default);
     }
 
 
@@ -456,7 +468,7 @@
             return;
         }
         // feat：custom worker class [default: Workerman\Worker]
-        $class = is_a($class = $config['workerClass'] ?? '', Worker::class, true) ? $class : Worker::class;
+        $class = is_a($class = $config['workerClass'] ?? '', \Workerman\Worker::class, true) ? $class : \Workerman\Worker::class;
         $worker = new $class($config['listen'] ?? null, $config['context'] ?? []);
         $properties = [
             'count',
@@ -476,14 +488,17 @@
         }
 
         $worker->onWorkerStart = function ($worker) use ($config) {
-            require_once base_path('/support/bootstrap.php');
+            $bootstrap = base_path('/support/bootstrap.php');
+            if (is_file($bootstrap)) {
+                require_once $bootstrap;
+            }
             if (isset($config['handler'])) {
                 if (!class_exists($config['handler'])) {
                     echo "process error: class {$config['handler']} not exists\r\n";
                     return;
                 }
 
-                $instance = Container::make($config['handler'], $config['constructor'] ?? []);
+                $instance = \support\Container::make($config['handler'], $config['constructor'] ?? []);
                 worker_bind($worker, $instance);
             }
         };

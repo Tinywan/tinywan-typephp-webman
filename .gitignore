@@ -6,3 +6,10 @@
 .env
 /tests/tmp
 /tests/.phpunit.result.cache
+/dist
+/build/*.exe
+/build/*.lib
+/build/*.exp
+dist.zip
+*.zip~
+

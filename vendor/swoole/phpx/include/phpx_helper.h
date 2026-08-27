@@ -1,0 +1,510 @@
+/*
+  +----------------------------------------------------------------------+
+  | PHP-X                                                                |
+  +----------------------------------------------------------------------+
+  | This source file is subject to version 2.0 of the Apache license,    |
+  | that is bundled with this package in the file LICENSE, and is        |
+  | available through the world-wide-web at the following url:           |
+  | http://www.apache.org/licenses/LICENSE-2.0.html                      |
+  | If you did not receive a copy of the Apache2.0 license and are unable|
+  | to obtain it through the world-wide-web, please send a note to       |
+  | license@swoole.com so we can mail you a copy immediately.            |
+  +----------------------------------------------------------------------+
+  | Author: Tianfeng Han  <rango@swoole.com>                             |
+  +----------------------------------------------------------------------+
+*/
+
+#pragma once
+
+#include "phpx.h"
+#include "phpx_fake_scope_guard.h"
+#include "phpx_scope_guard.h"
+#include "phpx_operator.h"
+
+extern "C" {
+#include <main/php_streams.h>
+}
+
+#include <array>
+#include <type_traits>
+
+namespace php {
+
+/**
+ * Slow paths for declared parameter and return-type boundary failures.
+ *
+ * Keep message construction outside generated wrappers so the common path
+ * contains only the inlined zval type test and an unlikely branch.
+ */
+PHPX_API ZEND_COLD zend_never_inline void throwArgumentTypeError(const Variant &value,
+                                                                 const String &callable_name,
+                                                                 zend_long argument_number,
+                                                                 const String &parameter_name,
+                                                                 const String &expected_type);
+PHPX_API ZEND_COLD zend_never_inline void throwReturnTypeError(const Variant &value,
+                                                               const String &callable_name,
+                                                               const String &expected_type,
+                                                               bool use_returned_word);
+
+static inline bool same(Int a, Int b) {
+    return a == b;
+}
+
+static inline bool same(Float a, Float b) {
+    return a == b;
+}
+
+static inline bool same(Bool a, Bool b) {
+    return a == b;
+}
+
+static inline bool same(Float a, Int b) {
+    return same(a, static_cast<Float>(b));
+}
+
+static inline bool same(Int a, Float b) {
+    return same(static_cast<Float>(a), b);
+}
+
+static inline bool equals(Int a, Int b) {
+    return a == b;
+}
+
+static inline bool equals(Float a, Float b) {
+    return a == b;
+}
+
+static inline bool equals(Float a, Int b) {
+    return equals(a, static_cast<Float>(b));
+}
+
+static inline bool equals(Int a, Float b) {
+    return equals(static_cast<Float>(a), b);
+}
+
+static inline bool equals(Bool a, Bool b) {
+    return a == b;
+}
+
+static inline Int toInt(Int v) {
+    return v;
+}
+
+static inline Int toInt(Float v) {
+    // A direct C++ floating-to-integer conversion is undefined when the value
+    // is NaN, infinite, or outside the signed range. Zend implements PHP's
+    // defined modulo conversion for those cases without invoking C++ UB.
+    return zend_dval_to_lval(v);
+}
+
+static inline Int toInt(Bool v) {
+    return static_cast<Int>(v);
+}
+
+static inline Int toInt(const char *v) {
+    return Variant(v).toInt();
+}
+
+static inline Int toInt(const std::string &v) {
+    return Variant(v).toInt();
+}
+
+static inline Int toInt(const Variant &v) {
+    return v.toInt();
+}
+
+static inline Int toInt(zval *zv) {
+    return zval_get_long(zv);
+}
+
+static inline Float toFloat(Int v) {
+    return static_cast<Float>(v);
+}
+
+static inline Float toFloat(Float v) {
+    return v;
+}
+
+static inline Float toFloat(Bool v) {
+    return static_cast<Float>(v);
+}
+
+static inline Float toFloat(const char *v) {
+    return Variant(v).toFloat();
+}
+
+static inline Float toFloat(const std::string &v) {
+    return Variant(v).toFloat();
+}
+
+static inline Float toFloat(const Variant &v) {
+    return v.toFloat();
+}
+
+static inline Float toFloat(zval *zv) {
+    return zval_get_double(zv);
+}
+
+static inline bool toBool(bool v) {
+    return v;
+}
+
+template <typename T, enable_if_integral_non_bool<T> = 0>
+static inline bool toBool(T v) {
+    return v != 0;
+}
+
+template <typename T, enable_if_floating_point<T> = 0>
+static inline bool toBool(T v) {
+    return v != 0.0;
+}
+
+static inline bool toBool(const Variant &v) {
+    return v.toBool();
+}
+
+static inline bool toBool(zval *zv) {
+    return zend_is_true(zv);
+}
+
+static inline String toString(const Variant &v) {
+    return v.toString();
+}
+
+static inline Variant toStream(const Variant &v) {
+    php_stream *stream = nullptr;
+    if (EXPECTED(v.isResource())) {
+        php_stream_from_zval_no_verify(stream, NO_CONST_V(v));
+    }
+    if (UNEXPECTED(stream == nullptr)) {
+        php::throwException(zend_ce_type_error, "Invalid stream resource");
+        return php::null;
+    }
+    return v;
+}
+
+static inline void throwExactTypeError(const Variant &v, const char *expected, const char *property = nullptr) {
+    if (property) {
+        throwExceptionEx(
+            zend_ce_type_error, 0, "Cannot assign %s to property %s of type %s", v.typeStr(), property, expected);
+    } else {
+        throwExceptionEx(zend_ce_type_error, 0, "Expected value of type %s, %s given", expected, v.typeStr());
+    }
+}
+
+static inline Int toIntExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_LONG)) {
+        throwExactTypeError(v, "int", property);
+        return 0;
+    }
+    return Z_LVAL_P(zv);
+}
+
+static inline Float toFloatExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (Z_TYPE_P(zv) == IS_DOUBLE) {
+        return Z_DVAL_P(zv);
+    }
+    if (Z_TYPE_P(zv) == IS_LONG) {
+        return static_cast<Float>(Z_LVAL_P(zv));
+    }
+    throwExactTypeError(v, "float", property);
+    return 0;
+}
+
+static inline Bool toBoolExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_TRUE && Z_TYPE_P(zv) != IS_FALSE)) {
+        throwExactTypeError(v, "bool", property);
+        return false;
+    }
+    return Z_TYPE_P(zv) == IS_TRUE;
+}
+
+static inline String toStringExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_STRING)) {
+        throwExactTypeError(v, "string", property);
+        return {};
+    }
+    return String(Z_STR_P(zv));
+}
+
+/**
+ * Strict scalar conversions at a native call boundary.
+ *
+ * These helpers keep the zval type check and successful conversion inline,
+ * while delegating the unlikely error path to throwArgumentTypeError().
+ * The argument expression is evaluated once before entering the helper.
+ */
+static inline Int toIntArgExact(const Variant &v,
+                                const String &callable_name,
+                                zend_long argument_number,
+                                const String &parameter_name) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_LONG)) {
+        throwArgumentTypeError(v, callable_name, argument_number, parameter_name, String("int"));
+        return 0;
+    }
+    return Z_LVAL_P(zv);
+}
+
+static inline Float toFloatArgExact(const Variant &v,
+                                    const String &callable_name,
+                                    zend_long argument_number,
+                                    const String &parameter_name) {
+    const zval *zv = v.unwrap_ptr();
+    if (Z_TYPE_P(zv) == IS_DOUBLE) {
+        return Z_DVAL_P(zv);
+    }
+    if (Z_TYPE_P(zv) == IS_LONG) {
+        return static_cast<Float>(Z_LVAL_P(zv));
+    }
+    throwArgumentTypeError(v, callable_name, argument_number, parameter_name, String("float"));
+    return 0;
+}
+
+static inline Bool toBoolArgExact(const Variant &v,
+                                  const String &callable_name,
+                                  zend_long argument_number,
+                                  const String &parameter_name) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_TRUE && Z_TYPE_P(zv) != IS_FALSE)) {
+        throwArgumentTypeError(v, callable_name, argument_number, parameter_name, String("bool"));
+        return false;
+    }
+    return Z_TYPE_P(zv) == IS_TRUE;
+}
+
+static inline String toStringArgExact(const Variant &v,
+                                      const String &callable_name,
+                                      zend_long argument_number,
+                                      const String &parameter_name) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_STRING)) {
+        throwArgumentTypeError(v, callable_name, argument_number, parameter_name, String("string"));
+        return {};
+    }
+    return String(Z_STR_P(zv));
+}
+
+static inline Array toArrayExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_ARRAY)) {
+        throwExactTypeError(v, "array", property);
+        return {};
+    }
+    return Array(v);
+}
+
+static inline Object toObjectExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_OBJECT)) {
+        throwExactTypeError(v, "object", property);
+        return {};
+    }
+    return Object(v);
+}
+
+static inline Object toObjectExact(const Variant &v, zend_class_entry *expected_ce, const char *property = nullptr) {
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_OBJECT || !instanceof_function(Z_OBJCE_P(zv), expected_ce))) {
+        throwExactTypeError(v, ZSTR_VAL(expected_ce->name), property);
+        return {};
+    }
+    return Object(v);
+}
+
+static inline Variant toStreamExact(const Variant &v, const char *property = nullptr) {
+    php_stream *stream = nullptr;
+    if (EXPECTED(v.isResource())) {
+        php_stream_from_zval_no_verify(stream, NO_CONST_V(v));
+    }
+    if (UNEXPECTED(stream == nullptr)) {
+        throwExactTypeError(v, "stream", property);
+        return php::null;
+    }
+    return v;
+}
+
+template <typename T>
+static inline Variant toBoxExact(const Variant &v, const char *property = nullptr, const char *expected = "Box") {
+    static_assert(std::is_base_of_v<Box, T>, "T must derive from php::Box");
+    const zval *zv = v.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_RESOURCE)) {
+        throwExactTypeError(v, expected, property);
+        return php::null;
+    }
+    zend_resource *resource = Z_RES_P(zv);
+    if (UNEXPECTED(resource->type != getBoxResourceId() ||
+                   dynamic_cast<T *>(static_cast<Box *>(resource->ptr)) == nullptr)) {
+        throwExactTypeError(v, expected, property);
+        return php::null;
+    }
+    return v;
+}
+
+static inline Reference toReferenceExact(const Variant &v, const char *property = nullptr) {
+    const zval *zv = v.direct_ptr();
+    if (UNEXPECTED(Z_TYPE_P(zv) != IS_REFERENCE)) {
+        throwExactTypeError(v, "reference", property);
+        return {};
+    }
+    return {zv, Ctor::CopyRef};
+}
+
+static inline Int print(const Variant &v) {
+    echo(v);
+    return 1;
+}
+
+static inline void echo(int val) {
+    echo((Int) val);
+}
+
+static inline Int len(const Variant &v) {
+    return v.length();
+}
+
+static inline Bool empty(Int v) {
+    return v == 0;
+}
+
+static inline Bool empty(Float v) {
+    return v == 0;
+}
+
+static inline Bool empty(Bool v) {
+    return !v;
+}
+
+static inline Bool empty(const Variant &v) {
+    return !v.toBool();
+}
+
+static inline bool exists(Int v) {
+    return true;
+}
+
+static inline bool exists(Float v) {
+    return true;
+}
+
+static inline bool exists(Bool v) {
+    return true;
+}
+
+template <typename T>
+static inline bool notEmpty(T v) {
+    return !empty(v);
+}
+
+static inline bool notEmpty(const Variant &v, const OperationChain &list) {
+    return !empty(v, list);
+}
+
+static inline bool notEmpty(const Variant &v, const OperationChain &list, Variant &result) {
+    return !empty(v, list, result);
+}
+
+static inline Bool exists(const Variant &v) {
+    return !(v.isNull() || v.isUndef());
+}
+
+static inline void move(Int v, zval *retval) {
+    ZVAL_LONG(retval, v);
+}
+
+static inline void move(Float v, zval *retval) {
+    ZVAL_DOUBLE(retval, v);
+}
+
+static inline void move(Bool v, zval *retval) {
+    ZVAL_BOOL(retval, v);
+}
+
+static inline void move(Variant &v, zval *retval) {
+    v.moveTo(retval);
+}
+
+static inline bool instanceOf(const Variant &v, const String &cls) {
+    if (!v.isObject()) {
+        return false;
+    }
+    Object tmp(v);
+    return tmp.instanceOf(cls);
+}
+
+static inline bool instanceOf(const Variant &v, zend_class_entry *ce) {
+    if (!v.isObject()) {
+        return false;
+    }
+    Object tmp(v);
+    return tmp.instanceOf(ce);
+}
+
+static inline Object clone(const Variant &v) {
+    if (!v.isObject()) {
+        throwError("Attempt to clone on %s", v.typeStr());
+        return {};
+    }
+    Object tmp(v);
+    return tmp.clone();
+}
+
+static inline bool instanceOf(const Object &v, const String &cls) {
+    return v.instanceOf(cls);
+}
+
+static inline Variant getCallArg(uint32_t i) {
+    return {ZEND_CALL_ARG(EG(current_execute_data), i + 1), Ctor::CopyRef};
+}
+
+static inline Reference getCallArgByRef(uint32_t i) {
+    return {ZEND_CALL_ARG(EG(current_execute_data), i + 1), Ctor::CopyRef};
+}
+
+static inline uint32_t getCallArgNum() {
+    return ZEND_CALL_NUM_ARGS(EG(current_execute_data));
+}
+
+/**
+ * Validate arguments at a generated Zend-to-C++ wrapper boundary.
+ *
+ * The declared count excludes the open-ended part of a variadic signature.
+ * Zend owns the ArgumentCountError wording; throwErrorIfOccurred() then brings
+ * the exception into the native C++ frame so its RAII objects unwind safely.
+ */
+static inline void checkCallArgCount(uint32_t required, uint32_t declared, bool variadic) {
+    const uint32_t given = getCallArgNum();
+    if (UNEXPECTED(given < required || (!variadic && given > declared))) {
+        zend_wrong_parameters_count_error(required, variadic ? UINT32_MAX : declared);
+        throwErrorIfOccurred();
+    }
+}
+
+static inline zend_array *getCallExtraNamedArgs() {
+    auto execute_data = EG(current_execute_data);
+    if (UNEXPECTED(ZEND_CALL_INFO(execute_data) & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) {
+        return execute_data->extra_named_params;
+    }
+    return nullptr;
+}
+
+static inline Variant getCallArg(uint32_t i, const Variant &defaultValue) {
+    if (i >= getCallArgNum()) {
+        return defaultValue;
+    } else {
+        return getCallArg(i);
+    }
+}
+
+static inline Reference getCallArgByRef(uint32_t i, const Reference &defaultValue) {
+    if (i >= getCallArgNum()) {
+        return defaultValue;
+    } else {
+        return getCallArgByRef(i);
+    }
+}
+}  // namespace php

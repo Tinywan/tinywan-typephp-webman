@@ -1,0 +1,217 @@
+/*
+  +----------------------------------------------------------------------+
+  | PHP-X                                                                |
+  +----------------------------------------------------------------------+
+  | This source file is subject to version 2.0 of the Apache license,    |
+  | that is bundled with this package in the file LICENSE, and is        |
+  | available through the world-wide-web at the following url:           |
+  | http://www.apache.org/licenses/LICENSE-2.0.html                      |
+  | If you did not receive a copy of the Apache2.0 license and are unable|
+  | to obtain it through the world-wide-web, please send a note to       |
+  | license@swoole.com so we can mail you a copy immediately.            |
+  +----------------------------------------------------------------------+
+  | Author: Tianfeng Han  <rango@swoole.com>                             |
+  +----------------------------------------------------------------------+
+*/
+
+#include "phpx.h"
+
+extern "C" {
+#include "ext/pcre/php_pcre.h"
+}
+
+namespace php {
+void String::checkString() {
+    if (EXPECTED(isString())) {
+        return;
+    }
+
+    auto zv = unwrap_ptr();
+    auto new_str = zval_get_string(zv);
+    if (UNEXPECTED(EG(exception) != nullptr)) {
+        zend_string_release(new_str);
+        throwErrorIfOccurred();
+        return;
+    }
+    destroy();
+    ZVAL_STR(zv, new_str);
+}
+
+String String::format(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    zend_string *s = vstrpprintf(0, format, args);
+    va_end(args);
+    return String(s, Ctor::Move);
+}
+
+String String::base64Encode() const {
+    return String(php_base64_encode_str(str()), Ctor::Move);
+}
+
+String String::base64Decode() const {
+    return String(php_base64_decode_str(str()), Ctor::Move);
+}
+
+String String::escape(const int flags, const char *charset) const {
+    return String(php_escape_html_entities((uchar *) data(), length(), 0, flags, charset), Ctor::Move);
+}
+
+String String::unescape(const int flags, const char *charset) const {
+    return String(php_unescape_html_entities(str(), 1, flags, charset), Ctor::Move);
+}
+
+String String::trim(const char *what, TrimMode mode) const {
+    return String(php_trim(str(), what, strlen(what), mode), Ctor::Move);
+}
+
+String String::lower() const {
+    return String(zend_string_tolower(str()), Ctor::Move);
+}
+
+String String::upper() const {
+    return String(zend_string_toupper(str()), Ctor::Move);
+}
+
+void String::print() const {
+    if (str()) {
+        php_printf("(string[%zu]) \"%.*s\"\n", length(), (int) length(), data());
+    } else {
+        php_printf("(null)\n");
+    }
+}
+
+bool String::equals(const String &s, const bool ci) const {
+    if (s.length() != length()) {
+        return false;
+    }
+    if (ci) {
+        return s.length() == length() && zend_binary_strcasecmp(data(), length(), s.data(), s.length()) == 0;
+    }
+    return zend_string_equals(s.str(), str());
+}
+
+String String::offsetGet(Int _offset) const {
+    _offset = offset(_offset);
+    if (UNEXPECTED(_offset == -1)) {
+        return String{zend_empty_string};
+    } else {
+        zend_uchar c = (zend_uchar) data()[_offset];
+        return String{zend_one_char_string[c]};
+    }
+}
+
+void String::offsetSet(Int _offset, const Variant &value) {
+    _offset = offset(_offset);
+    if (_offset != -1) {
+        auto wr_str = value.toString();
+        if (wr_str.length() > 0) {
+            auto zv = unwrap_ptr();
+            SEPARATE_STRING(zv);
+            Z_STRVAL_P(zv)[_offset] = wr_str.str()->val[0];
+            zend_string_forget_hash_val(Z_STR_P(zv));
+        }
+    }
+}
+
+static Array php_do_pcre_match(String &str, const String &regx, Int flags, Int start_offset, bool global) {
+    pcre_cache_entry *pce; /* Compiled regular expression */
+
+    /* Compile regex or get it from cache. */
+    if ((pce = pcre_get_compiled_regex_cache(regx.str())) == nullptr) {
+        throwError("Failed to compile regular expression");
+        return {};
+    }
+
+    zval count = {};
+    zval return_value = {};
+    php_pcre_pce_incref(pce);
+    php_pcre_match_impl(pce, str.str(), &count, &return_value, global, flags, start_offset);
+    php_pcre_pce_decref(pce);
+
+    if (!zval_is_array(&return_value)) {
+        return {};
+    }
+    return Array{&return_value, Ctor::Move};
+}
+
+Array String::match(const String &regx, Int flags, Int start_offset) {
+    return php_do_pcre_match(*this, regx, flags, start_offset, false);
+}
+
+Array String::matchAll(const String &regx, Int flags, Int start_offset) {
+    return php_do_pcre_match(*this, regx, flags, start_offset, true);
+}
+
+bool prepare_slice(Int &offset, Int &length, size_t total) {
+    if (offset < 0) {
+        /* if "from" position is negative, count start position from the end
+         * of the string
+         */
+        if (-(size_t) offset > total) {
+            offset = 0;
+        } else {
+            offset = (Int) total + offset;
+        }
+    } else if ((size_t) offset > total) {
+        return false;
+    }
+
+    if (length < 0) {
+        /* if "length" position is negative, set it to the length
+         * needed to stop that many chars from the end of the string
+         */
+        if (-(size_t) length > total - (size_t) offset) {
+            length = 0;
+        } else {
+            length = (Int) total - offset + length;
+        }
+    } else if ((size_t) length > total - (size_t) offset) {
+        length = (Int) total - offset;
+    }
+
+    return true;
+}
+
+String String::substr(Int f, Int l) const {
+    if (!prepare_slice(f, l, length())) {
+        return "";
+    }
+    return {data() + f, (size_t) l};
+}
+
+Array String::split(const String &delim, const Int limit) const {
+    Array retval;
+    php_explode(delim.str(), str(), retval.ptr(), limit);
+    return retval;
+}
+
+String String::stripTags(const String &allow, bool allow_tag_spaces) const {
+    auto new_str = zend_string_copy(str());
+    new_str->len = php_strip_tags_ex(new_str->val, new_str->len, allow.data(), allow.length(), allow_tag_spaces);
+    new_str->val[new_str->len] = '\0';
+    return String(new_str, Ctor::Move);
+}
+
+String String::addSlashes() const {
+    return String(php_addslashes(str()), Ctor::Move);
+}
+
+String String::basename(const String &suffix) const {
+    return String(php_basename(data(), length(), suffix.data(), suffix.length()), Ctor::Move);
+}
+
+String String::dirname() const {
+    auto new_str = zend_string_copy(str());
+    new_str->len = php_dirname(new_str->val, new_str->len);
+    new_str->val[new_str->len] = '\0';
+    return String(new_str, Ctor::Move);
+}
+
+String String::stripSlashes() const {
+    auto new_str = zend_string_copy(str());
+    php_stripslashes(new_str);
+    return String(new_str, Ctor::Move);
+}
+
+}  // namespace php

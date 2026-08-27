@@ -1,0 +1,1929 @@
+#include "phpx_test.h"
+#include "phpx_func.h"
+#include "phpx_helper.h"
+
+#include "const/json.h"
+#include <cstring>
+
+using namespace php;
+
+constexpr double PI = 3.1415926;
+
+static int append_by_value_and_return_refcount(Reference ref) {
+    ref.append(2L);
+    return ref.getRefCount();
+}
+
+static bool ffi_cdata_is_available() {
+    return eval("return extension_loaded('ffi') && ini_get('ffi.enable') === '1';").toBool();
+}
+
+TEST(variant, nullptr_assignment) {
+    Variant value = 42;
+    value = nullptr;
+    ASSERT_TRUE(value.isNull());
+}
+
+TEST(variant, zend_string_constructor) {
+    // Test Variant(zend_string *s, Ctor method = Ctor::Copy) constructor
+
+    // Test 1: Ctor::Copy method (default)
+    zend_string *str1 = zend_string_init("hello world", 11, 0);
+    Variant v1(str1, Ctor::Copy);
+
+    ASSERT_TRUE(v1.isString());
+    ASSERT_EQ(v1.getRefCount(), 2);  // Original + copied reference
+    ASSERT_STREQ(v1.toCString(), "hello world");
+    ASSERT_EQ(v1.length(), 11);
+
+    // Clean up original string
+    zend_string_release(str1);
+
+    // Test 2: Ctor::Move method
+    zend_string *str2 = zend_string_init("move test", 9, 0);
+    Variant v2(str2, Ctor::Move);
+
+    ASSERT_TRUE(v2.isString());
+    ASSERT_EQ(v2.getRefCount(), 1);  // Only one reference since we moved ownership
+    ASSERT_STREQ(v2.toCString(), "move test");
+    ASSERT_EQ(v2.length(), 9);
+
+    // Don't release str2 here since ownership was moved
+
+    // Test 3: Default constructor parameter (should be Ctor::Copy)
+    zend_string *str3 = zend_string_init("default param", 13, 0);
+    Variant v3(str3);  // Using default parameter
+
+    ASSERT_TRUE(v3.isString());
+    ASSERT_EQ(v3.getRefCount(), 2);  // Should behave like Ctor::Copy
+    ASSERT_STREQ(v3.toCString(), "default param");
+    ASSERT_EQ(v3.length(), 13);
+
+    zend_string_release(str3);
+
+    // Test 4: Empty string
+    zend_string *str4 = zend_string_init("", 0, 0);
+    Variant v4(str4, Ctor::Copy);
+
+    ASSERT_TRUE(v4.isString());
+    ASSERT_EQ(v4.getRefCount(), 2);
+    ASSERT_STREQ(v4.toCString(), "");
+    ASSERT_EQ(v4.length(), 0);
+
+    zend_string_release(str4);
+
+    // Test 5: String with special characters
+    zend_string *str5 = zend_string_init("Hello\nWorld\tTest", 16, 0);
+    Variant v5(str5, Ctor::Move);
+
+    ASSERT_TRUE(v5.isString());
+    ASSERT_EQ(v5.getRefCount(), 1);
+    ASSERT_STREQ(v5.toCString(), "Hello\nWorld\tTest");
+    ASSERT_EQ(v5.length(), 16);
+
+    // Test 6: Reference counting behavior
+    Variant v6 = v5;  // Copy constructor
+    // Both variants should be valid strings
+    ASSERT_TRUE(v6.isString());
+    ASSERT_STREQ(v6.toCString(), "Hello\nWorld\tTest");
+    ASSERT_EQ(v6.length(), 16);
+
+    // Test 7: Long string
+    const char *long_str = "This is a very long string that tests the handling of larger string data in the Variant "
+                           "constructor with zend_string parameter";
+    size_t long_len = std::strlen(long_str);
+    zend_string *str7 = zend_string_init(long_str, long_len, 0);
+    Variant v7(str7, Ctor::Copy);
+
+    ASSERT_TRUE(v7.isString());
+    ASSERT_EQ(v7.getRefCount(), 2);
+    ASSERT_STREQ(v7.toCString(), long_str);
+    ASSERT_EQ(v7.length(), long_len);
+
+    zend_string_release(str7);
+}
+
+TEST(variant, zend_array_constructor) {
+    // Test Variant(zend_array *arr, Ctor method = Ctor::Copy) constructor
+
+    // Test 1: Ctor::Copy method (default)
+    zval zarr1;
+    array_init(&zarr1);
+    add_next_index_long(&zarr1, 100);
+    add_next_index_string(&zarr1, "test");
+
+    zend_array *arr1 = Z_ARRVAL(zarr1);
+    Variant v1(arr1, Ctor::Copy);
+
+    ASSERT_TRUE(v1.isArray());
+    ASSERT_EQ(v1.getRefCount(), 2);  // Original + copied reference
+
+    Array array1(v1);
+    ASSERT_EQ(array1.count(), 2);
+    ASSERT_EQ(array1[0].toInt(), 100);
+    ASSERT_STREQ(array1[1].toCString(), "test");
+
+    zval_ptr_dtor(&zarr1);
+
+    // Test 2: Ctor::Move method
+    zval zarr2;
+    array_init(&zarr2);
+    add_next_index_long(&zarr2, 200);
+    add_next_index_string(&zarr2, "move_test");
+
+    zend_array *arr2 = Z_ARRVAL(zarr2);
+    Variant v2(arr2, Ctor::Move);
+
+    ASSERT_TRUE(v2.isArray());
+    ASSERT_EQ(v2.getRefCount(), 1);  // Only one reference since we moved ownership
+
+    Array array2(v2);
+    ASSERT_EQ(array2.count(), 2);
+    ASSERT_EQ(array2[0].toInt(), 200);
+    ASSERT_STREQ(array2[1].toCString(), "move_test");
+
+    // Don't call zval_ptr_dtor here since ownership was moved
+
+    // Test 3: Default constructor parameter (should be Ctor::Copy)
+    zval zarr3;
+    array_init(&zarr3);
+    add_next_index_long(&zarr3, 300);
+
+    zend_array *arr3 = Z_ARRVAL(zarr3);
+    Variant v3(arr3);  // Using default parameter
+
+    ASSERT_TRUE(v3.isArray());
+    ASSERT_EQ(v3.getRefCount(), 2);  // Should behave like Ctor::Copy
+
+    Array array3(v3);
+    ASSERT_EQ(array3.count(), 1);
+    ASSERT_EQ(array3[0].toInt(), 300);
+
+    zval_ptr_dtor(&zarr3);
+
+    // Test 4: Empty array
+    zval zarr4;
+    array_init(&zarr4);
+
+    zend_array *arr4 = Z_ARRVAL(zarr4);
+    Variant v4(arr4, Ctor::Copy);
+
+    ASSERT_TRUE(v4.isArray());
+    ASSERT_EQ(v4.getRefCount(), 2);
+
+    Array array4(v4);
+    ASSERT_EQ(array4.count(), 0);
+    ASSERT_TRUE(array4.empty());
+
+    zval_ptr_dtor(&zarr4);
+
+    // Test 5: Array with mixed types
+    zval zarr5;
+    array_init(&zarr5);
+    add_next_index_long(&zarr5, 42);
+    add_next_index_double(&zarr5, 3.14);
+    add_next_index_string(&zarr5, "mixed");
+
+    zend_array *arr5 = Z_ARRVAL(zarr5);
+    Variant v5(arr5, Ctor::Move);
+
+    ASSERT_TRUE(v5.isArray());
+    Array array5(v5);
+    ASSERT_EQ(array5.count(), 3);
+    ASSERT_EQ(array5[0].toInt(), 42);
+    ASSERT_EQ(array5[1].toFloat(), 3.14);
+    ASSERT_STREQ(array5[2].toCString(), "mixed");
+
+    // Test reference counting behavior
+    Variant v6 = v5;  // Copy constructor
+    // The reference count may vary depending on internal implementation
+    // Just verify that both variants are valid arrays
+    ASSERT_TRUE(v6.isArray());
+    Array array6(v6);
+    ASSERT_EQ(array6.count(), 3);
+}
+
+TEST(variant, base) {
+    Variant v{};
+    ASSERT_TRUE(v.isNull());
+    ASSERT_STREQ(v.typeStr(), "null");
+    // no gc
+    ASSERT_EQ(v.getRefCount(), 0);
+
+    zval zv;
+    array_init(&zv);
+    Variant v2{&zv};
+    zval_ptr_dtor(&zv);
+    ASSERT_TRUE(v2.isArray());
+
+    // Assignment to itself
+    v2 = v2;
+
+    Variant ref{&v2};
+    Variant ref2{ref};
+    auto ref2_val = ref2.getRefValue();
+    ASSERT_TRUE(ref2_val.isArray());
+
+    auto refval_v2 = v2.getRefValue();
+    ASSERT_TRUE(refval_v2.isArray());
+
+    ASSERT_TRUE(v2.isArray());
+    auto arr = v2.toArray();
+    arr.append("hello world");
+    arr.append(1922);
+    ASSERT_EQ(arr.count(), 2);
+    ASSERT_STREQ(arr.typeStr(), "array");
+
+    ASSERT_EQ(arr.getRefCount(), 1);
+    var copy = arr;
+    ASSERT_EQ(arr.getRefCount(), 2);
+    copy = nullptr;
+    ASSERT_EQ(arr.getRefCount(), 1);
+
+    v2 = nullptr;
+    ASSERT_TRUE(v2.isNull());
+
+    zval *zv2 = nullptr;
+    Variant v3{zv2};
+    ASSERT_TRUE(v3.isNull());
+
+    v3 = 199000L;
+    ASSERT_TRUE(v3.isInt());
+    ASSERT_TRUE(v3 == 199000L);
+    ASSERT_TRUE(v3.isNumeric());
+
+    v3 = std::string("hello");
+    ASSERT_TRUE(v3.isString());
+    ASSERT_EQ(v3.length(), 5);
+    ASSERT_TRUE(v3 == "hello");
+
+    String s("hello world!");
+    v3 = s;
+    ASSERT_TRUE(v3.isString());
+    ASSERT_EQ(v3.length(), s.length());
+
+    v3 = PI;
+    ASSERT_TRUE(v3.isFloat());
+    ASSERT_TRUE(v3 == PI);
+
+    ASSERT_EQ(s.length(), 12);
+
+    v3 = false;
+    ASSERT_TRUE(v3.isBool());
+    ASSERT_TRUE(v3 == false);
+    ASSERT_FALSE(v3.isNumeric());
+
+    float fv1 = PI;
+    Variant v4(fv1);
+    ASSERT_TRUE(v4 == (float) PI);
+    ASSERT_TRUE(v4.isNumeric());
+
+    var v5 = "123.456";
+    ASSERT_TRUE(v5.isNumeric());
+}
+
+TEST(variant, toCString) {
+    std::string s1("hello world");
+    Variant s2("hello world");
+    ASSERT_STREQ(s1.c_str(), s2.toCString());
+
+    var v = 1000;
+    ASSERT_STREQ(v.toCString(), "");
+}
+
+TEST(variant, toStdString) {
+    std::string s1("hello world");
+    Variant s2("hello world");
+    ASSERT_STREQ(s1.c_str(), s2.toStdString().c_str());
+}
+
+TEST(variant, isScalar) {
+    Variant bool_true(true);
+    Variant bool_false(false);
+    ASSERT_TRUE(bool_true.isScalar());
+    ASSERT_TRUE(bool_false.isScalar());
+
+    Variant int_val(42);
+    Variant long_val(123456789L);
+    ASSERT_TRUE(int_val.isScalar());
+    ASSERT_TRUE(long_val.isScalar());
+
+    Variant float_val(3.14f);
+    Variant double_val(2.71828);
+    ASSERT_TRUE(float_val.isScalar());
+    ASSERT_TRUE(double_val.isScalar());
+
+    Variant string_val("hello");
+    Variant empty_string("");
+    ASSERT_TRUE(string_val.isScalar());
+    ASSERT_TRUE(empty_string.isScalar());
+
+    Variant null_val;
+    Variant array_val = create_map();
+    Variant object_val = newObject("stdClass");
+
+    ASSERT_FALSE(null_val.isScalar());
+    ASSERT_FALSE(array_val.isScalar());
+    ASSERT_FALSE(object_val.isScalar());
+
+    Variant ref_val = int_val.toReference();
+    ASSERT_TRUE(ref_val.isScalar());
+
+    Variant array_ref = array_val.toReference();
+    ASSERT_FALSE(array_ref.isScalar());
+
+    auto fp = php::fopen("/tmp/test.txt", "w+");
+    ASSERT_FALSE(fp.isScalar());
+}
+
+TEST(variant, toString) {
+    Variant s("hello world");
+    auto s2 = s.toString();
+    ASSERT_EQ(s2.getRefCount(), 2);
+    ASSERT_TRUE(s2.equals("hello world"));
+}
+
+TEST(variant, toStringWithLength) {
+    std::string s1("hello world");
+    Variant s2("hello world");
+    ASSERT_EQ(s1.length(), s2.toStdString().length());
+}
+
+TEST(variant, serialize) {
+    auto v1 = create_map();
+    Variant v2 = v1.serialize();
+
+    ASSERT_TRUE(v2.isString());
+    ASSERT_GT(v2.length(), 10);
+
+    Variant v3 = v2.unserialize();
+    ASSERT_TRUE(v3.isArray());
+    ASSERT_TRUE(v3.equals(v1));
+
+    var v4 = "-----";
+    ASSERT_TRUE(v4.unserialize().isNull());
+}
+
+TEST(variant, incr) {
+    Variant v(10);
+    ASSERT_EQ(v++, 10);
+    ASSERT_EQ(v.toInt(), 11);
+}
+
+TEST(variant, decr) {
+    Variant v(10);
+    ASSERT_EQ(v--, 10);
+    ASSERT_EQ(v.toInt(), 9);
+}
+
+TEST(variant, pre_incr) {
+    Variant v(10);
+    ASSERT_EQ((++v).toInt(), 11);
+    ASSERT_EQ(v.toInt(), 11);
+}
+
+TEST(variant, pre_decr) {
+    Variant v(10);
+    ASSERT_EQ((--v).toInt(), 9);
+    ASSERT_EQ(v.toInt(), 9);
+}
+
+TEST(variant, calc) {
+    var v(10);
+    v += 5;
+    ASSERT_EQ(v.toInt(), 15);
+
+    v -= 3;
+    ASSERT_EQ(v.toInt(), 12);
+
+    ASSERT_EQ(v.length(), 0);
+    ASSERT_EQ(v.getRefCount(), 0);
+
+    var a = 11;
+    var b = 19;
+    var c = a + b;
+    ASSERT_TRUE(c.equals(30));
+
+    var d = b - a;
+    ASSERT_TRUE(d.equals(8));
+
+    var e = b * a;
+    ASSERT_TRUE(e.equals(209));
+
+    var f1 = 2;
+    var f2 = b / f1;
+    ASSERT_TRUE(f2.equals(9.5));
+
+    ASSERT_TRUE(f1.pow(16).equals(std::pow(2, 16)));
+
+    var f3 = b / 0.3;
+    ASSERT_TRUE(f3.equals(19 / 0.3));
+
+    var g = PI;
+    ASSERT_EQ(g++, PI);
+    ASSERT_EQ(g, PI + 1.0);
+    ASSERT_EQ(g--, PI + 1.0);
+    ASSERT_EQ(g, PI);
+
+    ASSERT_EQ(++g, PI + 1.0);
+    ASSERT_EQ(g, PI + 1.0);
+    ASSERT_EQ(--g, PI);
+    ASSERT_EQ(g, PI);
+
+    g += 7;
+    ASSERT_EQ(g, PI + 7);
+
+    g -= 7.0;
+    ASSERT_TRUE(g.almostEquals(PI, 1e-5));
+
+    var h1 = 31;
+    var h2 = 3;
+    ASSERT_EQ(h1 % h2, 31 % 3);
+    ASSERT_EQ(h1 << h2, 31 << 3);
+    ASSERT_EQ(h1 >> h2, 31 >> 3);
+    ASSERT_EQ(h1 & h2, 31 & 3);
+    ASSERT_EQ(h1 | h2, 31 | 3);
+    ASSERT_EQ(h1 ^ h2, 31 ^ 3);
+    ASSERT_EQ(~h1, ~31);
+
+    var i = PI;
+    var i2 = i % 2.0;
+    ASSERT_TRUE(i2.equals(1));
+
+    var i3 = i2.pow(1.3);
+    ASSERT_TRUE(i3.almostEquals(std::pow(i2.toFloat(), 1.3), 1e-5));
+
+    var i4 = 2;
+    var i5 = i4.pow(8);
+    ASSERT_TRUE(i5.equals(std::pow(2, 8)));
+
+    var x = 5.7;
+    var y = 1.3;
+    var r = php::fmod(x, y);
+    ASSERT_TRUE(r.equals(std::fmod(5.7, 1.3)));
+}
+
+TEST(variant, compare) {
+    {
+        var a = 11;
+        var b = 19;
+
+        ASSERT_TRUE(a != b);
+        ASSERT_FALSE(a == b);
+
+        ASSERT_TRUE(a < b);
+        ASSERT_TRUE(b > a);
+        ASSERT_TRUE(a <= b);
+        ASSERT_TRUE(b >= a);
+        ASSERT_TRUE(b >= b);
+    }
+
+    {
+        var a = 11.23;
+        var b = 19.90;
+
+        ASSERT_TRUE(a != b);
+        ASSERT_FALSE(a == b);
+
+        ASSERT_TRUE(a < b);
+        ASSERT_TRUE(b > a);
+        ASSERT_TRUE(a <= b);
+        ASSERT_TRUE(b >= a);
+        ASSERT_TRUE(b >= b);
+    }
+}
+
+TEST(variant, json) {
+    Array arr1 = create_map();
+    auto json = json_encode(arr1);
+    ASSERT_TRUE(json.isString());
+    ASSERT_GT(json.length(), 10);
+
+    auto v3 = json_decode(json, true);
+    ASSERT_TRUE(v3.isArray());
+    ASSERT_TRUE(v3.equals(arr1));
+
+    Variant v4("");
+    ASSERT_TRUE(json_decode(v4).isNull());
+    ASSERT_EQ(json_last_error().toInt(), constant("JSON_ERROR_SYNTAX").toInt());
+
+    var v5 = "\xB1\x31";
+    ASSERT_EQ(json_encode(v5).toBool(), false);
+
+    var error = json_last_error();
+    ASSERT_TRUE(error.equals(constant("JSON_ERROR_UTF8")));
+}
+
+TEST(variant, ref0) {
+    Array arr;
+    auto ref = arr.toReference();
+    array_push(ref, "php", "java", "go");
+    var_dump(ref);
+    ASSERT_EQ(ref.length(), 3);
+
+    array_push(ref, "c++", "rust", "erlang", "node.js");
+    ASSERT_EQ(ref.length(), 7);
+
+    array_push(ref, "python", "ruby", "lua", "perl", "vue");
+    ASSERT_EQ(ref.getRefValue().length(), 12);
+
+    arr.debug();
+    ref.debug();
+}
+
+TEST(variant, ref1) {
+    Array arr;
+    Reference ref = arr.toReference();
+    parse_str("first=value1&second=value2", ref);
+    Array v3 = ref.getRefValue();
+    ASSERT_EQ(v3.count(), 2);
+
+    ASSERT_EQ(ref.getRefCount(), 2);
+
+    auto ref2 = ref.toReference();
+    ASSERT_TRUE(ref2.isReference());
+    ASSERT_EQ(ref2.getRefCount(), 3);
+}
+
+TEST(variant, ref2) {
+    Array arr;
+    Reference ref = arr.toReference();
+    parse_str("first=value1&second=value2", ref);
+    Array v3 = *ref;
+    ASSERT_EQ(v3.count(), 2);
+}
+
+TEST(variant, ref3) {
+    Array arr;
+    Reference ref = arr.toReference();
+    array_push(ref, "php", "java", "go");
+    ASSERT_EQ((*ref).length(), 3);
+
+    array_push(ref, "python", "ruby", "lua", "perl", "vue");
+    ASSERT_EQ((*ref).length(), 8);
+}
+
+TEST(variant, ref4) {
+    Array arr;
+    Reference ref = arr.toReference();
+
+    array_push(ref, "php", "java", "go");
+    ASSERT_EQ(ref.length(), 3);
+}
+
+TEST(variant, ref_temporary_by_value) {
+    Array arr;
+    arr.append(1L);
+
+    int refcount_during_call = append_by_value_and_return_refcount(arr.toReference());
+
+    ASSERT_TRUE(arr.isReference());
+    ASSERT_TRUE(arr.isArray());
+    ASSERT_EQ(arr.length(), 2);
+    ASSERT_EQ(refcount_during_call, 2);
+    ASSERT_EQ(arr.getRefCount(), 1);
+}
+
+TEST(variant, ref5) {
+    var s = "hello world";
+    var ref = &s;
+    s = "hello php";
+
+    auto b = ref.toString();
+    ASSERT_TRUE(ref.isReference());
+    ASSERT_STREQ(b.data(), "hello php");
+    ASSERT_STREQ(ref.toCString(), "hello php");
+    ASSERT_TRUE(ref.isString());
+}
+
+TEST(variant, ref6) {
+    var s;
+
+    Ref ref{s.ptr()};
+    ASSERT_TRUE(ref.isReference());
+
+    try {
+        var s2 = "hello";
+        Ref ref2{s2.ptr()};
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "parameter 1 must be `reference`").isTrue());
+    }
+}
+
+TEST(variant, ref7) {
+    Reference ref(nullptr);
+    ASSERT_TRUE(ref.isNull());
+}
+
+TEST(variant, callable) {
+    Variant v1{"phpinfo"};
+    ASSERT_TRUE(v1.isCallable());
+
+    Variant v2{"fn_not_exists"};
+    ASSERT_FALSE(v2.isCallable());
+}
+
+TEST(variant, empty) {
+    ASSERT_TRUE(null.empty());
+    Variant v;
+    v = false;
+    ASSERT_TRUE(v.empty());
+    v = true;
+    ASSERT_FALSE(v.empty());
+    v = "";
+    ASSERT_TRUE(v.empty());
+    v = "hello";
+    ASSERT_FALSE(v.empty());
+    v = 0;
+    ASSERT_TRUE(v.empty());
+    v = 9999;
+    ASSERT_FALSE(v.empty());
+
+    v = 0.0;
+    ASSERT_TRUE(v.empty());
+    v = 1.1;
+    ASSERT_FALSE(v.empty());
+
+    Array arr;
+    ASSERT_TRUE(arr.empty());
+    arr.append("hello");
+    ASSERT_FALSE(arr.empty());
+    ASSERT_EQ(arr.getRefCount(), 1);
+
+    Variant alias_arr = arr;
+    ASSERT_FALSE(alias_arr.empty());
+    ASSERT_EQ(arr.getRefCount(), 2);
+}
+
+TEST(variant, resource) {
+    Variant v;
+    String *rs1 = nullptr;
+
+    try {
+        rs1 = v.toResource<String>("string");
+    } catch (zend_object *ex) {
+        catchException();
+    }
+    ASSERT_EQ(rs1, nullptr);
+
+    auto fp = php::fopen("/tmp/test.txt", "w+");
+    ASSERT_TRUE(fp.isResource());
+
+    php_stream *rs2 = nullptr;
+    try {
+        rs2 = fp.toResource<php_stream>("php_stream");
+    } catch (zend_object *ex) {
+        catchException();
+    }
+    ASSERT_EQ(rs2, nullptr);
+
+    auto *s = new String("hello world");
+    var rs3;
+    try {
+        rs3 = newResource<String>("string", s);
+    } catch (zend_object *ex) {
+        catchException();
+    }
+    ASSERT_TRUE(rs3.isNull());
+    delete s;
+
+    String *rs4 = nullptr;
+    try {
+        rs4 = fp.toResource<String>("string_not_exists");
+    } catch (zend_object *ex) {
+        catchException();
+    }
+    ASSERT_EQ(rs4, nullptr);
+}
+
+TEST(variant, self) {
+    Variant v1("hello world");
+    Variant v2 = v1;
+    ASSERT_TRUE(v1.equals(v2, true));
+}
+
+TEST(variant, move_ctor) {
+    Variant s("abc");
+    Variant t(std::move(s));
+    EXPECT_STREQ(t.toCString(), "abc");
+    EXPECT_TRUE(s.isUndef());
+    s.print();
+    t.print();
+}
+
+TEST(variant, move_assign_owned_value) {
+    Variant source("a non-interned string");
+    zend_string *source_string = Z_STR_P(source.unwrap_ptr());
+    ASSERT_EQ(GC_REFCOUNT(source_string), 1);
+
+    Variant destination("old value");
+    destination = std::move(source);
+
+    ASSERT_TRUE(source.isUndef());
+    ASSERT_TRUE(destination.isString());
+    ASSERT_EQ(Z_STR_P(destination.unwrap_ptr()), source_string);
+    ASSERT_EQ(GC_REFCOUNT(source_string), 1);
+}
+
+TEST(variant, move_assign_self) {
+    Variant value("unchanged");
+    zend_string *string = Z_STR_P(value.unwrap_ptr());
+
+    value = std::move(value);
+
+    ASSERT_STREQ(value.toCString(), "unchanged");
+    ASSERT_EQ(Z_STR_P(value.unwrap_ptr()), string);
+    ASSERT_EQ(GC_REFCOUNT(string), 1);
+}
+
+TEST(variant, move_assign_preserves_indirect_semantics) {
+    Array values{"old"};
+    Variant target = values.item(0);
+    Variant source("new");
+
+    target = std::move(source);
+
+    ASSERT_STREQ(values.get(0).toCString(), "new");
+    ASSERT_STREQ(source.toCString(), "new");
+
+    Variant result;
+    result = std::move(target);
+    ASSERT_STREQ(result.toCString(), "new");
+    ASSERT_TRUE(target.isIndirect());
+    ASSERT_STREQ(values.get(0).toCString(), "new");
+}
+
+TEST(variant, move_assign_preserves_reference_semantics) {
+    Variant referenced("old");
+    Variant target(&referenced);
+    Variant source("new");
+
+    target = std::move(source);
+
+    ASSERT_TRUE(target.isReference());
+    ASSERT_STREQ(referenced.toCString(), "new");
+    ASSERT_STREQ(source.toCString(), "new");
+}
+
+TEST(variant, derived_move_assignment) {
+    String source_string("string value");
+    zend_string *string = source_string.str();
+    String destination_string("old");
+    destination_string = std::move(source_string);
+    ASSERT_TRUE(source_string.isUndef());
+    ASSERT_EQ(destination_string.str(), string);
+
+    Array source_array{1, 2};
+    zend_array *array = source_array.array();
+    Array destination_array{3};
+    destination_array = std::move(source_array);
+    ASSERT_TRUE(source_array.isUndef());
+    ASSERT_EQ(destination_array.array(), array);
+    ASSERT_EQ(destination_array.count(), 2);
+
+    Object source_object = newObject("stdClass");
+    zend_object *object = source_object.object();
+    Object destination_object = newObject("stdClass");
+    destination_object = std::move(source_object);
+    ASSERT_TRUE(source_object.isUndef());
+    ASSERT_EQ(destination_object.object(), object);
+}
+
+TEST(variant, reference_move_assignment) {
+    Variant value("referenced");
+    Reference source = value.toReference();
+    zend_reference *reference = Z_REF_P(source.const_ptr());
+    Reference destination;
+
+    destination = std::move(source);
+
+    ASSERT_TRUE(source.isUndef());
+    ASSERT_TRUE(destination.isReference());
+    ASSERT_EQ(Z_REF_P(destination.const_ptr()), reference);
+    ASSERT_STREQ(destination.getRefValue().toCString(), "referenced");
+}
+
+TEST(variant, take_value_owned_wrappers) {
+    Variant source("variant value");
+    zend_string *source_string = Z_STR_P(source.unwrap_ptr());
+    Variant value = takeValue(source);
+    ASSERT_TRUE(source.isUndef());
+    ASSERT_EQ(Z_STR_P(value.unwrap_ptr()), source_string);
+    ASSERT_EQ(GC_REFCOUNT(source_string), 1);
+
+    String source_typed_string("string value");
+    zend_string *typed_string = source_typed_string.str();
+    String string_value = takeValue(source_typed_string);
+    ASSERT_TRUE(source_typed_string.isUndef());
+    ASSERT_EQ(string_value.str(), typed_string);
+
+    Array source_array{1, 2};
+    zend_array *array = source_array.array();
+    Array array_value = takeValue(source_array);
+    ASSERT_TRUE(source_array.isUndef());
+    ASSERT_EQ(array_value.array(), array);
+
+    Object source_object = newObject("stdClass");
+    zend_object *object = source_object.object();
+    Object object_value = takeValue(source_object);
+    ASSERT_TRUE(source_object.isUndef());
+    ASSERT_EQ(object_value.object(), object);
+}
+
+TEST(variant, take_value_materializes_reference_and_indirect) {
+    Variant referenced("reference value");
+    Variant reference(&referenced);
+    Variant reference_value = takeValue(reference);
+    ASSERT_TRUE(reference.isReference());
+    ASSERT_FALSE(reference_value.isReference());
+    ASSERT_STREQ(reference_value.toCString(), "reference value");
+
+    Array values{"indirect value"};
+    Variant indirect = values.item(0);
+    Variant indirect_value = takeValue(indirect);
+    ASSERT_TRUE(indirect.isIndirect());
+    ASSERT_FALSE(indirect_value.isIndirect());
+    ASSERT_STREQ(indirect_value.toCString(), "indirect value");
+    ASSERT_STREQ(values.get(0).toCString(), "indirect value");
+}
+
+TEST(variant, concat1) {
+    var s("abc");
+    // s2 and s point to the same zend_string object
+    var s2 = s;
+
+    ASSERT_EQ(s2.toString().getRefCount(), 3);
+
+    s.append(" hello ");
+    // copy on write: `s` will be separated, and a new zend_string object will be allocated
+    ASSERT_STREQ(s.toCString(), "abc hello ");
+    ASSERT_STREQ(s2.toCString(), "abc");
+    ASSERT_EQ(s2.toString().getRefCount(), 2);
+
+    s.append(1990);
+    ASSERT_STREQ(s.toCString(), "abc hello 1990");
+
+    s.append(" ");
+
+    s.append(2020.2009);
+    ASSERT_STREQ(s.toCString(), "abc hello 1990 2020.2009");
+}
+
+TEST(variant, concat2) {
+    var s("abc");
+
+    auto s2 = s.concat(" hello ");
+    ASSERT_STREQ(s2.toCString(), "abc hello ");
+
+    auto s3 = s2.concat(1990);
+    ASSERT_STREQ(s3.toCString(), "abc hello 1990");
+
+    auto s4 = s3.concat(" ").concat(2020.2009);
+    ASSERT_STREQ(s4.toCString(), "abc hello 1990 2020.2009");
+}
+
+TEST(variant, binary_op) {
+    var a = 256;
+    a /= 2;
+    ASSERT_EQ(a.toInt(), 128);
+
+    a *= 3;
+    ASSERT_EQ(a.toInt(), 384);
+
+    a %= 31;
+    ASSERT_EQ(a.toInt(), 12);
+
+    a = 16;
+    a <<= 2;
+    ASSERT_EQ(a.toInt(), 64);
+
+    a >>= 3;
+    ASSERT_EQ(a.toInt(), 8);
+
+    a &= 8;
+    ASSERT_EQ(a.toInt(), 8);
+
+    a &= 4;
+    ASSERT_EQ(a.toInt(), 0);
+
+    a |= 128;
+    ASSERT_EQ(a.toInt(), 128);
+
+    a ^= 64;
+    ASSERT_EQ(a.toInt(), 192);
+}
+
+TEST(variant, logical_op) {
+    const Array a;
+    const var b = "1";
+    ASSERT_TRUE(a || b);
+    ASSERT_FALSE(a && b);
+}
+
+TEST(variant, calc2) {
+    var a = 1990;
+    var b = 20 + a;
+
+    ASSERT_EQ(b.toInt(), 2010);
+
+    var c = 2025 - a;
+    ASSERT_EQ(c.toInt(), 35);
+
+    var d = 3 * a;
+    ASSERT_EQ(d.toInt(), 1990 * 3);
+
+    var e = 23023 / a;
+    ASSERT_EQ(e.toFloat(), 23023.0 / 1990.0);
+
+    var f = 23042 % a;
+    ASSERT_EQ(f.toInt(), 23042 % 1990);
+
+    var g0 = 16;
+
+    var g = 2 << g0;
+    ASSERT_EQ(g.toInt(), 2 << 16);
+
+    auto v = php::toSize("512k");
+    var h = v >> g0;
+    ASSERT_EQ(h.toInt(), v >> 16);
+
+    var g1 = 0xFFFF;
+
+    var i = 128 & g1;
+    ASSERT_EQ(i.toInt(), 128);
+
+    Int j0 = g.toInt();
+    var j = j0 | g1;
+    ASSERT_EQ(j.toInt(), 196607);
+
+    var k = 128 ^ g1;
+    ASSERT_EQ(k.toInt(), 65407);
+
+    var l = 327 + a + 192;
+    ASSERT_EQ(l.toInt(), 327 + 1990 + 192);
+}
+
+TEST(variant, same) {
+    var a = "hello";
+    var b = "hello";
+    ASSERT_TRUE(a.same(b));
+
+    var c = newObject("stdClass");
+    var d = newObject("stdClass");
+    ASSERT_TRUE(c.equals(d));
+    ASSERT_FALSE(c.same(d));
+}
+
+TEST(variant, offsetGet) {
+    Array a{1, 2, 3, 99, 1000};
+    ASSERT_EQ(a.offsetGet(3).toInt(), 99);
+    ASSERT_TRUE(a.offsetGet(100).isNull());
+    ASSERT_TRUE(a.offsetExists(3));
+    ASSERT_TRUE(a.offsetGet(a.length()).isNull());
+
+    var s = "hello world";
+    ASSERT_STREQ(s.offsetGet(4).toCString(), "o");
+    ASSERT_STREQ(s.offsetGet("4").toCString(), "o");
+    ASSERT_STREQ(s.offsetGet(s.length()).toCString(), "");
+    ASSERT_FALSE(s.offsetExists(s.length()));
+    ASSERT_FALSE(s.offsetExists(-99));
+    ASSERT_TRUE(s.offsetExists(-2));
+    ASSERT_STREQ(s.offsetGet(-1).toCString(), "d");
+
+    var bv = true;
+    ASSERT_STREQ(s.offsetGet(bv).toCString(), "e");
+    ASSERT_TRUE(s.offsetExists(bv));
+
+    var s2 = "";
+    ASSERT_FALSE(s2.offsetExists(bv));
+
+    var b = false;
+    ASSERT_TRUE(b.offsetGet(0).isNull());
+    ASSERT_STREQ(s.offsetGet(b).toCString(), "h");
+
+    Array a2;
+    var sk = "hello";
+    a2.set(sk, 999);
+    a2.set("world", 888);
+    ASSERT_EQ(a2.offsetGet(sk).toInt(), 999);
+    ASSERT_TRUE(a2.offsetExists("world"));
+    ASSERT_FALSE(a2.offsetExists("golang"));
+}
+
+TEST(variant, offsetGet2) {
+    var sk = "hello";
+    auto o = newObject("ArrayObject");
+    var v = o;
+
+    o.offsetSet(sk, 1987);
+    ASSERT_TRUE(o.offsetExists(sk));
+    ASSERT_TRUE(v.offsetExists(sk));
+    ASSERT_EQ(o.offsetGet(sk).toInt(), 1987);
+
+    o.offsetUnset(sk);
+    ASSERT_FALSE(o.offsetExists(sk));
+    ASSERT_FALSE(v.offsetExists(sk));
+
+    v.offsetSet(sk, 2494);
+    ASSERT_EQ(v.offsetGet(sk).toInt(), 2494);
+    v.offsetUnset(sk);
+    ASSERT_EQ(v.offsetGet(sk).toInt(), 0);
+}
+
+TEST(variant, offsetGet3) {
+    auto o = newObject("ArrayObject");
+    o.offsetSet(null, 1987);
+    o.offsetSet(null, 2026);
+
+    ASSERT_TRUE(o.offsetExists(1));
+    ASSERT_FALSE(o.offsetExists(2));
+    ASSERT_EQ(o.offsetGet(0).toInt(), 1987);
+
+    var v = o;
+    ASSERT_EQ(v.offsetGet(1).toInt(), 2026);
+    ASSERT_FALSE(v.offsetExists(4));
+    ASSERT_TRUE(v.offsetExists(1));
+
+    v.offsetSet(2, 1882);
+    ASSERT_EQ(v.offsetGet(2).toInt(), 1882);
+}
+
+TEST(variant, offsetGet4) {
+    auto o = newObject("ArrayObject");
+    o.offsetSet("hello", 1987);
+    o.offsetSet("world", 2026);
+
+    var v = o;
+
+    var sk = "hello";
+    ASSERT_EQ(v.offsetGet(sk).toInt(), 1987);
+
+    var sk2 = "emtpy";
+    ASSERT_TRUE(v.offsetGet(sk2).isNull());
+
+    ASSERT_FALSE(sk2.offsetExists(10));
+    ASSERT_TRUE(sk2.offsetExists(4));
+
+    ASSERT_TRUE(sk2.offsetExists(true));
+    ASSERT_TRUE(sk2.offsetExists(false));
+}
+
+TEST(variant, offsetSet2) {
+    auto o = newObject("ArrayObject");
+    o.offsetSet(null, 1987);
+    o.offsetSet(null, 2026);
+
+    var v = o;
+    v.offsetSet(1, 1900);
+    ASSERT_EQ(o.offsetGet(1).toInt(), 1900);
+
+    v.offsetUnset(1);
+    ASSERT_TRUE(o.offsetGet(1).isNull());
+}
+
+TEST(variant, offsetSet3) {
+    var v;
+    v.offsetSet(null, 1923);
+    ASSERT_EQ(v.offsetGet(0).toInt(), 1923);
+
+    var s = "hello";
+    s.offsetSet(4, "x");
+    ASSERT_STREQ(s.toCString(), "hellx");
+
+    s.offsetSet("3", "_");
+    ASSERT_STREQ(s.toCString(), "hel_x");
+
+    var v2;
+    v2.offsetSet(2, 2000);
+    ASSERT_EQ(v2.offsetGet(2).toInt(), 2000);
+
+    try {
+        s.offsetUnset(2);
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Cannot unset offsets").isTrue());
+    }
+
+    try {
+        s.offsetUnset("1");
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Cannot unset offsets").isTrue());
+    }
+}
+
+TEST(variant, setProperty) {
+    var sk = "hello";
+    auto o = newObject("ArrayObject");
+
+    o.setProperty(sk, 1987);
+    auto v = o.getProperty(sk);
+    ASSERT_EQ(v.toInt(), 1987);
+}
+
+TEST(variant, setPropertyThrowsZendException) {
+    eval("class PhpxTypedPropertyHolder { public int|string $value; }");
+    auto o = eval("return new PhpxTypedPropertyHolder();");
+
+    try {
+        o.setProperty("value", null);
+        FAIL() << "setProperty should throw zend_object* when Zend raises a typed property error";
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Cannot assign null to property PhpxTypedPropertyHolder::$value").toBool());
+    }
+}
+
+TEST(variant, getPropertyThrowsZendException) {
+    eval("class PhpxUninitializedPropertyHolder { public int $value; }");
+    auto o = eval("return new PhpxUninitializedPropertyHolder();");
+
+    try {
+        o.getProperty("value");
+        FAIL() << "getProperty should throw zend_object* when Zend raises an uninitialized typed property error";
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Typed property PhpxUninitializedPropertyHolder::$value").toBool());
+    }
+}
+
+TEST(variant, unsetPropertyThrowsZendException) {
+    eval("class PhpxReadonlyPropertyHolder { public readonly int $value; public function __construct() { $this->value "
+         "= 1; } }");
+    auto o = eval("return new PhpxReadonlyPropertyHolder();");
+
+    try {
+        o.unsetProperty("value");
+        FAIL() << "unsetProperty should throw zend_object* when Zend raises a readonly property error";
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Cannot unset readonly property PhpxReadonlyPropertyHolder::$value").toBool());
+    }
+}
+
+TEST(variant, unsetProperty) {
+    var sk = "hello";
+    auto o = newObject("ArrayObject");
+
+    o.setProperty(sk, 1987);
+    auto v = o.getProperty(sk);
+    ASSERT_EQ(v.toInt(), 1987);
+
+    o.unsetProperty(sk);
+    auto v2 = o.getProperty(sk);
+    ASSERT_TRUE(v2.isNull());
+}
+
+TEST(variant, newReference) {
+    auto ref = newReference();
+
+    var str = "first=value&arr[]=foo+bar&arr[]=baz";
+    parse_str(str, ref);
+
+    array arr(*ref);
+    ASSERT_STREQ(arr.offsetGet("first").toCString(), "value");
+
+    auto ref2 = newReference("hello world");
+    ASSERT_TRUE(ref2.isString());
+
+    ASSERT_EQ(ref2.getRefCount(), 1);
+    ASSERT_EQ(Z_REFCOUNT_P(ref2.refval()), 1);
+    ASSERT_TRUE(ref2.isReference());
+
+    Reference ref3 = ref2;
+    ref2.unset();
+    ASSERT_TRUE(ref2.isUndef());
+    ASSERT_FALSE(ref2.isReference());
+
+    ASSERT_EQ(ref3.getRefCount(), 1);
+    ASSERT_EQ(Z_REFCOUNT_P(ref3.refval()), 1);
+    ASSERT_TRUE(ref3.isReference());
+}
+
+TEST(variant, unary_operators) {
+    var a = -199;
+    var b = -a;
+    ASSERT_EQ(b.toInt(), 199);
+}
+
+TEST(variant, nested_update) {
+    Array a{1, 2, 3, 99, 1000};
+
+    Array b{};
+    b.set("hello", a);
+
+    auto c = b.offsetGet("hello");
+    c.offsetSet(4, 1987);
+}
+
+TEST(variant, offsetSet) {
+    Array a2;
+    var sk = "hello";
+    a2.offsetSet(sk, 999);
+    a2.offsetSet("world", 888);
+    ASSERT_EQ(a2.offsetGet(sk).toInt(), 999);
+
+    Array a3(a2);
+    a3.offsetSet("php", 2026);
+    ASSERT_EQ(a3.offsetGet("php").toInt(), 2026);
+
+    a3.offsetUnset(sk);
+    ASSERT_FALSE(a3.offsetExists(sk));
+    ASSERT_TRUE(a2.offsetExists(sk));
+}
+
+TEST(variant, offsetUnset) {
+    Array a{1, 2, 3, 99, 1000};
+    var ik(4);
+
+    a.offsetSet(ik, 999);
+    ASSERT_EQ(a.offsetGet(ik).toInt(), 999);
+
+    ASSERT_TRUE(a.offsetExists(3));
+    a.offsetUnset(3);
+    ASSERT_FALSE(a.offsetExists(3));
+
+    ASSERT_TRUE(a.offsetExists(ik));
+    a.offsetUnset(ik);
+    ASSERT_FALSE(a.offsetExists(ik));
+
+    a.offsetSet(null, 2026);
+
+    ASSERT_EQ(a.offsetGet(5).toInt(), 2026);
+
+    auto o = newObject("ArrayObject");
+    o.offsetSet(null, 1987);
+    o.offsetSet(null, 2026);
+    o.offsetSet(2, 1999);
+    ASSERT_EQ(o.offsetGet(2).toInt(), 1999);
+
+    ASSERT_TRUE(o.offsetExists(1));
+    o.offsetUnset(1);
+    ASSERT_FALSE(o.offsetExists(1));
+}
+
+TEST(variant, operateWithBadType) {
+    var v(19992);
+    ASSERT_TRUE(v.offsetGet("hello").isNull());
+    ASSERT_FALSE(v.offsetExists(2000));
+
+    var ik(3.1415);
+    ASSERT_FALSE(v.offsetExists(ik));
+
+    var sk("world");
+    ASSERT_FALSE(v.offsetExists(sk));
+
+    ASSERT_TRUE(v.getProperty("hello").isNull());
+
+    try_call([&]() { sk.offsetSet(null, "_"); }, "[] operator not supported for strings");
+}
+
+TEST(variant, item) {
+    auto o = newObject("ArrayObject");
+    o.offsetSet(0, 2000);
+    o.offsetSet(1, 1987);
+
+    ASSERT_EQ(o.offsetGet(1).toInt(), 1987);
+
+    auto iv = o.item(1);
+    iv = 1999;
+    ASSERT_EQ(o.offsetGet(1).toInt(), 1999);
+
+    Array a{1, 2, 3, 99, 1000};
+    auto iv2 = a.item(3);
+    iv2 = 1987;
+    ASSERT_EQ(a.offsetGet(3).toInt(), 1987);
+
+    Variant nullKey;
+    auto appended = a.item(nullKey, true);
+    appended = 2026;
+    ASSERT_EQ(a.get(5).toInt(), 2026);
+
+    Variant falseKey(false);
+    auto first = a.item(falseKey, true);
+    first = 42;
+    ASSERT_EQ(a.get(0).toInt(), 42);
+}
+
+TEST(variant, item2) {
+    var sk = "hello";
+    auto o = newObject("ArrayObject");
+    o.offsetSet(sk, 1987);
+    ASSERT_TRUE(o.offsetExists(sk));
+    ASSERT_EQ(o.offsetGet(sk).toInt(), 1987);
+
+    auto iv = o.item(sk);
+    iv = 1999;
+    ASSERT_EQ(o.offsetGet(sk).toInt(), 1999);
+
+    Array a = create_map();
+    auto iv2 = a.item("php");
+    iv2 = 1995;
+    ASSERT_EQ(a.offsetGet("php").toInt(), 1995);
+
+    auto iv3 = a.item("swift", true);
+    iv3 = 2012;
+    ASSERT_EQ(a.offsetGet("swift").toInt(), 2012);
+
+    auto chr = sk.item(1);
+    ASSERT_STREQ(chr.toCString(), "e");
+}
+
+TEST(variant, ref) {
+    Reference ref;
+    auto array = create_list();
+    ref = array.toReference();
+    sort(ref);
+    ASSERT_STREQ(ref.offsetGet(0).toCString(), "c++");
+}
+
+TEST(variant, item3) {
+    auto arr = create_list();
+    var v = arr;
+    auto indirect = v.item(3, true);
+    indirect = "golang";
+
+    ASSERT_STREQ(v.item(3).toCString(), "golang");
+
+    auto item2 = v.item(9999);
+    ASSERT_TRUE(item2.isNull());
+
+    auto item3 = v.item("4");
+    ASSERT_STREQ(item3.toCString(), "c++");
+
+    try {
+        var v2 = false;
+        auto res = v2.item(2);
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Only array/object/string support the item").isTrue());
+    }
+}
+
+TEST(variant, item4) {
+    auto arr = create_list();
+    var v = arr;
+
+    {
+        auto v2 = std::move(v.item(3));
+        ASSERT_EQ(v2.getRefCount(), 2);
+    }
+}
+
+TEST(variant, itemUpdate1) {
+    auto arr = create_list();
+    var v = arr;
+
+    ASSERT_EQ(v.length(), 5);
+    var item = v.item(5, true);
+    item = "node.js";
+    ASSERT_STREQ(v.offsetGet(5).toCString(), "node.js");
+    ASSERT_EQ(v.length(), 6);
+
+    ASSERT_EQ(arr.length(), 5);
+}
+
+TEST(variant, itemUpdate2) {
+    auto arr = create_map();
+    var v = arr;
+
+    ASSERT_EQ(v.length(), 5);
+    var item = v.item("swift", true);
+    item = 999;
+    ASSERT_EQ(v.offsetGet("swift").toInt(), 999);
+    ASSERT_EQ(v.length(), 6);
+
+    ASSERT_EQ(arr.length(), 5);
+
+    var arr3 = 1992;
+    ASSERT_FALSE(arr3.isArray());
+    arr3.item(2020, true) = "hello";
+    ASSERT_TRUE(arr3.isArray());
+    ASSERT_STREQ(arr3.offsetGet(2020).toCString(), "hello");
+
+    var arr4 = 1992;
+    var sk = "hello";
+    ASSERT_FALSE(arr4.isArray());
+    arr4.item(sk, true) = 2026;
+    ASSERT_TRUE(arr4.isArray());
+    ASSERT_EQ(arr4.offsetGet(sk).toInt(), 2026);
+}
+
+TEST(variant, append) {
+    auto arr = create_list();
+    var v = arr;
+    ASSERT_EQ(v.length(), 5);
+    v.append("node.js");
+    ASSERT_EQ(v.length(), 6);
+
+    try {
+        var v2 = false;
+        v2.append(9999);
+    } catch (zend_object *ex) {
+        auto e = catchException();
+        auto msg = e.call("getMessage");
+        ASSERT_TRUE(str_contains(msg, "Cannot append element").isTrue());
+    }
+}
+
+TEST(variant, item5) {
+    try_call(
+        []() {
+            var arr1 = 1234;
+            arr1.item(0);
+        },
+        "Only array/object/string support the item");
+
+    try_call(
+        []() {
+            var arr2 = "world";
+            arr2.newItem();
+        },
+        "[] operator not supported for strings");
+
+    var arr3;
+    ASSERT_FALSE(arr3.isArray());
+    arr3.newItem() = "hello";
+    ASSERT_TRUE(arr3.isArray());
+    ASSERT_STREQ(arr3.offsetGet(0).toCString(), "hello");
+
+    try_call(
+        []() {
+            var arr4 = 1234;
+            arr4.newItem();
+        },
+        "Only array/object support the newItem() method");
+
+    try_call(
+        []() {
+            var arr1 = 1234;
+            var key = "key";
+            arr1.item(key);
+        },
+        "Only array/object/string support the item");
+}
+
+TEST(variant, item6) {
+    var s1("hello world");
+    s1.item(5, true) = "_";
+    ASSERT_STREQ(s1.toCString(), "hello_world");
+
+    var s2 = s1;
+    s2.item(5, true) = "@";
+
+    ASSERT_STREQ(s1.toCString(), "hello_world");
+    ASSERT_STREQ(s2.toCString(), "hello@world");
+
+    var s3 = "$";
+    s2.item(5, true) = s3;
+    ASSERT_STREQ(s2.toCString(), "hello$world");
+
+    s2.item(5, true) = std::string("#");
+    ASSERT_STREQ(s2.toCString(), "hello#world");
+
+    try_call([&]() { s2.item(100, true) = "@"; }, "String offset `100` out of range");
+    try_call([&]() { s2.item(5, true) = "-----"; }, "Can only be assigned a single-byte string to a string offset");
+}
+
+TEST(variant, item_ffi_cdata_array_scalar_read) {
+    if (!ffi_cdata_is_available()) {
+        GTEST_SKIP() << "FFI extension is not available or ffi.enable is disabled";
+    }
+
+    auto cdata = eval(R"(
+        $array = FFI::new("int[2]");
+        $array[0] = 10;
+        $array[1] = 20;
+        return $array;
+    )");
+
+    auto first = cdata.item(0);
+    auto second = cdata.item(1);
+
+    ASSERT_TRUE(first.isInt());
+    ASSERT_TRUE(second.isInt());
+    ASSERT_EQ(first.toInt(), 10);
+    ASSERT_EQ(second.toInt(), 20);
+}
+
+TEST(variant, itemRef1) {
+    auto a = create_list();
+    auto ref = a.itemRef(2);
+    auto ref2 = a.itemRef(2);
+
+    ASSERT_NE(ref.reference(), nullptr);
+
+    ref = "rust";
+    ASSERT_STREQ(a.item(2).toCString(), "rust");
+    ASSERT_STREQ(ref2.toCString(), "rust");
+}
+
+TEST(variant, itemRef2) {
+    auto a = create_map();
+    auto ref = a.itemRef("php");
+    auto ref2 = a.itemRef("php");
+    ref = 2000;
+    ASSERT_EQ(a.item("php").toInt(), 2000);
+    ASSERT_EQ(ref2.toInt(), 2000);
+}
+
+TEST(variant, itemRef_missing_element_is_created) {
+    Array array;
+    auto ref = array.itemRef("created");
+    ref = 42;
+
+    ASSERT_TRUE(array.exists("created"));
+    ASSERT_EQ(array.offsetGet("created").toInt(), 42);
+}
+
+TEST(variant, operator_arithmetic) {
+    // Test addition operator
+    {
+        Variant v1(10);
+        Variant result = 5 + v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 15);
+
+        Variant result2 = 3.14 + v1;
+        ASSERT_TRUE(result2.isFloat());
+        ASSERT_NEAR(result2.toFloat(), 13.14, 0.001);
+
+        Variant v2("20");
+        Variant result3 = 5 + v2;
+        ASSERT_TRUE(result3.isInt());
+        ASSERT_EQ(result3.toInt(), 25);
+    }
+
+    // Test subtraction operator
+    {
+        Variant v1(10);
+        Variant result = 15 - v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 5);
+
+        Variant result2 = 20.5 - v1;
+        ASSERT_TRUE(result2.isFloat());
+        ASSERT_NEAR(result2.toFloat(), 10.5, 0.001);
+    }
+
+    // Test multiplication operator
+    {
+        Variant v1(5);
+        Variant result = 3 * v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 15);
+
+        Variant result2 = 2.5 * v1;
+        ASSERT_TRUE(result2.isFloat());
+        ASSERT_NEAR(result2.toFloat(), 12.5, 0.001);
+    }
+
+    // Test division operator
+    {
+        Variant v1(4);
+        Variant result = 20 / v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 5);
+
+        Variant v2(3);
+        Variant result2 = 10 / v2;
+        ASSERT_TRUE(result2.isFloat());
+        ASSERT_NEAR(result2.toFloat(), 3.333, 0.001);
+    }
+
+    // Test modulo operator
+    {
+        Variant v1(3);
+        Variant result = 10 % v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 1);
+
+        // Test the specialized Float version
+        Variant result2 = 10.5 % v1;
+        ASSERT_TRUE(result2.isInt());
+        ASSERT_EQ(result2.toInt(), 1);
+    }
+}
+
+TEST(variant, operator_bitwise) {
+    // Test left shift operator
+    {
+        Variant v1(2);
+        Variant result = 4 << v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 16);  // 4 << 2 = 16
+    }
+
+    // Test right shift operator
+    {
+        Variant v1(2);
+        Variant result = 16 >> v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 4);  // 16 >> 2 = 4
+    }
+
+    // Test bitwise AND operator
+    {
+        Variant v1(12);            // 1100 in binary
+        Variant result = 10 & v1;  // 1010 in binary
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 8);  // 1000 in binary
+    }
+
+    // Test bitwise OR operator
+    {
+        Variant v1(12);            // 1100 in binary
+        Variant result = 10 | v1;  // 1010 in binary
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 14);  // 1110 in binary
+    }
+
+    // Test bitwise XOR operator
+    {
+        Variant v1(12);            // 1100 in binary
+        Variant result = 10 ^ v1;  // 1010 in binary
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 6);  // 0110 in binary
+    }
+}
+
+TEST(variant, operator_comparison) {
+    // Test less than or equal operator
+    {
+        Variant v1(10);
+        ASSERT_TRUE((5 <= v1).toBool());
+        ASSERT_TRUE((10 <= v1).toBool());
+        ASSERT_FALSE((15 <= v1).toBool());
+    }
+
+    // Test less than operator
+    {
+        Variant v1(10);
+        ASSERT_TRUE((5 < v1).toBool());
+        ASSERT_FALSE((10 < v1).toBool());
+        ASSERT_FALSE((15 < v1).toBool());
+    }
+
+    // Test greater than or equal operator
+    {
+        Variant v1(10);
+        ASSERT_FALSE((5 >= v1).toBool());
+        ASSERT_TRUE((10 >= v1).toBool());
+        ASSERT_TRUE((15 >= v1).toBool());
+    }
+
+    // Test greater than operator
+    {
+        Variant v1(10);
+        ASSERT_FALSE((5 > v1).toBool());
+        ASSERT_FALSE((10 > v1).toBool());
+        ASSERT_TRUE((15 > v1).toBool());
+    }
+
+    // Test equality operator
+    {
+        Variant v1(10);
+        ASSERT_FALSE(5 == v1);
+        ASSERT_TRUE(10 == v1);
+        ASSERT_FALSE(15 == v1);
+
+        // Test with different types
+        Variant v2("10");
+        ASSERT_TRUE(10 == v2);
+        ASSERT_TRUE("10" == v2);
+    }
+}
+
+TEST(variant, operator_mixed_types) {
+    // Test operations with different numeric types
+    {
+        Variant v1(10.5);  // Float
+        Variant result = 5 + v1;
+        ASSERT_TRUE(result.isFloat());
+        ASSERT_NEAR(result.toFloat(), 15.5, 0.001);
+
+        Variant result2 = 20 - v1;
+        ASSERT_TRUE(result2.isFloat());
+        ASSERT_NEAR(result2.toFloat(), 9.5, 0.001);
+    }
+
+    // Test operations with string numbers
+    {
+        Variant v1("15");
+        Variant result = 5 + v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 20);
+
+        Variant result2 = 25 - v1;
+        ASSERT_TRUE(result2.isInt());
+        ASSERT_EQ(result2.toInt(), 10);
+    }
+
+    // Test boolean operations
+    {
+        Variant v1(true);
+        Variant result = 1 + v1;  // true converts to 1
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 2);
+
+        Variant v2(false);
+        Variant result2 = 5 + v2;  // false converts to 0
+        ASSERT_TRUE(result2.isInt());
+        ASSERT_EQ(result2.toInt(), 5);
+    }
+}
+
+TEST(variant, operator_edge_cases) {
+    // Test with zero values
+    {
+        Variant v1(0);
+        Variant result = 10 + v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 10);
+
+        Variant result2 = 10 * v1;
+        ASSERT_TRUE(result2.isInt());
+        ASSERT_EQ(result2.toInt(), 0);
+    }
+
+    // Test with negative values
+    {
+        Variant v1(-5);
+        Variant result = 10 + v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 5);
+
+        Variant result2 = 10 - v1;
+        ASSERT_TRUE(result2.isInt());
+        ASSERT_EQ(result2.toInt(), 15);
+    }
+
+    // Test with large values
+    {
+        Variant v1(1000000L);
+        Variant result = 2000000L + v1;
+        ASSERT_TRUE(result.isInt());
+        ASSERT_EQ(result.toInt(), 3000000L);
+    }
+}
+
+TEST(variant, copy_self_1) {
+    auto s = zend_string_init(ZEND_STRL("hello world"), false);
+
+    var v1(s);
+    var v2(s);
+
+    v1 = v2;
+
+    zend_string_release(s);
+}
+
+TEST(variant, copy_self_2) {
+    string s1("hello world");
+    var s2(s1.ptr(), Ctor::Indirect);
+    s2 = s1;
+}
+
+TEST(variant, assign_ref1) {
+    var v1("hello world");
+    ASSERT_TRUE(v1.isString());
+
+    Array arr;
+    v1 = &arr;
+    ASSERT_TRUE(v1.isReference());
+}
+
+TEST(variant, assign_ref2) {
+    Array arr = create_list();
+    Reference ref = arr.toReference();
+
+    var v1(&ref);
+    ASSERT_TRUE(v1.isReference());
+    ASSERT_EQ(v1.length(), 5);
+}
+
+TEST(variant, assign_ref3) {
+    Ref a;
+    a = "hello";
+
+    var b;
+    b = 100;
+
+    ASSERT_EQ(b.toInt(), 100);
+    b = &a;
+    ASSERT_STREQ(b.toCString(), "hello");
+}
+
+TEST(variant, assign_ref4) {
+    auto a = Array({Var(1L), Var(2L), Var(3L)});
+    auto b = Array({Var(4L), Var(5L)});
+
+    Ref ref = b.toReference();
+    ASSERT_TRUE(ref.isReference());
+    ASSERT_TRUE(ref.isArray());
+    ASSERT_EQ(ref.length(), 2);
+
+    a.newItem() = 100;
+    a.newItem() = &ref;
+    ASSERT_EQ(a.count(), 5);
+
+    auto item = a.get(4);
+    ASSERT_TRUE(item.isReference());
+    ASSERT_TRUE(item.isArray());
+    ASSERT_EQ(item.length(), 2);
+}
+
+TEST(variant, assign_ref5) {
+    Array a;
+    Ref b;
+    Ref tmp_var_0;
+
+    a = Array({Var(1L), Var(2L), Var(3L)});
+    ASSERT_EQ(a.count(), 3);
+
+    tmp_var_0 = a.toReference();
+    // ref = ref *
+    b = &tmp_var_0;
+    ASSERT_EQ(b.length(), 3);
+
+    b.append(5L);
+    ASSERT_EQ(b.length(), 4);
+}
+
+TEST(variant, assign_ref6) {
+    Array a;
+    Ref b;
+    Ref tmp_var_0;
+
+    a = Array({Var(1L), Var(2L), Var(3L)});
+    ASSERT_EQ(a.count(), 3);
+
+    tmp_var_0 = a.toReference();
+    // ref = ref
+    b = tmp_var_0;
+    ASSERT_EQ(b.length(), 3);
+
+    b.append(5L);
+    ASSERT_EQ(b.length(), 4);
+}
+
+TEST(variant, assign_ref_after_unset) {
+    Var a = 1L;
+    Ref b;
+    Ref tmp_var_0;
+
+    tmp_var_0 = a.toReference();
+    b = &tmp_var_0;
+    b = Var(2L);
+    ASSERT_EQ(a.toInt(), 2);
+    ASSERT_EQ(b.toInt(), 2);
+
+    b.unset();
+    ASSERT_FALSE(exists(b));
+    ASSERT_EQ(a.toInt(), 2);
+
+    b = Var(1L);
+    ASSERT_EQ(b.toInt(), 1);
+    ASSERT_EQ(a.toInt(), 2);
+}
+
+TEST(variant, deref) {
+    auto arr = create_map();
+    Ref ref1 = arr.toReference();
+    ASSERT_EQ(ref1.length(), 5);
+
+    Ref ref2 = ref1;
+    ASSERT_EQ(ref2.getRefCount(), 3);
+
+    ASSERT_EQ(Z_TYPE_P(arr.ptr()), IS_REFERENCE);
+    ASSERT_EQ(Z_TYPE_P(ref1.ptr()), IS_REFERENCE);
+    ASSERT_EQ(Z_TYPE_P(ref2.ptr()), IS_REFERENCE);
+
+    zval *zv1 = ref2.ptr();
+    deref(zv1);
+    ASSERT_EQ(Z_TYPE_P(zv1), IS_ARRAY);
+
+    ref1.deref();
+    ASSERT_EQ(Z_TYPE_P(ref1.ptr()), IS_ARRAY);
+
+    zval *zv3 = arr.ptr();
+    deref(zv3);
+    ASSERT_EQ(Z_TYPE_P(zv3), IS_ARRAY);
+}
+
+TEST(variant, indirect) {
+    auto arr = create_map();
+    var s = "hello";
+
+    var v{arr.ptr(), Ctor::Indirect};
+    ASSERT_TRUE(zval_is_indirect(v.ptr()));
+    ASSERT_TRUE(v.isArray());
+}

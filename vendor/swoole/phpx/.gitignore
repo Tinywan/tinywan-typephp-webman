@@ -1,0 +1,73 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+/.cproject
+/.project
+/.idea
+/cmake_install.cmake
+.cmake
+/CMakeCache.txt
+/Makefile
+/phpx.cbp
+/install_manifest.txt
+/Testing
+/examples/embed/embed
+.DS_Store
+build.ninja
+.ninja_deps
+.ninja_log
+CMakeFiles/
+examples/gtk/gtk.so.dSYM/
+examples/test/test.so.dSYM/
+console/vendor
+console/test
+console/composer.lock
+bin/phpx
+/build/
+\.settings/
+/Debug/
+/lib/phpx.exp
+/examples/embed/bin/embed
+/bin/phpx-tests
+/vendor
+/.phpunit.cache
+/composer.lock
+/bin/PHP-Parser-*
+/examples/gtk/Makefile
+/examples/gtk/cmake_install.cmake
+/examples/gtk/CMakeCache.txt
+/examples/embed/cmake_install.cmake
+/examples/embed/CMakeCache.txt
+/test_output.xml
+/test_results.xml
+/wasm/wasm32-wasip2/
+/phpx.sln

@@ -1,0 +1,79 @@
+<?php
+
+abstract class TestAbstract {
+    abstract public function test(): string;
+}
+
+class TestClass
+{
+    static int $propInt = 1990018900;
+    static string $propString = "Hello, World!";
+
+    protected bool $propBool = true;
+
+    public function test(): string
+    {
+        return 'parent test';
+    }
+
+    public function fun()
+    {
+        return pi();
+    }
+}
+
+class TestClass2 extends TestClass
+{
+    public array $propArray = [1, 2, 3, 4, 5];
+    public int $propInt2 = 0;
+    public array $propArray2 = ['value' => 'hello'];
+    
+    public const CONST_ARRAY = [];
+
+    public function test(): string
+    {
+        return 'child test';
+    }
+}
+
+class TestClass3 extends TestAbstract {
+    public function test(): string
+    {
+        return 'override test';
+    }
+}
+
+class TestMagicStaticCall
+{
+    public static function __callStatic(string $name, array $arguments): string
+    {
+        return $name . ':' . $arguments[0];
+    }
+}
+
+function createUser(
+    string $name,
+    int    $age,
+    string $city = 'Beijing',
+    bool   $vip = false
+): array
+{
+    return ['name' => $name, 'age' => $age, 'city' => $city, 'vip' => $vip];
+}
+
+class TestNamedArgs
+{
+    public function __construct(
+        public string $name,
+        public int $age,
+        public string $city = 'Beijing',
+        public bool $vip = false,
+    ) {
+    }
+
+    public function describe(string $prefix, string $suffix = '', bool $upper = false): string
+    {
+        $text = $prefix . ':' . $this->name . ':' . $suffix;
+        return $upper ? strtoupper($text) : $text;
+    }
+}

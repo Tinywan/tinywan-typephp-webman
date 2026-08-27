@@ -1,0 +1,162 @@
+#include "phpx_test.h"
+#include "phpx_func.h"
+#include "phpx_class.h"
+#include "phpx_helper.h"
+
+#include <type_traits>
+
+static_assert(std::is_same_v<decltype(std::declval<const php::Args &>().count()), uint32_t>,
+              "Args::count() must use Zend's argument-count type");
+#include "const/curl.h"
+
+using namespace php;
+
+static const char *g_date = "2009-02-15";
+
+TEST(caller, args) {
+    auto arr1 = create_list();
+    Args args;
+    for (auto kv : arr1) {
+        args.append(kv.value);
+    }
+
+    ASSERT_TRUE(args.exists(2));
+    ASSERT_FALSE(args.exists(args.count()));
+
+    ASSERT_FALSE(args.empty());
+
+    Args args2;
+    ASSERT_TRUE(args2.empty());
+
+    auto arr2 = args.toArray();
+    ASSERT_TRUE(arr2.equals(arr1));
+
+    ASSERT_TRUE(args.get(100).isNull());
+    ASSERT_STREQ(args.get(2).toCString(), "go");
+}
+
+TEST(caller, args_owns_a_contiguous_zval_array_and_preserves_references) {
+    Variant value = 1;
+    Reference reference = value.toReference();
+
+    Args args;
+    args.append("first");
+    args.append(reference);
+
+    ASSERT_EQ(Z_TYPE(args.ptr()[0]), IS_STRING);
+    ASSERT_EQ(Z_TYPE(args.ptr()[1]), IS_REFERENCE);
+    args.set(1, 42);
+    ASSERT_EQ(value.toInt(), 42);
+
+    Args copied = args;
+    ASSERT_EQ(copied.count(), 2u);
+    ASSERT_EQ(Z_TYPE(copied.ptr()[0]), IS_STRING);
+    ASSERT_EQ(copied.get(1).toInt(), 42);
+
+    Args moved = std::move(copied);
+    ASSERT_TRUE(copied.empty());
+    ASSERT_EQ(moved.count(), 2u);
+    ASSERT_STREQ(moved.get(0).toCString(), "first");
+}
+
+TEST(caller, func) {
+    auto retval = is_dir({"/tmp"});
+    ASSERT_TRUE(retval.toBool());
+
+    retval = is_dir({"/tmp-not-exists"});
+    ASSERT_FALSE(retval.toBool());
+}
+
+TEST(caller, method) {
+    auto retval = DateTime::createFromFormat("j-M-Y", "15-Feb-2009");
+    ASSERT_TRUE(retval.isObject());
+    Object o(retval);
+    auto _date = o.call("format", {"Y-m-d"});
+    ASSERT_STREQ(_date.toCString(), g_date);
+}
+
+TEST(caller, redis) {
+    Redis redis{};
+    Array context{};
+    auto ref_context = context.toReference();
+    auto rv = redis.connect("127.0.0.1", 6379, 2.5, null, 0, 0, ref_context);
+    ASSERT_TRUE(rv.toBool());
+    auto val = "hello phpx";
+    auto key = "phpx_test_key";
+    redis.set(key, val);
+    auto val2 = redis.get({key});
+
+    ASSERT_STREQ(val2.toCString(), val);
+}
+
+TEST(caller, curl) {
+    auto ch = curl_init();
+    auto url = "https://www.gov.cn/";
+    Array headerArray = {{"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
+                          "Gecko) Chrome/58.0.3029.110 Safari/537.3"},
+                         {"Accept-Language: zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3"}};
+    curl_setopt(ch, CURLOPT_URL, url);
+    curl_setopt(ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt(ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt(ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt(ch, CURLOPT_HTTPHEADER, headerArray);
+    auto output = curl_exec(ch);
+    curl_close(ch);
+
+    ASSERT_FALSE(output.empty());
+    ASSERT_TRUE(str_contains(output, "中国").toBool());
+}
+
+TEST(caller, call) {
+    String php_uname_fn("php_uname");
+    auto rs = call(php_uname_fn);
+    ASSERT_TRUE(rs.isString());
+    ASSERT_TRUE(str_contains(rs, "x86_64").isTrue());
+
+    rs = call(php_uname_fn, {"m"});
+    ASSERT_TRUE(rs.isString());
+    ASSERT_TRUE(str_contains(rs, "x86_64").isTrue());
+
+    Array arr;
+    arr.append("m");
+    rs = call(php_uname_fn, arr);
+    ASSERT_TRUE(rs.isString());
+    ASSERT_TRUE(str_contains(rs, "x86_64").isTrue());
+
+    Args args;
+    args.append("m");
+    rs = call(php_uname_fn, args);
+    ASSERT_TRUE(rs.isString());
+    ASSERT_TRUE(str_contains(rs, "x86_64").isTrue());
+}
+
+TEST(caller, http_build_query) {
+    Array arr1;
+    arr1.set("hello", "world");
+    arr1.set("count", 182);
+    auto query = http_build_query(arr1, null, "&", PHP_QUERY_RFC1738);
+
+    ASSERT_TRUE(query.isString());
+    ASSERT_GT(query.length(), 10);
+
+    String expected = "hello=world&count=182";
+    ASSERT_STREQ(query.toCString(), expected.data());
+}
+
+TEST(caller, md5) {
+    constexpr int l = 1024;
+    auto rdata = random_bytes({l});
+    ASSERT_EQ(rdata.length(), l);
+    auto hash1 = md5(rdata);
+    auto hash2 = hash("md5", rdata);
+    ASSERT_STREQ(hash1.toCString(), hash2.toCString());
+}
+
+TEST(caller, sha1) {
+    constexpr int l = 1024;
+    auto rdata = random_bytes({l});
+    ASSERT_EQ(rdata.length(), l);
+    auto hash1 = sha1(rdata);
+    auto hash2 = hash("sha1", rdata);
+    ASSERT_STREQ(hash1.toCString(), hash2.toCString());
+}

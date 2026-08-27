@@ -43,7 +43,6 @@ ignore:
   - vendor/workerman/webman-framework/src/start.php
   - vendor/workerman/webman-framework/src/windows.php
   - vendor/workerman/webman-framework/src/Install.php
-  - vendor/workerman/webman-framework/src/support/view
   - vendor/nikic/fast-route/src/bootstrap.php
   - vendor/workerman/coroutine/tests
   - vendor/workerman/coroutine/stubs
@@ -55,8 +54,6 @@ ignore:
   - vendor/workerman/workerman/src/Events/Swow.php
   - vendor/workerman/coroutine/src/Pool.php
   - vendor/workerman/coroutine/src/Utils/DestructionWatcher.php
-  - vendor/nikic/fast-route/src/functions.php
-  - vendor/workerman/webman-framework/src/support/helpers.php
   - app/model
   - app/process/Monitor.php
 

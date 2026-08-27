@@ -1,0 +1,583 @@
+#include <typephp_helper.h>
+
+#include <cstring>
+#include <string>
+
+void typephp_unset_typed_property(zend_object *object, zend_string *member, void **cache_slot) {
+    zend_class_entry *ce = object->ce;
+    zend_property_info *property_info = zend_get_property_info(ce, member, 1);
+
+    if (property_info != nullptr && ZEND_TYPE_IS_SET(property_info->type)) {
+        if (property_info->flags & ZEND_ACC_STATIC) {
+            goto std_unset;
+        }
+
+        zend_uchar pure_mask = ZEND_TYPE_PURE_MASK(property_info->type);
+        if (ZEND_TYPE_HAS_NAME(property_info->type)) {
+            goto std_unset;
+        }
+
+        /* Preserve an existing reference container while resetting its inner
+         * value, otherwise references to the property would become detached. */
+        zval *member_p = OBJ_PROP(object, property_info->offset);
+        zval *value_p = Z_ISREF_P(member_p) ? Z_REFVAL_P(member_p) : member_p;
+        zend_uchar type_mask = pure_mask & static_cast<zend_uchar>(~MAY_BE_NULL);
+
+        switch (type_mask) {
+        case MAY_BE_LONG:
+            zval_ptr_dtor(value_p);
+            ZVAL_LONG(value_p, 0);
+            return;
+        case MAY_BE_DOUBLE:
+            zval_ptr_dtor(value_p);
+            ZVAL_DOUBLE(value_p, 0.0);
+            return;
+        case MAY_BE_BOOL:
+            zval_ptr_dtor(value_p);
+            ZVAL_FALSE(value_p);
+            return;
+        case MAY_BE_STRING:
+            zval_ptr_dtor(value_p);
+            ZVAL_EMPTY_STRING(value_p);
+            return;
+        case MAY_BE_ARRAY:
+            zval_ptr_dtor(value_p);
+            ZVAL_EMPTY_ARRAY(value_p);
+            return;
+        default:
+            break;
+        }
+    }
+
+std_unset:
+    zend_std_unset_property(object, member, cache_slot);
+}
+
+namespace {
+
+zend_function *create_property_hook(zend_class_entry *class_entry,
+                                    zend_property_info *property_info,
+                                    std::string_view method_name,
+                                    std::string_view hook_name) {
+    if (method_name.empty()) {
+        return nullptr;
+    }
+
+    auto *source = static_cast<zend_function *>(
+        zend_hash_str_find_ptr(&class_entry->function_table, method_name.data(), method_name.size()));
+    if (UNEXPECTED(source == nullptr)) {
+        zend_error_noreturn(E_CORE_ERROR,
+                            "Property hook implementation %s::%.*s is missing",
+                            ZSTR_VAL(class_entry->name),
+                            static_cast<int>(method_name.size()),
+                            method_name.data());
+    }
+
+    auto *hook = static_cast<zend_internal_function *>(pemalloc(sizeof(zend_internal_function), true));
+    memcpy(hook, &source->internal_function, sizeof(zend_internal_function));
+    hook->function_name = zend_string_init(hook_name.data(), hook_name.size(), true);
+    hook->prop_info = property_info;
+    return reinterpret_cast<zend_function *>(hook);
+}
+
+zend_function *create_abstract_property_hook(zend_class_entry *class_entry,
+                                             zend_property_info *property_info,
+                                             zend_property_hook_kind kind) {
+    const bool setter = kind == ZEND_PROPERTY_HOOK_SET;
+    const uint32_t num_args = setter ? 1 : 0;
+    auto *arg_info =
+        static_cast<zend_internal_arg_info *>(pemalloc(sizeof(zend_internal_arg_info) * (num_args + 1), true));
+    memset(arg_info, 0, sizeof(zend_internal_arg_info) * (num_args + 1));
+    arg_info[0].name = reinterpret_cast<const char *>(static_cast<uintptr_t>(num_args));
+    if (setter) {
+        const zend_type void_type = ZEND_TYPE_INIT_CODE(IS_VOID, false, 0);
+        arg_info[0].type = void_type;
+    } else {
+        arg_info[0].type = property_info->type;
+    }
+    if (setter) {
+        arg_info[1].name = "value";
+        arg_info[1].type = property_info->type;
+    }
+
+    auto *hook = static_cast<zend_internal_function *>(pemalloc(sizeof(zend_internal_function), true));
+    memset(hook, 0, sizeof(zend_internal_function));
+    hook->type = ZEND_INTERNAL_FUNCTION;
+    hook->fn_flags = ZEND_ACC_PUBLIC | ZEND_ACC_ABSTRACT | ZEND_ACC_HAS_RETURN_TYPE;
+    if (setter && ZEND_TYPE_IS_SET(property_info->type)) {
+        hook->fn_flags |= ZEND_ACC_HAS_TYPE_HINTS;
+    }
+    const std::string property_name{zend_get_unmangled_property_name(property_info->name)};
+    const std::string hook_name = "$" + property_name + (setter ? "::set" : "::get");
+    hook->function_name = zend_string_init(hook_name.data(), hook_name.size(), true);
+    hook->scope = class_entry;
+    hook->num_args = num_args;
+    hook->required_num_args = num_args;
+    hook->arg_info = arg_info + 1;
+    hook->prop_info = property_info;
+    hook->module = class_entry->info.internal.module;
+    ZEND_MAP_PTR_INIT(hook->run_time_cache, nullptr);
+    return reinterpret_cast<zend_function *>(hook);
+}
+
+zend_function *find_property_helper(zend_object *object, zend_string *member, const char *prefix, size_t prefix_len) {
+    static const char hex[] = "0123456789abcdef";
+    const size_t member_len = ZSTR_LEN(member);
+    // Property names are runtime input. Use Zend's checked allocator so the
+    // hexadecimal expansion cannot wrap before the method-name allocation.
+    zend_string *method = zend_string_safe_alloc(2, member_len, prefix_len, false);
+    memcpy(ZSTR_VAL(method), prefix, prefix_len);
+    for (size_t i = 0; i < member_len; i++) {
+        const unsigned char ch = static_cast<unsigned char>(ZSTR_VAL(member)[i]);
+        ZSTR_VAL(method)[prefix_len + i * 2] = hex[ch >> 4];
+        ZSTR_VAL(method)[prefix_len + i * 2 + 1] = hex[ch & 0x0f];
+    }
+    ZSTR_VAL(method)[ZSTR_LEN(method)] = '\0';
+    auto *function = static_cast<zend_function *>(zend_hash_find_ptr(&object->ce->function_table, method));
+    zend_string_release(method);
+    return function;
+}
+
+zval *read_hook_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv) {
+    static const char prefix[] = "__typephp_property_get_";
+    zend_function *function = find_property_helper(object, member, prefix, sizeof(prefix) - 1);
+    if (function == nullptr) {
+        return zend_std_read_property(object, member, type, cache_slot, rv);
+    }
+    ZVAL_UNDEF(rv);
+    zend_call_known_instance_method_with_0_params(function, object, rv);
+    return rv;
+}
+
+bool reject_asymmetric_property_write(zend_object *object, zend_string *member) {
+    static const char private_prefix[] = "__typephp_property_private_set_";
+    static const char protected_prefix[] = "__typephp_property_protected_set_";
+    zend_function *visibility = find_property_helper(object, member, private_prefix, sizeof(private_prefix) - 1);
+    auto *scope = php::FakeScopeGuard::current();
+    if (visibility != nullptr && scope != visibility->common.scope) {
+        zend_throw_error(nullptr,
+                         "Cannot modify private(set) property %s::$%s",
+                         ZSTR_VAL(visibility->common.scope->name),
+                         ZSTR_VAL(member));
+        return true;
+    }
+    if (visibility == nullptr) {
+        visibility = find_property_helper(object, member, protected_prefix, sizeof(protected_prefix) - 1);
+        if (visibility != nullptr && (scope == nullptr || (!instanceof_function(scope, visibility->common.scope) &&
+                                                           !instanceof_function(visibility->common.scope, scope)))) {
+            zend_throw_error(nullptr,
+                             "Cannot modify protected(set) property %s::$%s",
+                             ZSTR_VAL(visibility->common.scope->name),
+                             ZSTR_VAL(member));
+            return true;
+        }
+    }
+    return false;
+}
+
+zval *write_hook_property(zend_object *object, zend_string *member, zval *value, void **cache_slot);
+
+#if PHP_VERSION_ID >= 80500
+bool is_compatible_property_scope(const zend_class_entry *declaring_scope, const zend_class_entry *scope) {
+    return scope != nullptr && (declaring_scope == scope || instanceof_function(scope, declaring_scope) ||
+                                instanceof_function(declaring_scope, scope));
+}
+
+bool has_property_read_access(const zend_property_info *property_info, const zend_class_entry *scope) {
+    if (property_info->flags & ZEND_ACC_PRIVATE) {
+        return property_info->ce == scope;
+    }
+    if (property_info->flags & ZEND_ACC_PROTECTED) {
+        return is_compatible_property_scope(property_info->prototype->ce, scope);
+    }
+    return true;
+}
+
+bool has_property_set_access(const zend_property_info *property_info, const zend_class_entry *scope) {
+    if (property_info->flags & ZEND_ACC_PRIVATE_SET) {
+        return property_info->ce == scope;
+    }
+    if (property_info->flags & ZEND_ACC_PROTECTED_SET) {
+        return is_compatible_property_scope(property_info->prototype->ce, scope);
+    }
+    return true;
+}
+
+zend_property_info *find_clone_property(zend_object *object, zend_string *member, const zend_class_entry *scope) {
+    // Parent-private properties are stored under a mangled key on the child
+    // object. Resolve the source-level name against the lexical scope first,
+    // matching the behavior of a property write compiled in that scope.
+    if (scope != nullptr && scope != object->ce && instanceof_function(object->ce, scope)) {
+        auto *property_info = static_cast<zend_property_info *>(zend_hash_find_ptr(&scope->properties_info, member));
+        if (property_info != nullptr && property_info->ce == scope && (property_info->flags & ZEND_ACC_PRIVATE)) {
+            return property_info;
+        }
+    }
+
+    return static_cast<zend_property_info *>(zend_hash_find_ptr(&object->ce->properties_info, member));
+}
+
+bool property_uses_strict_types() {
+    zend_execute_data *execute_data = EG(current_execute_data);
+    return execute_data != nullptr && execute_data->func != nullptr && ZEND_CALL_USES_STRICT_TYPES(execute_data);
+}
+
+zval *write_parent_private_clone_property(zend_object *object, zend_property_info *property_info, zval *value) {
+    zval *property = OBJ_PROP(object, property_info->offset);
+    const bool strict = property_uses_strict_types();
+    zval assigned;
+
+    Z_TRY_ADDREF_P(value);
+    ZVAL_COPY_VALUE(&assigned, value);
+    if (ZEND_TYPE_IS_SET(property_info->type) &&
+        UNEXPECTED(!zend_verify_property_type(property_info, &assigned, strict))) {
+        zval_ptr_dtor(&assigned);
+        return &EG(error_zval);
+    }
+
+    Z_PROP_FLAG_P(property) &= ~(IS_PROP_UNINIT | IS_PROP_REINITABLE);
+    return zend_assign_to_variable(property, &assigned, IS_TMP_VAR, strict);
+}
+
+zval *write_clone_property(zend_object *object, zend_string *member, zval *value, const zend_class_entry *scope) {
+    zend_property_info *property_info = find_clone_property(object, member, scope);
+    if (property_info == nullptr || (property_info->flags & ZEND_ACC_STATIC) ||
+        !has_property_read_access(property_info, scope) || !has_property_set_access(property_info, scope)) {
+        php::FakeScopeGuard scope_guard{scope};
+        return zend_std_write_property(object, member, value, nullptr);
+    }
+
+    php::FakeScopeGuard scope_guard{property_info->ce};
+    static const char setter_prefix[] = "__typephp_property_set_";
+    static const char getter_prefix[] = "__typephp_property_get_";
+    if (find_property_helper(object, member, setter_prefix, sizeof(setter_prefix) - 1) != nullptr ||
+        find_property_helper(object, member, getter_prefix, sizeof(getter_prefix) - 1) != nullptr) {
+        return write_hook_property(object, member, value, nullptr);
+    }
+
+    if ((property_info->flags & ZEND_ACC_PRIVATE) && property_info->ce != object->ce) {
+        return write_parent_private_clone_property(object, property_info, value);
+    }
+    return zend_std_write_property(object, member, value, nullptr);
+}
+
+zend_object *clone_object_with(zend_object *old_object, const zend_class_entry *scope, const HashTable *properties) {
+    // Direct AOT method calls have no Zend method frame for
+    // zend_get_executed_scope(). Scoped php::call() carries that lexical scope
+    // separately, while ordinary Zend calls provide it in the clone_obj_with
+    // argument.
+    if (scope == nullptr) {
+        scope = php::detail::getLexicalCallScope();
+    }
+    zend_object *new_object = old_object->handlers->clone_obj(old_object);
+    if (new_object == nullptr) {
+        return nullptr;
+    }
+
+    // A custom clone allocator may restore its base handlers. The clone has
+    // the same runtime class as the source, so retain the exact TypePHP table
+    // before dispatching property hooks on the new object.
+    new_object->handlers = old_object->handlers;
+    if (UNEXPECTED(EG(exception))) {
+        return new_object;
+    }
+
+    if (ZEND_CLASS_HAS_READONLY_PROPS(new_object->ce)) {
+        for (uint32_t i = 0; i < new_object->ce->default_properties_count; i++) {
+            Z_PROP_FLAG_P(OBJ_PROP_NUM(new_object, i)) |= IS_PROP_REINITABLE;
+        }
+    }
+
+    ZEND_HASH_FOREACH_KEY_VAL(properties, zend_ulong index, zend_string * member, zval * value) {
+        if (UNEXPECTED(Z_ISREF_P(value))) {
+            if (Z_REFCOUNT_P(value) == 1) {
+                value = Z_REFVAL_P(value);
+            } else {
+                zend_throw_error(nullptr, "Cannot assign by reference when cloning with updated properties");
+                break;
+            }
+        }
+
+        if (UNEXPECTED(member == nullptr)) {
+            member = zend_long_to_str(index);
+            write_clone_property(new_object, member, value, scope);
+            zend_string_release_ex(member, false);
+        } else {
+            write_clone_property(new_object, member, value, scope);
+        }
+
+        if (UNEXPECTED(EG(exception))) {
+            break;
+        }
+    }
+    ZEND_HASH_FOREACH_END();
+
+    // Do not clear IS_PROP_REINITABLE globally here. Zend intentionally leaves
+    // readonly properties that were not present in `properties` reinitializable
+    // once on the clone; each successful write consumes the flag for the slot
+    // it updates.
+    return new_object;
+}
+#endif
+
+zval *write_hook_property(zend_object *object, zend_string *member, zval *value, void **cache_slot) {
+    if (reject_asymmetric_property_write(object, member)) {
+        return &EG(uninitialized_zval);
+    }
+
+    static const char setter_prefix[] = "__typephp_property_set_";
+    zend_function *function = find_property_helper(object, member, setter_prefix, sizeof(setter_prefix) - 1);
+    if (function == nullptr) {
+        static const char getter_prefix[] = "__typephp_property_get_";
+        if (find_property_helper(object, member, getter_prefix, sizeof(getter_prefix) - 1) != nullptr) {
+            zend_throw_error(nullptr, "Property %s::$%s is read-only", ZSTR_VAL(object->ce->name), ZSTR_VAL(member));
+            return &EG(uninitialized_zval);
+        }
+        return zend_std_write_property(object, member, value, cache_slot);
+    }
+
+    zval retval;
+    ZVAL_UNDEF(&retval);
+    zend_call_known_instance_method_with_1_params(function, object, &retval, value);
+    if (!Z_ISUNDEF(retval)) {
+        zval_ptr_dtor(&retval);
+    }
+    zend_property_info *property_info = zend_get_property_info(object->ce, member, true);
+    if (property_info == nullptr || (property_info->flags & ZEND_ACC_STATIC)) {
+        return &EG(uninitialized_zval);
+    }
+    return OBJ_PROP(object, property_info->offset);
+}
+
+void initialize_property_handlers(zend_object_handlers *handlers, const zend_object_handlers *base_handlers) {
+    memcpy(handlers, base_handlers, sizeof(zend_object_handlers));
+    handlers->read_property = read_hook_property;
+    handlers->write_property = write_hook_property;
+    handlers->unset_property = typephp_unset_typed_property;
+#if PHP_VERSION_ID >= 80500
+    handlers->clone_obj_with = clone_object_with;
+#endif
+}
+
+}  // namespace
+
+void typephp_register_property_hooks(zend_class_entry *class_entry,
+                                     zend_property_info *property_info,
+                                     std::string_view getter,
+                                     std::string_view setter) {
+    ZEND_ASSERT(class_entry != nullptr);
+    ZEND_ASSERT(property_info != nullptr);
+    ZEND_ASSERT(property_info->hooks == nullptr);
+
+    property_info->hooks = static_cast<zend_function **>(pemalloc(ZEND_PROPERTY_HOOK_STRUCT_SIZE, true));
+    memset(property_info->hooks, 0, ZEND_PROPERTY_HOOK_STRUCT_SIZE);
+
+    const std::string property_name{zend_get_unmangled_property_name(property_info->name)};
+    if (!getter.empty()) {
+        const std::string hook_name = "$" + property_name + "::get";
+        property_info->hooks[ZEND_PROPERTY_HOOK_GET] =
+            create_property_hook(class_entry, property_info, getter, hook_name);
+    }
+    if (!setter.empty()) {
+        const std::string hook_name = "$" + property_name + "::set";
+        property_info->hooks[ZEND_PROPERTY_HOOK_SET] =
+            create_property_hook(class_entry, property_info, setter, hook_name);
+    }
+
+    class_entry->num_hooked_props++;
+    if (class_entry->get_iterator == nullptr) {
+        class_entry->get_iterator = zend_hooked_object_get_iterator;
+    }
+}
+
+void typephp_register_abstract_property_hooks(zend_class_entry *class_entry,
+                                              zend_property_info *property_info,
+                                              bool getter,
+                                              bool setter) {
+    ZEND_ASSERT(class_entry != nullptr);
+    ZEND_ASSERT(class_entry->ce_flags & ZEND_ACC_INTERFACE);
+    ZEND_ASSERT(property_info != nullptr);
+    ZEND_ASSERT(property_info->hooks == nullptr);
+
+    property_info->hooks = static_cast<zend_function **>(pemalloc(ZEND_PROPERTY_HOOK_STRUCT_SIZE, true));
+    memset(property_info->hooks, 0, ZEND_PROPERTY_HOOK_STRUCT_SIZE);
+    if (getter) {
+        property_info->hooks[ZEND_PROPERTY_HOOK_GET] =
+            create_abstract_property_hook(class_entry, property_info, ZEND_PROPERTY_HOOK_GET);
+    }
+    if (setter) {
+        property_info->hooks[ZEND_PROPERTY_HOOK_SET] =
+            create_abstract_property_hook(class_entry, property_info, ZEND_PROPERTY_HOOK_SET);
+    }
+    class_entry->num_hooked_props++;
+}
+
+void typephp_prepare_property_redeclaration(zend_class_entry *class_entry, zend_string *name) {
+    ZEND_ASSERT(class_entry != nullptr);
+    ZEND_ASSERT(name != nullptr);
+    if (class_entry->parent == nullptr) {
+        return;
+    }
+
+    auto *inherited = static_cast<zend_property_info *>(zend_hash_find_ptr(&class_entry->properties_info, name));
+    if (inherited == nullptr || inherited->ce == class_entry) {
+        return;
+    }
+
+    // The parent hook count was copied when the internal child class was
+    // linked. The replacement will either register its own hooks or restore
+    // the missing parent hooks in typephp_finalize_property_hook_inheritance().
+    if (inherited->hooks != nullptr) {
+        ZEND_ASSERT(class_entry->num_hooked_props > 0);
+        class_entry->num_hooked_props--;
+    }
+
+    // zend_declare_typed_property() normally reuses an inherited slot. A
+    // virtual hooked property has no slot, so make the redeclaration allocate
+    // one instead of indexing the virtual offset as a default-table entry.
+    if (inherited->offset == ZEND_VIRTUAL_PROPERTY_OFFSET) {
+        zend_hash_del(&class_entry->properties_info, name);
+    }
+}
+
+void typephp_finalize_property_hook_inheritance(zend_class_entry *class_entry) {
+    ZEND_ASSERT(class_entry != nullptr);
+    if (class_entry->parent == nullptr) {
+        return;
+    }
+
+    void *entry;
+    ZEND_HASH_FOREACH_PTR(&class_entry->properties_info, entry) {
+        auto *property_info = static_cast<zend_property_info *>(entry);
+        // Inherited entries already point at the parent's complete metadata.
+        // Only declarations owned by this class may have replaced that entry
+        // after zend_register_internal_class_with_flags() linked the parent.
+        if (property_info->ce != class_entry || (property_info->flags & ZEND_ACC_PRIVATE)) {
+            continue;
+        }
+
+        auto *parent_info = static_cast<zend_property_info *>(
+            zend_hash_find_ptr(&class_entry->parent->properties_info, property_info->name));
+        if (parent_info == nullptr || parent_info->hooks == nullptr || (parent_info->flags & ZEND_ACC_PRIVATE)) {
+            continue;
+        }
+
+        const bool had_hooks = property_info->hooks != nullptr;
+        if (!had_hooks) {
+            property_info->hooks = static_cast<zend_function **>(pemalloc(ZEND_PROPERTY_HOOK_STRUCT_SIZE, true));
+            memset(property_info->hooks, 0, ZEND_PROPERTY_HOOK_STRUCT_SIZE);
+        }
+
+        bool inherited = false;
+        for (size_t kind = 0; kind < ZEND_PROPERTY_HOOK_COUNT; kind++) {
+            if (property_info->hooks[kind] == nullptr && parent_info->hooks[kind] != nullptr) {
+                property_info->hooks[kind] = parent_info->hooks[kind];
+                inherited = true;
+            }
+        }
+        if (!had_hooks && inherited) {
+            class_entry->num_hooked_props++;
+        }
+    } ZEND_HASH_FOREACH_END();
+
+    if (class_entry->num_hooked_props != 0 && class_entry->get_iterator == nullptr) {
+        class_entry->get_iterator = zend_hooked_object_get_iterator;
+    }
+}
+
+zend_function *typephp_get_parent_property_hook(zend_class_entry *parent_class_entry,
+                                                const php::String &property,
+                                                zend_property_hook_kind kind) {
+    ZEND_ASSERT(parent_class_entry != nullptr);
+    ZEND_ASSERT(kind == ZEND_PROPERTY_HOOK_GET || kind == ZEND_PROPERTY_HOOK_SET);
+
+    auto *property_info = static_cast<zend_property_info *>(
+        zend_hash_find_ptr(&parent_class_entry->properties_info, property.str()));
+    if (property_info == nullptr) {
+        php::throwError(
+            "Undefined property %s::$%s", ZSTR_VAL(parent_class_entry->name), property.data());
+        return nullptr;
+    }
+    if (property_info->flags & ZEND_ACC_PRIVATE) {
+        php::throwError(
+            "Cannot access private property %s::$%s", ZSTR_VAL(parent_class_entry->name), property.data());
+        return nullptr;
+    }
+
+    zend_function *hook = property_info->hooks == nullptr ? nullptr : property_info->hooks[kind];
+    if (hook != nullptr) {
+        return hook;
+    }
+
+    // The trampoline owns and releases the supplied name after the call.
+    return zend_get_property_hook_trampoline(property_info, kind, zend_string_copy(property.str()));
+}
+
+void typephp_install_property_handlers(zend_class_entry *class_entry, zend_object_handlers *handlers) {
+    initialize_property_handlers(handlers, class_entry->default_object_handlers);
+    class_entry->default_object_handlers = handlers;
+}
+
+php::Variant typephp_read_property_scoped(const php::Variant &object,
+                                          const php::Variant &member,
+                                          zend_class_entry *scope,
+                                          php::AttrMode mode) {
+    if (UNEXPECTED(!object.isObject())) {
+        php::throwError("Attempt to read property `%s` on %s", member.toCString(), object.typeStr());
+        return {};
+    }
+
+    php::String property_name = member.toString();
+    zval rv;
+    zval *member_p;
+    {
+        php::FakeScopeGuard fake_scope_guard{scope};
+        member_p = object.object()->handlers->read_property(
+            object.object(),
+            property_name.str(),
+            mode == php::AttrMode::Update ? BP_VAR_RW : (mode == php::AttrMode::Isset ? BP_VAR_IS : BP_VAR_R),
+            nullptr,
+            &rv);
+        php::throwErrorIfOccurred();
+
+        if (php::zval_is_null(member_p) && mode == php::AttrMode::Update) {
+            member_p =
+                object.object()->handlers->write_property(object.object(), property_name.str(), php::undef(), nullptr);
+            php::throwErrorIfOccurred();
+            if (member_p == php::undef()) {
+                php::throwError("Dynamic property `%s` assignment is not supported", member.toCString());
+            }
+        }
+    }
+
+    if (member_p == &rv) {
+        return php::Variant{member_p, php::Ctor::Move};
+    }
+    return php::Variant{member_p, php::zval_wrap(member_p)};
+}
+
+void typephp_write_property_scoped(const php::Variant &object,
+                                   const php::Variant &member,
+                                   const php::Variant &value,
+                                   zend_class_entry *scope) {
+    if (UNEXPECTED(!object.isObject())) {
+        php::throwError("Attempt to write property `%s` on %s", member.toCString(), object.typeStr());
+        return;
+    }
+    php::String property_name = member.toString();
+    // Trait properties are inserted into the consuming class. Resolve the
+    // source trait scope to the class that owns the actual property slot.
+    if (scope && (scope->ce_flags & ZEND_ACC_TRAIT)) {
+        auto *property_info = static_cast<zend_property_info *>(
+            zend_hash_find_ptr(&object.object()->ce->properties_info, property_name.str()));
+        if (property_info) {
+            scope = property_info->ce;
+        }
+    }
+    {
+        php::FakeScopeGuard fake_scope_guard{scope};
+        object.object()->handlers->write_property(
+            object.object(), property_name.str(), const_cast<zval *>(value.const_ptr()), nullptr);
+    }
+    php::throwErrorIfOccurred();
+}
