@@ -83,8 +83,16 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install Windows GMP and MPFR dependencies
+      - name: Restore Windows GMP and MPFR cache
         if: runner.os == 'Windows'
+        id: cache-gmp-mpfr
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\typephp-cache\vcpkg-x64-windows
+          key: windows-2022-msvc-vcpkg-gmp-mpfr-x64-v1
+
+      - name: Install Windows GMP and MPFR dependencies
+        if: runner.os == 'Windows' && steps.cache-gmp-mpfr.outputs.cache-hit != 'true'
         shell: powershell
         run: |
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
@@ -102,6 +110,9 @@ jobs:
           }
 
           $nativeRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\$triplet"
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "typephp-cache\vcpkg-x64-windows"
+          New-Item -ItemType Directory -Force -Path "$cacheRoot\include", "$cacheRoot\lib", "$cacheRoot\bin" | Out-Null
+
           $requiredFiles = @(
             (Join-Path $nativeRoot "include\gmp.h"),
             (Join-Path $nativeRoot "include\mpfr.h"),
@@ -117,8 +128,38 @@ jobs:
             throw "[CI] Missing GMP/MPFR files: $($missing -join ', ')"
           }
 
-          Write-Host "[CI] Using GMP/MPFR root: $nativeRoot"
-          "GMP_MPFR_ROOT=$nativeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Copy-Item "$nativeRoot\include\*" "$cacheRoot\include" -Recurse -Force
+          Copy-Item "$nativeRoot\lib\gmp.lib", "$nativeRoot\lib\gmpxx.lib", "$nativeRoot\lib\mpfr.lib" "$cacheRoot\lib" -Force
+          Copy-Item "$nativeRoot\bin\*.dll" "$cacheRoot\bin" -Force -ErrorAction SilentlyContinue
+
+          Write-Host "[CI] Cached GMP/MPFR under: $cacheRoot"
+
+      - name: Save Windows GMP and MPFR cache
+        if: runner.os == 'Windows' && steps.cache-gmp-mpfr.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\typephp-cache\vcpkg-x64-windows
+          key: ${{ steps.cache-gmp-mpfr.outputs.cache-primary-key }}
+
+      - name: Stage Windows GMP and MPFR dependencies
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "typephp-cache\vcpkg-x64-windows"
+          $requiredFiles = @(
+            (Join-Path $cacheRoot "include\gmp.h"),
+            (Join-Path $cacheRoot "include\mpfr.h"),
+            (Join-Path $cacheRoot "lib\gmp.lib"),
+            (Join-Path $cacheRoot "lib\gmpxx.lib"),
+            (Join-Path $cacheRoot "lib\mpfr.lib")
+          )
+          $missing = $requiredFiles | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            throw "[CI] GMP/MPFR cache is incomplete: $($missing -join ', ')"
+          }
+
+          "GMP_MPFR_ROOT=$cacheRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "[CI] Using cached GMP/MPFR root: $cacheRoot"
 
       # ---------------- 安装 Composer 依赖 ----------------
       - name: Install Composer Dependencies
