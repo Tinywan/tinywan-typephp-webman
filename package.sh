@@ -93,15 +93,30 @@ if [ ! -f "$SCRIPT_DIR/dist/libphp.so" ]; then
     fi
 fi
 
-# 自动通过 ldd 探测并打包所有第三方基础依赖库 (如 gmp, mpfr 等)
+[ -d "$SCRIPT_DIR/config" ] && cp -r "$SCRIPT_DIR/config" "$SCRIPT_DIR/dist/"
+[ -d "$SCRIPT_DIR/public" ] && cp -r "$SCRIPT_DIR/public" "$SCRIPT_DIR/dist/"
+if [ -d "$SCRIPT_DIR/app/view" ]; then
+    mkdir -p "$SCRIPT_DIR/dist/app"
+    cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
+fi
+
+# 1. 自动扫描并打包 PHP 扩展模块 (.so)
+mkdir -p "$SCRIPT_DIR/dist/ext"
+PHP_EXT_DIR=$(php-config --extension-dir 2>/dev/null || true)
+if [ -d "$PHP_EXT_DIR" ]; then
+    echo "[INFO] Copying PHP extensions from $PHP_EXT_DIR to dist/ext/ ..."
+    cp -f "$PHP_EXT_DIR"/*.so "$SCRIPT_DIR/dist/ext/" 2>/dev/null || true
+fi
+
+# 2. 自动通过 ldd 探测并打包所有程序与扩展的底层共享库 (如 gmp, mpfr, libzip 等)
 mkdir -p "$SCRIPT_DIR/dist/lib"
 echo "[INFO] Scanning and bundling all shared library dependencies via ldd ..."
-for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so"; do
+for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so" "$SCRIPT_DIR"/dist/ext/*.so; do
     if [ -f "$bin_or_lib" ]; then
         ldd "$bin_or_lib" 2>/dev/null | grep "=>" | awk '{print $3}' | while read -r libpath; do
             if [ -f "$libpath" ]; then
                 libname=$(basename "$libpath")
-                # 排除 Linux 最基础的 glibc 核心库以防跨发行版 ABI 冲突，收集 gmp/mpfr/phpx 等业务扩展库
+                # 排除 Linux 最基础的 glibc 核心库以防跨发行版 ABI 冲突，收集 gmp/mpfr/phpx/libzip 等业务扩展库
                 case "$libname" in
                     libc.so*|ld-linux*|libdl.so*|libpthread.so*|libm.so*|librt.so*)
                         ;;
@@ -117,28 +132,16 @@ for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx
     fi
 done
 
-# Set $ORIGIN RPATH to executable and libraries if patchelf is available
+# 3. Set $ORIGIN RPATH to executable, php extensions, and shared libraries
 if command -v patchelf &> /dev/null; then
-    echo "[INFO] Setting RPATH to \$ORIGIN:\$ORIGIN/lib for all binaries in dist ..."
+    echo "[INFO] Setting RPATH to \$ORIGIN:\$ORIGIN/lib:\$ORIGIN/../lib for all binaries in dist ..."
     patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server.bin" 2>/dev/null || true
     for solib in "$SCRIPT_DIR"/dist/*.so "$SCRIPT_DIR"/dist/lib/*.so*; do
         [ -f "$solib" ] && patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$solib" 2>/dev/null || true
     done
-fi
-
-[ -d "$SCRIPT_DIR/config" ] && cp -r "$SCRIPT_DIR/config" "$SCRIPT_DIR/dist/"
-[ -d "$SCRIPT_DIR/public" ] && cp -r "$SCRIPT_DIR/public" "$SCRIPT_DIR/dist/"
-if [ -d "$SCRIPT_DIR/app/view" ]; then
-    mkdir -p "$SCRIPT_DIR/dist/app"
-    cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
-fi
-
-# 自动扫描并打包 PHP 扩展模块 (.so)
-mkdir -p "$SCRIPT_DIR/dist/ext"
-PHP_EXT_DIR=$(php-config --extension-dir 2>/dev/null || true)
-if [ -d "$PHP_EXT_DIR" ]; then
-    echo "[INFO] Copying PHP extensions from $PHP_EXT_DIR to dist/ext/ ..."
-    cp -f "$PHP_EXT_DIR"/*.so "$SCRIPT_DIR/dist/ext/" 2>/dev/null || true
+    for extsolib in "$SCRIPT_DIR"/dist/ext/*.so; do
+        [ -f "$extsolib" ] && patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN:$ORIGIN/..' "$extsolib" 2>/dev/null || true
+    done
 fi
 
 # 生成 Linux 专用的纯净自包含 php.ini
