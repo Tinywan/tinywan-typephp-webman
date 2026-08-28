@@ -123,11 +123,16 @@ jobs:
             Write-Host "[CI] Successfully placed .lib files in $phpDir\SDK\lib and $phpDir"
             Get-ChildItem "$phpDir\SDK\lib" | Select-Object Name
           }
+          "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and Package on Windows
         if: runner.os == 'Windows'
         shell: cmd
         run: |
+          echo === Check PHP_HOME in CMD ===
+          echo PHP_HOME is %PHP_HOME%
+          dir "%PHP_HOME%\SDK\lib"
+          dir "%PHP_HOME%\lib"
           call package.bat
           powershell Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive_name }}
 
