@@ -3,6 +3,12 @@
 #include "phpx.h"
 #include <gmpxx.h>
 
+// Avoid collisions with the BigInt::mod API on Windows toolchains whose
+// dependency headers define `mod` as a preprocessor macro.
+#ifdef mod
+#undef mod
+#endif
+
 namespace php {
 
 namespace detail {
