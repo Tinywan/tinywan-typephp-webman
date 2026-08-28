@@ -408,6 +408,9 @@ if (USE_BUNDLED_MPDECIMAL)
 #define MPD_CONFIG_64 1
 ")
         set(MPDECIMAL_DEFINES CONFIG_64 ANSI)
+        # libmpdec++ uses IMPORTEXPORT=__declspec(dllimport) by default
+        # under MSVC; bundled sources are built here, so mark them as exports.
+        list(APPEND MPDECIMAL_DEFINES BUILD_LIBMPDECXX)
     else()
         message(STATUS "Using bundled mpdecimal with uint128")
         set(MPD_HEADER_CONFIG "
