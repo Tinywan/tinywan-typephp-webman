@@ -105,13 +105,42 @@ jobs:
           $phpDir = Split-Path -Parent $phpBin
           Write-Host "PHP Directory: $phpDir"
 
-          Write-Host "[CI] Downloading PHP 8.4 Windows Devpack to obtain php8ts.lib / php8embed.lib..."
-          $devpackUrl = "https://windows.php.net/downloads/releases/php-devel-pack-8.4.4-Win32-vs17-x64.zip"
-          Invoke-WebRequest -Uri $devpackUrl -OutFile "$env:TEMP\php-devel-pack.zip" -UseBasicParsing
+          $phpVer = (php -r "echo PHP_VERSION;")
+          Write-Host "[CI] Installed PHP version is $phpVer. Resolving Windows Devpack URL..."
+
+          $urls = @(
+            "https://windows.php.net/downloads/releases/php-devel-pack-$phpVer-Win32-vs17-x64.zip",
+            "https://windows.php.net/downloads/releases/archives/php-devel-pack-$phpVer-Win32-vs17-x64.zip"
+          )
+
+          $downloaded = $false
+          foreach ($url in $urls) {
+            try {
+              Write-Host "[CI] Trying to download from $url ..."
+              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\php-devel-pack.zip" -UseBasicParsing -ErrorAction Stop
+              $downloaded = $true
+              Write-Host "[CI] Download successful!"
+              break
+            } catch {
+              Write-Host "[CI] URL not available, trying next..."
+            }
+          }
+
+          if (-not $downloaded) {
+            # 兜底抓取 releases 目录里的任一最新 8.4 devpack
+            Write-Host "[CI] Querying index of windows.php.net/downloads/releases/ ..."
+            $html = (Invoke-WebRequest -Uri "https://windows.php.net/downloads/releases/" -UseBasicParsing).Content
+            if ($html -match 'href="([^"]*php-devel-pack-8\.4\.[^"]*-Win32-vs17-x64\.zip)"') {
+              $fallbackUrl = "https://windows.php.net/downloads/releases/" + $matches[1]
+              Write-Host "[CI] Found fallback devpack: $fallbackUrl"
+              Invoke-WebRequest -Uri $fallbackUrl -OutFile "$env:TEMP\php-devel-pack.zip" -UseBasicParsing
+              $downloaded = $true
+            }
+          }
+
           Expand-Archive -Path "$env:TEMP\php-devel-pack.zip" -DestinationPath "$env:TEMP\php-devpack" -Force
           $extracted = Get-ChildItem "$env:TEMP\php-devpack" -Directory | Select-Object -First 1
           if ($extracted) {
-            # TypePHP 在 Windows 上探测 SDK\lib, dev\, lib\, 根目录
             @("$phpDir\SDK\lib", "$phpDir\SDK\include", "$phpDir\dev", "$phpDir\lib", "$phpDir\include") | ForEach-Object {
               if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force }
             }
