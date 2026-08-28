@@ -1,9 +1,22 @@
 @echo off
 
 rem 1. Set environment variables
-if not defined PHP_HOME set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
-set PHPX_HOME=%PHP_HOME%\phpx
-set PATH=%PHP_HOME%;%PATH%
+if not defined PHP_HOME (
+    for /f "tokens=*" %%i in ('where php 2^>nul') do (
+        set "PHP_BIN_PATH=%%~dpi"
+        goto :found_php_home
+    )
+    set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
+)
+:found_php_home
+if "%PHP_HOME:~-1%"=="\" set "PHP_HOME=%PHP_HOME:~0,-1%"
+
+if exist "%PHP_HOME%\phpx" (
+    set "PHPX_HOME=%PHP_HOME%\phpx"
+) else (
+    set "PHPX_HOME=%~dp0vendor\swoole\phpx"
+)
+set "PATH=%PHP_HOME%;%PATH%"
 
 rem 2. Initialize MSVC compiler environment
 if exist "D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" (
@@ -27,13 +40,13 @@ if not exist "%~dp0build" mkdir "%~dp0build"
 if exist "%~dp0php.ini" copy /y "%~dp0php.ini" "%~dp0build\php.ini" >nul
 
 rem 5. Run TPC compiler
-echo [INFO] Compiling webman-server with TPC...
+echo [INFO] Compiling webman-server with TPC (PHP_HOME=%PHP_HOME% PHPX_HOME=%PHPX_HOME%)...
+cd /d "%~dp0"
 if exist "%PHP_HOME%\tpc.exe" (
-    cd /d "%PHP_HOME%"
     "%PHP_HOME%\tpc.exe" "%~dp0project.windows.yml"
 ) else if exist "%~dp0vendor\bin\tpc.php" (
     php "%~dp0vendor\bin\tpc.php" "%~dp0project.windows.yml"
 ) else (
-    tpc "%~dp0project.windows.yml"
+    php "%~dp0vendor\swoole\typephp\bin\tpc.php" "%~dp0project.windows.yml"
 )
 exit /b %ERRORLEVEL%
