@@ -86,7 +86,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev patchelf
 
       - name: Patch php_hash.h for C++ compatibility
         if: runner.os == 'Linux'
@@ -203,6 +203,10 @@ jobs:
         run: |
           chmod +x package.sh start.sh
           ./package.sh
+          echo "=== Verify dynamic library dependencies (ldd) ==="
+          ldd dist/webman-server
+          echo "=== Linux Smoke Test: running dist/start.sh status ==="
+          ./dist/start.sh status || true
           tar -czvf ${{ matrix.archive_name }} -C dist .
 
       # ---------------- Windows 编译与打包 ----------------

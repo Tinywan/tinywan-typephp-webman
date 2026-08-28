@@ -69,6 +69,19 @@ elif [ -f "$SCRIPT_DIR/build/webman_server" ]; then
     chmod +x "$SCRIPT_DIR/dist/webman-server"
 fi
 
+# Copy PHPX runtime library
+if [ -f "$PHPX_DIR/lib/libphpx.so" ]; then
+    cp -f "$PHPX_DIR/lib/libphpx.so" "$SCRIPT_DIR/dist/"
+elif [ -f "$PHPX_DIR/libphpx.so" ]; then
+    cp -f "$PHPX_DIR/libphpx.so" "$SCRIPT_DIR/dist/"
+fi
+
+# Set $ORIGIN RPATH to executable if patchelf is available
+if command -v patchelf &> /dev/null && [ -f "$SCRIPT_DIR/dist/webman-server" ]; then
+    echo "[INFO] Setting RPATH to \$ORIGIN for webman-server ..."
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server" || true
+fi
+
 # Copy configurations and resources
 [ -d "$SCRIPT_DIR/config" ] && cp -r "$SCRIPT_DIR/config" "$SCRIPT_DIR/dist/"
 [ -d "$SCRIPT_DIR/public" ] && cp -r "$SCRIPT_DIR/public" "$SCRIPT_DIR/dist/"
@@ -80,3 +93,4 @@ fi
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
 
 echo "[INFO] Packaging completed successfully! Dist path: $SCRIPT_DIR/dist"
+ls -la "$SCRIPT_DIR/dist"
