@@ -3,7 +3,18 @@ name: webman-server
 sources:
   - main.php
   - vendor/psr
-  - vendor/nikic/fast-route/src
+  - vendor/nikic/fast-route/src/functions.php
+  - vendor/nikic/fast-route/src/BadRouteException.php
+  - vendor/nikic/fast-route/src/DataGenerator.php
+  - vendor/nikic/fast-route/src/Dispatcher.php
+  - vendor/nikic/fast-route/src/Route.php
+  - vendor/nikic/fast-route/src/RouteCollector.php
+  - vendor/nikic/fast-route/src/RouteParser.php
+  - vendor/nikic/fast-route/src/RouteParser/Std.php
+  - vendor/nikic/fast-route/src/DataGenerator/RegexBasedAbstract.php
+  - vendor/nikic/fast-route/src/DataGenerator/GroupCountBased.php
+  - vendor/nikic/fast-route/src/Dispatcher/RegexBasedAbstract.php
+  - vendor/nikic/fast-route/src/Dispatcher/GroupCountBased.php
   - vendor/monolog/monolog/src/Monolog/Logger.php
   - vendor/monolog/monolog/src/Monolog/LogRecord.php
   - vendor/monolog/monolog/src/Monolog/ResettableInterface.php
