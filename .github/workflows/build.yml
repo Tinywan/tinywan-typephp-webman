@@ -41,7 +41,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libgmp-dev libmpfr-dev libphp8.4-embed || true
+          sudo apt-get install -y build-essential cmake pkg-config libgmp-dev libmpfr-dev php8.4-dev libphp8.4-embed || true
+          # 建立 libphp.so 软链接 (若为版本号命名)
+          if [ -f "/usr/lib/libphp8.4.so" ] && [ ! -f "/usr/lib/libphp.so" ]; then
+            sudo ln -sf /usr/lib/libphp8.4.so /usr/lib/libphp.so
+          fi
 
       # ---------------- Windows 构建环境准备 ----------------
       - name: Setup MSVC Toolchain

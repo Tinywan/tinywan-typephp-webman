@@ -14,6 +14,18 @@ else
     exit 1
 fi
 
+# Check and build PHPX if needed
+if [ -d "$SCRIPT_DIR/vendor/swoole/phpx" ] && [ ! -f "$SCRIPT_DIR/vendor/swoole/phpx/lib/libphpx.so" ] && [ ! -f "$SCRIPT_DIR/vendor/swoole/phpx/lib/libphpx.a" ]; then
+    echo "[INFO] Building PHPX library..."
+    cd "$SCRIPT_DIR/vendor/swoole/phpx"
+    cmake .
+    make -j$(nproc)
+    if [ -f "lib/libphpx.so" ] || [ -f "lib/libphpx.a" ]; then
+        echo "[INFO] PHPX built successfully in vendor/swoole/phpx/lib"
+    fi
+    cd "$SCRIPT_DIR"
+fi
+
 # Ensure build directory and php.ini
 mkdir -p "$SCRIPT_DIR/build"
 if [ -f "$SCRIPT_DIR/php.ini" ]; then
