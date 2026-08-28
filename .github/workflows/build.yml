@@ -2,6 +2,8 @@ name: Build & Release TypePHP Webman
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
