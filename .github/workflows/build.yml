@@ -154,9 +154,12 @@ jobs:
             Write-Host "[CI] Successfully placed .lib files in $phpDir\SDK\lib and $phpDir"
             Get-ChildItem "$phpDir\SDK\lib" | Select-Object Name
 
-            # 修复 PHP 8.4 win32/ioutil.h 在 MSVC C++ 下缺少 <io.h> 导致 _wchmod 找不到的官方兼容性问题
+            # 修复 PHP 8.4 win32/ioutil.h 在 MSVC C++ 模式下缺少 _wchmod 声明的官方 Bug
             Get-ChildItem -Path $phpDir -Filter "ioutil.h" -Recurse | ForEach-Object {
-              (Get-Content $_.FullName) -replace '#include <sys/stat.h>', "#include <sys/stat.h>`n#include <io.h>`n#include <stdlib.h>" | Set-Content $_.FullName
+              $content = Get-Content $_.FullName -Raw
+              $content = $content -replace 'ret = _wchmod\(pathw, mode\);', 'ret = _chmod(patha, mode);'
+              $content = "#include <io.h>`n#include <sys/stat.h>`n#include <stdlib.h>`nextern `"C`" int _wchmod(const wchar_t*, int);`n" + $content
+              Set-Content -Path $_.FullName -Value $content -NoNewline
               Write-Host "[CI] Patched $($_.FullName) for MSVC C++ _wchmod compatibility."
             }
           }
