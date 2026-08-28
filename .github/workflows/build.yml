@@ -75,9 +75,18 @@ jobs:
           echo "[CI] Step 2: Build swoole/phpx"
           PHPX_DIR="$GITHUB_WORKSPACE/vendor/swoole/phpx"
           cd "$PHPX_DIR"
-          export CPLUS_INCLUDE_PATH="/usr/include:/usr/local/include:$CPLUS_INCLUDE_PATH"
-          export C_INCLUDE_PATH="/usr/include:/usr/local/include:$C_INCLUDE_PATH"
-          cmake . -Dphp_dir="$PHP_PREFIX" -DCMAKE_INCLUDE_PATH="/usr/include;/usr/local/include"
+
+          # 探测 mpfr.h 与 gmp.h 的实际所在目录
+          MPFR_DIR=$(find /usr/include -name "mpfr.h" -exec dirname {} \; 2>/dev/null | head -n 1)
+          GMP_DIR=$(find /usr/include -name "gmp.h" -exec dirname {} \; 2>/dev/null | head -n 1)
+          echo "MPFR_DIR=$MPFR_DIR, GMP_DIR=$GMP_DIR"
+
+          EXTRA_INC=""
+          [ -n "$MPFR_DIR" ] && EXTRA_INC="$EXTRA_INC -I$MPFR_DIR"
+          [ -n "$GMP_DIR" ] && EXTRA_INC="$EXTRA_INC -I$GMP_DIR"
+          EXTRA_INC="$EXTRA_INC -I/usr/include -I/usr/local/include"
+
+          cmake . -Dphp_dir="$PHP_PREFIX" -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
           make -j$(nproc)
           sudo make install
           sudo ldconfig
