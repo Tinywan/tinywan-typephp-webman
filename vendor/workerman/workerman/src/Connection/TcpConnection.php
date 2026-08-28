@@ -915,7 +915,7 @@ class TcpConnection extends ConnectionInterface implements JsonSerializable
         }
 
         // Hidden error.
-        set_error_handler(static function (int $code, string $msg): bool {
+        set_error_handler(static function (int $code, string $msg, ...$args): bool {
             if (!Worker::$daemonize) {
                 Worker::safeEcho(sprintf("SSL handshake error: %s\n", $msg));
             }
