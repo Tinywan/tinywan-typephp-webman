@@ -76,18 +76,11 @@ jobs:
           PHPX_DIR="$GITHUB_WORKSPACE/vendor/swoole/phpx"
           cd "$PHPX_DIR"
 
-          # 探测 mpfr.h 与 gmp.h 的实际所在目录
-          MPFR_DIR=$(find /usr/include -name "mpfr.h" -exec dirname {} \; 2>/dev/null | head -n 1)
-          GMP_DIR=$(find /usr/include -name "gmp.h" -exec dirname {} \; 2>/dev/null | head -n 1)
-          echo "MPFR_DIR=$MPFR_DIR, GMP_DIR=$GMP_DIR"
+          # 在 CMakeLists.txt 的 include_directories 中注入系统的头文件搜索路径
+          sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include)/g' CMakeLists.txt
 
-          EXTRA_INC=""
-          [ -n "$MPFR_DIR" ] && EXTRA_INC="$EXTRA_INC -I$MPFR_DIR"
-          [ -n "$GMP_DIR" ] && EXTRA_INC="$EXTRA_INC -I$GMP_DIR"
-          EXTRA_INC="$EXTRA_INC -I/usr/include -I/usr/local/include"
-
-          cmake . -Dphp_dir="$PHP_PREFIX" -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
-          make -j$(nproc)
+          cmake . -Dphp_dir="$PHP_PREFIX" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+          make phpx -j$(nproc)
           sudo make install
           sudo ldconfig
           cd "$GITHUB_WORKSPACE"
