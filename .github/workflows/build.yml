@@ -99,15 +99,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          for /f "tokens=*" %%i in ('where php') do (
-            set "PHP_BIN_PATH=%%~dpi"
-            goto :found_php
-          )
-          :found_php
-          rem 剔除结尾斜杠
-          if "%PHP_BIN_PATH:~-1%"=="\" set "PHP_BIN_PATH=%PHP_BIN_PATH:~0,-1%"
-          set "PHP_HOME=%PHP_BIN_PATH%"
-          echo PHP_HOME is %PHP_HOME%
           call package.bat
           powershell Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive_name }}
 
