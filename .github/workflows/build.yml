@@ -154,14 +154,41 @@ jobs:
             Write-Host "[CI] Successfully placed .lib files in $phpDir\SDK\lib and $phpDir"
             Get-ChildItem "$phpDir\SDK\lib" | Select-Object Name
 
-            # 修复 PHP 8.4 win32/ioutil.h 在 MSVC C++ 模式下缺少 _wchmod 声明的官方 Bug
-            Get-ChildItem -Path $phpDir -Filter "ioutil.h" -Recurse | ForEach-Object {
-              $content = Get-Content $_.FullName -Raw
-              $content = $content -replace 'ret = _wchmod\(pathw, mode\);', 'ret = _chmod(patha, mode);'
-              $content = "#include <io.h>`n#include <sys/stat.h>`n#include <stdlib.h>`nextern `"C`" int _wchmod(const wchar_t*, int);`n" + $content
-              Set-Content -Path $_.FullName -Value $content -NoNewline
-              Write-Host "[CI] Patched $($_.FullName) for MSVC C++ _wchmod compatibility."
+            # PHP 8.4 Devpack's ioutil.h calls _wchmod(), which MSVC 14.51
+            # does not declare in C++ mode. Keep the wide-path call and add
+            # the missing CRT declaration to the exact header CMake includes.
+            $ioutilHeader = Join-Path $phpDir "SDK\include\win32\ioutil.h"
+            if (-not (Test-Path $ioutilHeader)) {
+              throw "[CI] PHP Devpack header not found: $ioutilHeader"
             }
+
+            $content = Get-Content $ioutilHeader -Raw
+            if ($content -notmatch 'ret = _wchmod\(pathw, mode\);') {
+              throw "[CI] Unexpected PHP Devpack ioutil.h contents; refusing to patch $ioutilHeader"
+            }
+
+            $wchmodDeclaration = @'
+#if defined(__cplusplus)
+extern "C" {
+#endif
+int __cdecl _wchmod(const wchar_t *path, int mode);
+#if defined(__cplusplus)
+}
+#endif
+'@
+            if ($content -notmatch 'int __cdecl _wchmod\(const wchar_t \*path, int mode\);') {
+              $content = $content -replace '(#include <stdlib\.h>)(\r?\n)', "`$1`$2$wchmodDeclaration`$2"
+              Set-Content -Path $ioutilHeader -Value $content -NoNewline -Encoding utf8
+            }
+
+            $patchedContent = Get-Content $ioutilHeader -Raw
+            if ($patchedContent -notmatch 'int __cdecl _wchmod\(const wchar_t \*path, int mode\);\r?\n#if defined\(__cplusplus\)\r?\n}\r?\n#endif') {
+              throw "[CI] _wchmod declaration is missing from $ioutilHeader"
+            }
+            if ($patchedContent -notmatch '#endif\r?\n(?:[ \t]*\r?\n)*#include "win32/winutil\.h"' -or $patchedContent -match '#endif#include "win32/winutil\.h"') {
+              throw "[CI] _wchmod declaration is joined to the next include in $ioutilHeader"
+            }
+            Write-Host "[CI] Patched $ioutilHeader for MSVC C++ _wchmod compatibility."
           }
           "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
