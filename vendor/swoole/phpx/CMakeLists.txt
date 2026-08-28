@@ -466,8 +466,9 @@ if (IS_WINDOWS)
         ${PHP_LIBRARY}
     )
 
+    target_compile_definitions(phpx PRIVATE PHPX_EXPORTS)
+
     target_compile_definitions(phpx PUBLIC
-        PHP_EXPORTS
         ZEND_WIN32
         PHP_WIN32
         ENABLE_INTSAFE_SIGNED_FUNCTIONS

@@ -118,7 +118,15 @@ extern "C" {
 /**
  * All API names must be in lowercase camel case.
  */
+#if defined(WIN32) || defined(_WIN32)
+#if defined(PHPX_EXPORTS)
+#define PHPX_API __declspec(dllexport)
+#else
+#define PHPX_API __declspec(dllimport)
+#endif
+#else
 #define PHPX_API PHPAPI
+#endif
 #define PHPX_UNSAFE
 
 #include "phpx_native_gc.h"
