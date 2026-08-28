@@ -133,12 +133,32 @@ if [ -d "$SCRIPT_DIR/app/view" ]; then
     cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
 fi
 
-# 生成 Linux 专用的纯净 php.ini
+# 自动扫描并打包 PHP 扩展模块 (.so)
+mkdir -p "$SCRIPT_DIR/dist/ext"
+PHP_EXT_DIR=$(php-config --extension-dir 2>/dev/null || true)
+if [ -d "$PHP_EXT_DIR" ]; then
+    echo "[INFO] Copying PHP extensions from $PHP_EXT_DIR to dist/ext/ ..."
+    cp -f "$PHP_EXT_DIR"/*.so "$SCRIPT_DIR/dist/ext/" 2>/dev/null || true
+fi
+
+# 生成 Linux 专用的纯净自包含 php.ini
 cat > "$SCRIPT_DIR/dist/php.ini" << 'EOF'
 output_buffering=0
 implicit_flush=1
 memory_limit=4G
 opcache.enable_cli=0
+extension_dir="./ext"
+
+; 核心进程管理与网络扩展
+extension=posix.so
+extension=pcntl.so
+extension=curl.so
+extension=pdo_mysql.so
+extension=mysqli.so
+extension=openssl.so
+extension=mbstring.so
+extension=fileinfo.so
+extension=zip.so
 EOF
 
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
