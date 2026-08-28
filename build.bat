@@ -2,13 +2,12 @@
 
 rem 1. Set environment variables
 if not defined PHP_HOME (
-    for /f "tokens=*" %%i in ('where php 2^>nul') do (
-        set "PHP_BIN_PATH=%%~dpi"
-        goto :found_php_home
+    set "PHP_HOME="
+    for /f "delims=" %%i in ('where php.exe 2^>nul') do (
+        if not defined PHP_HOME set "PHP_HOME=%%~dpi"
     )
-    set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
 )
-:found_php_home
+if not defined PHP_HOME set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
 if "%PHP_HOME:~-1%"=="\" set "PHP_HOME=%PHP_HOME:~0,-1%"
 
 if exist "%PHP_HOME%\phpx" (
