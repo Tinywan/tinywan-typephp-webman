@@ -16,6 +16,11 @@
 
 #pragma once
 
+#ifdef _WIN32
+#include <io.h>
+#include <sys/stat.h>
+#endif
+
 /**
  * Do not trust any header files of PHP, its internal implementation is very chaotic,
  * which must be wrapped in extern "C" {}
