@@ -57,6 +57,21 @@ extern "C" {
 #ifdef ERROR
 #undef ERROR
 #endif
+#ifdef getcwd
+#undef getcwd
+#endif
+#ifdef rmdir
+#undef rmdir
+#endif
+#ifdef mkdir
+#undef mkdir
+#endif
+#ifdef lstat
+#undef lstat
+#endif
+#ifdef tempnam
+#undef tempnam
+#endif
 #ifdef MSG_OOB
 #undef MSG_OOB
 #endif
