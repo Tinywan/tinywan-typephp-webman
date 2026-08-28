@@ -28,6 +28,12 @@ if exist "%~dp0php.ini" copy /y "%~dp0php.ini" "%~dp0build\php.ini" >nul
 
 rem 5. Run TPC compiler
 echo [INFO] Compiling webman-server with TPC...
-cd /d "%PHP_HOME%"
-"%PHP_HOME%\tpc.exe" "%~dp0project.windows.yml"
+if exist "%PHP_HOME%\tpc.exe" (
+    cd /d "%PHP_HOME%"
+    "%PHP_HOME%\tpc.exe" "%~dp0project.windows.yml"
+) else if exist "%~dp0vendor\bin\tpc.php" (
+    php "%~dp0vendor\bin\tpc.php" "%~dp0project.windows.yml"
+) else (
+    tpc "%~dp0project.windows.yml"
+)
 exit /b %ERRORLEVEL%
