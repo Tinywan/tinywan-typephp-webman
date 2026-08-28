@@ -16,7 +16,7 @@ use support\Request;
 
 return [
     'debug' => true,
-    'error_reporting' => E_ALL,
+    'error_reporting' => E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED,
     'default_timezone' => 'Asia/Shanghai',
     'request_class' => Request::class,
     'public_path' => base_path() . DIRECTORY_SEPARATOR . 'public',

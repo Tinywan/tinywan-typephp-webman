@@ -9,7 +9,7 @@ function main(): void
     }
 
     ini_set('display_errors', 'on');
-    error_reporting(E_ALL);
+    error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 
     // 0. 初始化 Workerman 协议与协程组件
     if (class_exists(\Workerman\Protocols\Http\Session::class)) {
