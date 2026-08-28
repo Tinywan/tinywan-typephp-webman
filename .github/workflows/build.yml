@@ -156,14 +156,24 @@ jobs:
           }
           "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Build PHPX Library on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd "%GITHUB_WORKSPACE%\vendor\swoole\phpx"
+          if not exist "build" mkdir "build"
+          cd build
+          cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+          nmake phpx
+          if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
+          copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"
+          copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\"
+          dir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
+
       - name: Build and Package on Windows
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          echo === Check PHP_HOME in CMD ===
-          echo PHP_HOME is %PHP_HOME%
-          dir "%PHP_HOME%\SDK\lib"
-          dir "%PHP_HOME%\lib"
           call package.bat
           powershell Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive_name }}
 
