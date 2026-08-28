@@ -25,7 +25,17 @@ PHPX_DIR="$SCRIPT_DIR/vendor/swoole/phpx"
 if [ -d "$PHPX_DIR" ] && [ ! -f "$PHPX_DIR/lib/libphpx.so" ] && [ ! -f "$PHPX_DIR/lib/libphpx.a" ]; then
     echo "[INFO] Building PHPX library in $PHPX_DIR ..."
     cd "$PHPX_DIR"
-    cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+    
+    # 修复 C++ mpfr.h / gmp.h 搜索路径
+    EXTRA_INC=""
+    for d in /usr/include /usr/local/include /usr/include/x86_64-linux-gnu; do
+        [ -d "$d" ] && EXTRA_INC="$EXTRA_INC -I$d"
+    done
+    
+    # 在 CMakeLists.txt 的 include_directories 中注入
+    sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include \/usr\/include\/x86_64-linux-gnu)/g' CMakeLists.txt
+    
+    cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
     make phpx -j$(nproc)
     cd "$SCRIPT_DIR"
 fi
