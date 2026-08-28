@@ -470,6 +470,12 @@ if (IS_WINDOWS)
     )
 
     target_compile_definitions(phpx PRIVATE PHPX_EXPORTS)
+    if (USE_BUNDLED_MPDECIMAL)
+        # PHPX's decimal wrappers include decimal.hh directly.  When the
+        # bundled implementation is linked statically, avoid dllimport
+        # references for its C++ symbols under MSVC's /MD runtime.
+        target_compile_definitions(phpx PRIVATE BUILD_LIBMPDECXX)
+    endif()
 
     target_compile_definitions(phpx PUBLIC
         ZEND_WIN32
