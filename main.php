@@ -52,6 +52,7 @@ function main(): void
     // 3. 配置 Workerman 服务属性
     $serverConfig = config('server', []);
     \Workerman\Worker::$pidFile = $serverConfig['pid_file'] ?? (runtime_path() . '/webman.pid');
+    \Workerman\Worker::$statusFile = $serverConfig['status_file'] ?? (runtime_path() . '/webman.status');
     \Workerman\Worker::$stdoutFile = $serverConfig['stdout_file'] ?? (runtime_path() . '/logs/stdout.log');
     \Workerman\Worker::$logFile = $serverConfig['log_file'] ?? (runtime_path() . '/logs/workerman.log');
 
