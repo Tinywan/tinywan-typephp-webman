@@ -26,6 +26,10 @@ if exist "%~dp0build\webman-server.exe" (
 
 rem Copy DLL and extensions
 if exist "%PHP_HOME%\*.dll" copy /y "%PHP_HOME%\*.dll" "%~dp0dist\" >nul
+if exist "%~dp0vendor\swoole\phpx\lib\phpx.dll" copy /y "%~dp0vendor\swoole\phpx\lib\phpx.dll" "%~dp0dist\" >nul
+rem GMP/MPFR are installed by the Windows CI job through vcpkg. Keep their
+rem runtime DLLs beside webman-server when the dynamic x64-windows triplet is used.
+if defined GMP_MPFR_ROOT if exist "%GMP_MPFR_ROOT%\bin\*.dll" copy /y "%GMP_MPFR_ROOT%\bin\*.dll" "%~dp0dist\" >nul
 if exist "%PHP_HOME%\ext" xcopy /y /e /i /q "%PHP_HOME%\ext" "%~dp0dist\ext" >nul
 
 rem Copy config and static assets

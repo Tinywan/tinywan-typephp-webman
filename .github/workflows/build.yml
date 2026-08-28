@@ -83,6 +83,43 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install Windows GMP and MPFR dependencies
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw "[CI] VCPKG_INSTALLATION_ROOT is not set on windows-latest"
+          }
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            throw "[CI] vcpkg executable not found: $vcpkg"
+          }
+
+          $triplet = "x64-windows"
+          & $vcpkg install gmp mpfr --triplet=$triplet --clean-after-build
+          if ($LASTEXITCODE -ne 0) {
+            throw "[CI] vcpkg failed to install GMP/MPFR (exit code $LASTEXITCODE)"
+          }
+
+          $nativeRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\$triplet"
+          $requiredFiles = @(
+            (Join-Path $nativeRoot "include\gmp.h"),
+            (Join-Path $nativeRoot "include\mpfr.h"),
+            (Join-Path $nativeRoot "lib\gmp.lib"),
+            (Join-Path $nativeRoot "lib\gmpxx.lib"),
+            (Join-Path $nativeRoot "lib\mpfr.lib")
+          )
+          $missing = $requiredFiles | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Host "[CI] vcpkg GMP/MPFR root: $nativeRoot"
+            Get-ChildItem (Join-Path $nativeRoot "include") -ErrorAction SilentlyContinue | Select-Object Name
+            Get-ChildItem (Join-Path $nativeRoot "lib") -ErrorAction SilentlyContinue | Select-Object Name
+            throw "[CI] Missing GMP/MPFR files: $($missing -join ', ')"
+          }
+
+          Write-Host "[CI] Using GMP/MPFR root: $nativeRoot"
+          "GMP_MPFR_ROOT=$nativeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       # ---------------- 安装 Composer 依赖 ----------------
       - name: Install Composer Dependencies
         run: composer install --prefer-dist --no-progress
@@ -199,7 +236,7 @@ jobs:
           cd "%GITHUB_WORKSPACE%\vendor\swoole\phpx"
           if not exist "build" mkdir "build"
           cd build
-          cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+          cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
           nmake phpx
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
           copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"

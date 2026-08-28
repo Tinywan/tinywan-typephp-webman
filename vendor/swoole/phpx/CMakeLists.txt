@@ -282,6 +282,40 @@ else()
     link_directories(${PHP_PREFIX}/lib)
 endif()
 
+if(IS_WINDOWS)
+    # GMP/MPFR are external dependencies on Windows. Require an explicit
+    # root so headers and MSVC libraries cannot be picked from another SDK.
+    set(GMP_MPFR_ROOT "" CACHE PATH "Root containing GMP/MPFR include and lib directories")
+    if(NOT GMP_MPFR_ROOT AND DEFINED ENV{GMP_MPFR_ROOT})
+        set(GMP_MPFR_ROOT "$ENV{GMP_MPFR_ROOT}")
+    endif()
+    if(NOT GMP_MPFR_ROOT)
+        message(FATAL_ERROR "GMP_MPFR_ROOT is not set. Provide the vcpkg x64-windows root containing include\\gmp.h and lib\\mpfr.lib.")
+    endif()
+
+    file(TO_CMAKE_PATH "${GMP_MPFR_ROOT}" GMP_MPFR_ROOT)
+    set(GMP_MPFR_INCLUDE_DIR "${GMP_MPFR_ROOT}/include")
+    set(GMP_MPFR_LIBRARY_DIR "${GMP_MPFR_ROOT}/lib")
+    find_path(GMP_INCLUDE_DIR NAMES gmp.h PATHS "${GMP_MPFR_INCLUDE_DIR}" NO_DEFAULT_PATH)
+    find_path(MPFR_INCLUDE_DIR NAMES mpfr.h PATHS "${GMP_MPFR_INCLUDE_DIR}" NO_DEFAULT_PATH)
+    find_library(GMP_LIBRARY NAMES gmp libgmp PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
+    find_library(GMPXX_LIBRARY NAMES gmpxx libgmpxx PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
+    find_library(MPFR_LIBRARY NAMES mpfr libmpfr PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
+
+    if(NOT GMP_INCLUDE_DIR OR NOT MPFR_INCLUDE_DIR OR NOT GMP_LIBRARY OR NOT GMPXX_LIBRARY OR NOT MPFR_LIBRARY)
+        message(FATAL_ERROR
+            "GMP/MPFR development files were not found under ${GMP_MPFR_ROOT}.\n"
+            "Expected include/gmp.h, include/mpfr.h, lib/gmp.lib, lib/gmpxx.lib and lib/mpfr.lib.\n"
+            "Resolved: GMP_INCLUDE_DIR=${GMP_INCLUDE_DIR}; MPFR_INCLUDE_DIR=${MPFR_INCLUDE_DIR}; "
+            "GMP_LIBRARY=${GMP_LIBRARY}; GMPXX_LIBRARY=${GMPXX_LIBRARY}; MPFR_LIBRARY=${MPFR_LIBRARY}")
+    endif()
+
+    include_directories("${GMP_MPFR_INCLUDE_DIR}")
+    link_directories("${GMP_MPFR_LIBRARY_DIR}")
+    message(STATUS "Using GMP/MPFR include directory: ${GMP_MPFR_INCLUDE_DIR}")
+    message(STATUS "Using GMP/MPFR library directory: ${GMP_MPFR_LIBRARY_DIR}")
+endif()
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
@@ -461,7 +495,7 @@ endif()
 if (IS_WINDOWS)
     target_link_libraries(phpx PRIVATE
         ${PHP_LIBRARY}
-        gmp gmpxx mpfr
+        ${GMP_LIBRARY} ${GMPXX_LIBRARY} ${MPFR_LIBRARY}
         mpdecimal
         wren_gc
     )
@@ -501,7 +535,7 @@ if(BUILD_TESTS)
                     ${PHP_LIBRARY}
                     phpx
                     ${GTEST_BOTH_LIBRARIES}
-                    gmp gmpxx mpfr
+                    ${GMP_LIBRARY} ${GMPXX_LIBRARY} ${MPFR_LIBRARY}
                     mpdecimal
             )
 
