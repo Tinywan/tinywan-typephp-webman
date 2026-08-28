@@ -60,6 +60,15 @@ jobs:
       - name: Build and Package on Linux
         if: runner.os == 'Linux'
         run: |
+          echo "[CI] Step A: Build PHPX"
+          cd vendor/swoole/phpx
+          cmake .
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+          cd "$GITHUB_WORKSPACE"
+
+          echo "[CI] Step B: Package Webman via package.sh"
           chmod +x package.sh start.sh
           ./package.sh
           tar -czvf ${{ matrix.archive_name }} -C dist .
