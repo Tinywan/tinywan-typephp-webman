@@ -99,28 +99,29 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $phpDir = "C:\tools\php"
-          if (-not (Test-Path $phpDir)) {
-            $phpBin = (Get-Command php.exe).Source
-            $phpDir = Split-Path -Parent $phpBin
-          }
+          $phpBin = (Get-Command php.exe).Source
+          $phpDir = Split-Path -Parent $phpBin
           Write-Host "PHP Directory: $phpDir"
 
-          # 检查是否缺少 lib 库
-          if (-not (Test-Path "$phpDir\lib\php8ts.lib") -and -not (Test-Path "$phpDir\php8ts.lib") -and -not (Test-Path "$phpDir\lib\php8.lib")) {
-            Write-Host "[CI] Downloading PHP 8.4 Windows Devpack to obtain php8ts.lib / php8embed.lib..."
-            $devpackUrl = "https://windows.php.net/downloads/releases/php-devel-pack-8.4.4-Win32-vs17-x64.zip"
-            Invoke-WebRequest -Uri $devpackUrl -OutFile "$env:TEMP\php-devel-pack.zip" -UseBasicParsing
-            Expand-Archive -Path "$env:TEMP\php-devel-pack.zip" -DestinationPath "$env:TEMP\php-devpack" -Force
-            $extracted = Get-ChildItem "$env:TEMP\php-devpack" -Directory | Select-Object -First 1
-            if ($extracted) {
-              if (-not (Test-Path "$phpDir\lib")) { New-Item -ItemType Directory -Path "$phpDir\lib" -Force }
-              if (-not (Test-Path "$phpDir\include")) { New-Item -ItemType Directory -Path "$phpDir\include" -Force }
-              Copy-Item -Path "$($extracted.FullName)\lib\*" -Destination "$phpDir\lib\" -Recurse -Force -ErrorAction SilentlyContinue
-              Copy-Item -Path "$($extracted.FullName)\include\*" -Destination "$phpDir\include\" -Recurse -Force -ErrorAction SilentlyContinue
-              Copy-Item -Path "$($extracted.FullName)\lib\*.lib" -Destination "$phpDir\" -Force -ErrorAction SilentlyContinue
-              Write-Host "[CI] Successfully installed PHP devpack headers and .lib files to $phpDir"
+          Write-Host "[CI] Downloading PHP 8.4 Windows Devpack to obtain php8ts.lib / php8embed.lib..."
+          $devpackUrl = "https://windows.php.net/downloads/releases/php-devel-pack-8.4.4-Win32-vs17-x64.zip"
+          Invoke-WebRequest -Uri $devpackUrl -OutFile "$env:TEMP\php-devel-pack.zip" -UseBasicParsing
+          Expand-Archive -Path "$env:TEMP\php-devel-pack.zip" -DestinationPath "$env:TEMP\php-devpack" -Force
+          $extracted = Get-ChildItem "$env:TEMP\php-devpack" -Directory | Select-Object -First 1
+          if ($extracted) {
+            # TypePHP 在 Windows 上探测 SDK\lib, dev\, lib\, 根目录
+            @("$phpDir\SDK\lib", "$phpDir\SDK\include", "$phpDir\dev", "$phpDir\lib", "$phpDir\include") | ForEach-Object {
+              if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force }
             }
+            Copy-Item -Path "$($extracted.FullName)\lib\*" -Destination "$phpDir\SDK\lib\" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path "$($extracted.FullName)\include\*" -Destination "$phpDir\SDK\include\" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path "$($extracted.FullName)\lib\*" -Destination "$phpDir\lib\" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path "$($extracted.FullName)\lib\*" -Destination "$phpDir\dev\" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path "$($extracted.FullName)\lib\*" -Destination "$phpDir\" -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path "$($extracted.FullName)\include\*" -Destination "$phpDir\include\" -Recurse -Force -ErrorAction SilentlyContinue
+
+            Write-Host "[CI] Successfully placed .lib files in $phpDir\SDK\lib and $phpDir"
+            Get-ChildItem "$phpDir\SDK\lib" | Select-Object Name
           }
 
       - name: Build and Package on Windows
