@@ -126,14 +126,21 @@ if command -v patchelf &> /dev/null; then
     done
 fi
 
-# Copy configurations and resources
 [ -d "$SCRIPT_DIR/config" ] && cp -r "$SCRIPT_DIR/config" "$SCRIPT_DIR/dist/"
 [ -d "$SCRIPT_DIR/public" ] && cp -r "$SCRIPT_DIR/public" "$SCRIPT_DIR/dist/"
 if [ -d "$SCRIPT_DIR/app/view" ]; then
     mkdir -p "$SCRIPT_DIR/dist/app"
     cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
 fi
-[ -f "$SCRIPT_DIR/php.ini" ] && cp -f "$SCRIPT_DIR/php.ini" "$SCRIPT_DIR/dist/"
+
+# 生成 Linux 专用的纯净 php.ini
+cat > "$SCRIPT_DIR/dist/php.ini" << 'EOF'
+output_buffering=0
+implicit_flush=1
+memory_limit=4G
+opcache.enable_cli=0
+EOF
+
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
 
 echo "[INFO] Packaging completed successfully! Dist path: $SCRIPT_DIR/dist"
