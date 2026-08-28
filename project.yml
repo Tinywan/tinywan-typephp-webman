@@ -55,6 +55,12 @@ ignore:
   - vendor/workerman/webman-framework/src/windows.php
   - vendor/workerman/webman-framework/src/Install.php
   - vendor/nikic/fast-route/src/bootstrap.php
+  - vendor/nikic/fast-route/src/DataGenerator/CharCountBased.php
+  - vendor/nikic/fast-route/src/DataGenerator/GroupPosBased.php
+  - vendor/nikic/fast-route/src/DataGenerator/MarkBased.php
+  - vendor/nikic/fast-route/src/Dispatcher/CharCountBased.php
+  - vendor/nikic/fast-route/src/Dispatcher/GroupPosBased.php
+  - vendor/nikic/fast-route/src/Dispatcher/MarkBased.php
   - vendor/workerman/coroutine/tests
   - vendor/workerman/coroutine/stubs
   - vendor/workerman/coroutine/src/Barrier/Swow.php
