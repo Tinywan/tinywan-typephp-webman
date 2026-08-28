@@ -313,10 +313,15 @@ jobs:
           if not exist "build" mkdir "build"
           cd build
           cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
-          nmake phpx
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
-          copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"
-          copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\"
+          nmake phpx
+          if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" if exist "phpx.lib" copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"
+          if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" (
+            echo [ERROR] PHPX import library was not produced by CMake.
+            dir /s /b "%GITHUB_WORKSPACE%\vendor\swoole\phpx\*.lib"
+            exit /b 1
+          )
+          copy /y "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\"
           dir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
 
       - name: Build and Package on Windows
