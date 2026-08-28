@@ -365,21 +365,29 @@ endif()
 
 if (USE_BUNDLED_MPDECIMAL)
     # 内置编译 mpdecimal + libmpdec++
-    message(STATUS "Using bundled mpdecimal with uint128")
-
     file(GLOB MPDEC_C_SOURCES ${MPDECIMAL_DIR}/libmpdec/*.c)
     list(FILTER MPDEC_C_SOURCES EXCLUDE REGEX "bench")
 
-    set(MPD_HEADER_CONFIG "
+    if (IS_WINDOWS)
+        message(STATUS "Using bundled mpdecimal for Windows MSVC (64-bit without uint128)")
+        set(MPD_HEADER_CONFIG "
 #define MPD_CONFIG_64 1
 ")
+        set(MPDECIMAL_DEFINES CONFIG_64 ANSI)
+    else()
+        message(STATUS "Using bundled mpdecimal with uint128")
+        set(MPD_HEADER_CONFIG "
+#define MPD_CONFIG_64 1
+")
+        set(MPDECIMAL_DEFINES CONFIG_64 ANSI HAVE_UINT128_T)
+    endif()
+
     configure_file(
         ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h.in
         ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
         @ONLY
     )
     set(MPDECIMAL_HEADER_DIR ${MPDECIMAL_DIR}/libmpdec)
-    set(MPDECIMAL_DEFINES CONFIG_64 ANSI HAVE_UINT128_T)
     set(MPDECIMAL_SOURCES ${MPDEC_C_SOURCES})
 
     add_library(mpdecimal STATIC
