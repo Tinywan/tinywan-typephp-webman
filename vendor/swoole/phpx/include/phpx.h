@@ -16,16 +16,16 @@
 
 #pragma once
 
-#ifdef _WIN32
-#include <io.h>
-#include <sys/stat.h>
-#endif
+#include "phpx_compat.h"
 
 /**
  * Do not trust any header files of PHP, its internal implementation is very chaotic,
  * which must be wrapped in extern "C" {}
  */
 extern "C" {
+#ifdef _WIN32
+int _wchmod(const wchar_t *filename, int pmode);
+#endif
 #include "php.h"
 #include "zend_ini.h"
 #include "zend_enum.h"
@@ -36,7 +36,6 @@ extern "C" {
 }
 
 #include "phpx_types.h"
-#include "phpx_compat.h"
 
 #if PHP_VERSION_ID < 80400
 #error "PHPX requires PHP 8.4 or later."

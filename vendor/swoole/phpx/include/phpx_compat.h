@@ -1,4 +1,14 @@
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
+
+#include <io.h>
+#include <sys/stat.h>
+#include <stdlib.h>
+
+#ifdef __cplusplus
+extern "C" {
+int _wchmod(const wchar_t *filename, int pmode);
+}
+#endif
 
 #define PATH_MAX _MAX_PATH
 
