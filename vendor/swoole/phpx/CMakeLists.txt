@@ -329,40 +329,42 @@ set_target_properties(wren_gc PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+set(USE_BUNDLED_MPDECIMAL TRUE)
 if (IS_WINDOWS)
-    # Windows: 使用 PHP SDK 中预置的 mpdecimal DLL 导入库
+    # Windows: 尝试使用 PHP SDK 中预置的 mpdecimal DLL 导入库
     find_library(MPDECIMAL_LIBRARY
-        NAMES mpdec-4.0.1
+        NAMES mpdec-4.0.1 mpdec
         PATHS ${PHP_LIBRARY_DIR}
         NO_DEFAULT_PATH
     )
     find_library(MPDECIMALXX_LIBRARY
-        NAMES mpdec++-4.0.1
+        NAMES mpdec++-4.0.1 mpdec++
         PATHS ${PHP_LIBRARY_DIR}
         NO_DEFAULT_PATH
     )
 
-    if (NOT MPDECIMAL_LIBRARY OR NOT MPDECIMALXX_LIBRARY)
-        message(FATAL_ERROR "libmpdec-4.0.1.dll.lib / libmpdec++-4.0.1.dll.lib not found in ${PHP_LIBRARY_DIR}")
-    endif()
-
-    add_library(mpdecimal UNKNOWN IMPORTED)
-    set_target_properties(mpdecimal PROPERTIES
-        IMPORTED_LOCATION "${MPDECIMALXX_LIBRARY}"
-        INTERFACE_LINK_LIBRARIES "${MPDECIMAL_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${PHP_SDK_DIR}/include;${MPDECIMAL_DIR}/libmpdec++"
-    )
-
-    # 复制 DLL 到输出目录
-    file(GLOB MPDEC_DLLS "${PHP_LIBRARY_DIR}/libmpdec-4.0.1.dll" "${PHP_LIBRARY_DIR}/libmpdec++-4.0.1.dll")
-    foreach(_dll ${MPDEC_DLLS})
-        add_custom_command(TARGET phpx POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" $<TARGET_FILE_DIR:phpx>
-            COMMENT "Copying ${_dll} to output"
+    if (MPDECIMAL_LIBRARY AND MPDECIMALXX_LIBRARY)
+        set(USE_BUNDLED_MPDECIMAL FALSE)
+        add_library(mpdecimal UNKNOWN IMPORTED)
+        set_target_properties(mpdecimal PROPERTIES
+            IMPORTED_LOCATION "${MPDECIMALXX_LIBRARY}"
+            INTERFACE_LINK_LIBRARIES "${MPDECIMAL_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${PHP_SDK_DIR}/include;${MPDECIMAL_DIR}/libmpdec++"
         )
-    endforeach()
-else()
-    # Linux/macOS: 内置编译 mpdecimal + libmpdec++
+
+        # 复制 DLL 到输出目录
+        file(GLOB MPDEC_DLLS "${PHP_LIBRARY_DIR}/libmpdec-4.0.1.dll" "${PHP_LIBRARY_DIR}/libmpdec++-4.0.1.dll")
+        foreach(_dll ${MPDEC_DLLS})
+            add_custom_command(TARGET phpx POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" $<TARGET_FILE_DIR:phpx>
+                COMMENT "Copying ${_dll} to output"
+            )
+        endforeach()
+    endif()
+endif()
+
+if (USE_BUNDLED_MPDECIMAL)
+    # 内置编译 mpdecimal + libmpdec++
     message(STATUS "Using bundled mpdecimal with uint128")
 
     file(GLOB MPDEC_C_SOURCES ${MPDECIMAL_DIR}/libmpdec/*.c)
@@ -393,7 +395,9 @@ else()
         C_STANDARD 99
         POSITION_INDEPENDENT_CODE ON
     )
-    target_compile_options(mpdecimal PRIVATE -fPIC)
+    if (NOT IS_WINDOWS)
+        target_compile_options(mpdecimal PRIVATE -fPIC)
+    endif()
 endif()
 
 if(ENABLE_FACADE_API)
