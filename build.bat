@@ -1,7 +1,7 @@
 @echo off
 
 rem 1. Set environment variables
-set PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64
+if not defined PHP_HOME set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
 set PHPX_HOME=%PHP_HOME%\phpx
 set PATH=%PHP_HOME%;%PATH%
 

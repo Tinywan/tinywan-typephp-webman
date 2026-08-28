@@ -1,0 +1,85 @@
+name: Build & Release TypePHP Webman
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            archive_name: tinywan-typephp-webman-linux-x64.tar.gz
+          - os: windows-latest
+            platform: windows-x64
+            archive_name: tinywan-typephp-webman-windows-x64.zip
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo, pdo_mysql, pcntl, posix, opcache, gmp, mbstring
+          coverage: none
+          tools: composer:v2
+
+      # ---------------- Linux 构建环境准备与依赖安装 ----------------
+      - name: Install Linux Build Dependencies (GMP, MPFR, PHP-Embed, CMake, GCC)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libgmp-dev libmpfr-dev libphp8.4-embed || true
+
+      # ---------------- Windows 构建环境准备 ----------------
+      - name: Setup MSVC Toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # ---------------- 安装 PHP 依赖 ----------------
+      - name: Install Composer Dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      # ---------------- Linux 编译与打包 ----------------
+      - name: Build and Package on Linux
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x package.sh start.sh
+          ./package.sh
+          tar -czvf ${{ matrix.archive_name }} -C dist .
+
+      # ---------------- Windows 编译与打包 ----------------
+      - name: Build and Package on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call package.bat
+          powershell Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive_name }}
+
+      # ---------------- 上传构建产物 (Artifacts) ----------------
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}
+
+      # ---------------- 发布 GitHub Release ----------------
+      - name: Create Release and Upload Asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.archive_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

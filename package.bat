@@ -12,7 +12,7 @@ if %ERRORLEVEL% neq 0 (
 rem 2. Sync to dist directory
 echo [INFO] Step 2: Packaging artifacts and runtime resources into dist ...
 
-set PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64
+if not defined PHP_HOME set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"
 
 if not exist "%~dp0dist" mkdir "%~dp0dist"
 
@@ -32,5 +32,13 @@ if exist "%~dp0config" xcopy /y /e /i /q "%~dp0config" "%~dp0dist\config" >nul
 if exist "%~dp0public" xcopy /y /e /i /q "%~dp0public" "%~dp0dist\public" >nul
 if exist "%~dp0app\view" xcopy /y /e /i /q "%~dp0app\view" "%~dp0dist\app\view" >nul
 if exist "%~dp0php.ini" copy /y "%~dp0php.ini" "%~dp0dist\php.ini" >nul
+
+rem Generate run.bat for dist
+echo @echo off > "%~dp0dist\run.bat"
+echo setlocal >> "%~dp0dist\run.bat"
+echo set "PHPRC=%%~dp0" >> "%~dp0dist\run.bat"
+echo set "PATH=%%~dp0;%%PATH%%" >> "%~dp0dist\run.bat"
+echo cd /d "%%~dp0" >> "%~dp0dist\run.bat"
+echo "%%~dp0webman-server.exe" %%* >> "%~dp0dist\run.bat"
 
 echo [INFO] Packaging completed successfully! Dist path: %~dp0dist
