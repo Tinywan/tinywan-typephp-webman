@@ -2,11 +2,19 @@ name: Build & Release TypePHP Webman
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Build target
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - linux
+          - windows
 
 permissions:
   contents: write
@@ -16,19 +24,42 @@ env:
   COMPOSER_PROCESS_TIMEOUT: 0
 
 jobs:
+  select-platform:
+    name: Select build platform
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Generate build matrix
+        id: matrix
+        shell: bash
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          case "$REQUESTED_PLATFORM" in
+            linux)
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"tinywan-typephp-webman-linux-x64.tar.gz"}]}'
+              ;;
+            windows)
+              matrix='{"include":[{"os":"windows-latest","platform":"windows-x64","archive_name":"tinywan-typephp-webman-windows-x64.zip"}]}'
+              ;;
+            all)
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"tinywan-typephp-webman-linux-x64.tar.gz"},{"os":"windows-latest","platform":"windows-x64","archive_name":"tinywan-typephp-webman-windows-x64.zip"}]}'
+              ;;
+            *)
+              echo "Unsupported platform: $REQUESTED_PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: select-platform
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux-x64
-            archive_name: tinywan-typephp-webman-linux-x64.tar.gz
-          - os: windows-latest
-            platform: windows-x64
-            archive_name: tinywan-typephp-webman-windows-x64.zip
+      matrix: ${{ fromJSON(needs.select-platform.outputs.matrix) }}
 
     env:
       PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
