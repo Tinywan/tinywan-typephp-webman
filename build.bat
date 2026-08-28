@@ -41,6 +41,34 @@ rem 4. Ensure build directory and sync php.ini
 if not exist "%~dp0build" mkdir "%~dp0build"
 if exist "%~dp0php.ini" copy /y "%~dp0php.ini" "%~dp0build\php.ini" >nul
 
+rem 4.1 Ensure PHPX library is compiled on Windows
+if not exist "%PHPX_HOME%\lib\phpx.lib" if not exist "%PHPX_HOME%\phpx.lib" (
+    echo [INFO] Compiling PHPX static library (phpx.lib) for MSVC...
+    if exist "%PHPX_HOME%" (
+        pushd "%PHPX_HOME%"
+        if not exist "build" mkdir "build"
+        cd build
+        cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+        if %ERRORLEVEL% equ 0 (
+            nmake phpx
+            if exist "phpx.lib" (
+                if not exist "%PHPX_HOME%\lib" mkdir "%PHPX_HOME%\lib"
+                copy /y "phpx.lib" "%PHPX_HOME%\lib\" >nul
+                copy /y "phpx.lib" "%PHPX_HOME%\" >nul
+            )
+        ) else (
+            cmake .. -Dphp_dir="%PHP_HOME%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+            cmake --build . --config Release --target phpx
+            if exist "Release\phpx.lib" (
+                if not exist "%PHPX_HOME%\lib" mkdir "%PHPX_HOME%\lib"
+                copy /y "Release\phpx.lib" "%PHPX_HOME%\lib\" >nul
+                copy /y "Release\phpx.lib" "%PHPX_HOME%\" >nul
+            )
+        )
+        popd
+    )
+)
+
 rem 5. Run TPC compiler
 echo [INFO] Compiling webman-server with TPC (PHP_HOME=%PHP_HOME% PHPX_HOME=%PHPX_HOME%)...
 cd /d "%~dp0"
