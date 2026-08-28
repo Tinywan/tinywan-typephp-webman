@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  COMPOSER_NO_INTERACTION: 1
+  COMPOSER_PROCESS_TIMEOUT: 0
+
 jobs:
   build:
     name: Build on ${{ matrix.os }}
@@ -17,81 +21,66 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux-x64
             archive_name: tinywan-typephp-webman-linux-x64.tar.gz
           - os: windows-latest
             platform: windows-x64
             archive_name: tinywan-typephp-webman-windows-x64.zip
 
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup PHP 8.4
+      # ---------------- Setup PHP 8.4 (参考官方配置 ZTS 与 embed 支持) ----------------
+      - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, pcntl, posix, opcache, gmp, mbstring
           coverage: none
+          ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
           tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
 
-      # ---------------- Linux 构建环境准备与依赖安装 ----------------
-      - name: Install Linux Build Dependencies (GMP, MPFR, PHP-Embed, CMake, GCC)
+      # ---------------- Linux 构建环境准备 (官方原生依赖) ----------------
+      - name: Install Linux native build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libgmp-dev libmpfr-dev libmpc-dev
-          sudo apt-get install -y php8.4-dev libphp8.4-embed || true
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
+
+      - name: Configure Linux ZTS PHP embed library
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          php_home="$(php-config --prefix)"
+          embed_library="${php_home}/lib/libphp.so"
+          test -x "${php_home}/bin/php-config"
+          test -f "${embed_library}"
+          echo "PHP_HOME=${php_home}" >> "${GITHUB_ENV}"
+          echo "Using ZTS PHP $(php-config --version) embed library: ${embed_library}"
 
       # ---------------- Windows 构建环境准备 ----------------
       - name: Setup MSVC Toolchain
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # ---------------- 安装 PHP 依赖 ----------------
+      # ---------------- 安装 Composer 依赖 ----------------
       - name: Install Composer Dependencies
-        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+        run: composer install --prefer-dist --no-progress
 
       # ---------------- Linux 编译与打包 ----------------
       - name: Build and Package on Linux
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          echo "[CI] Step 1: Locate libphp.so"
-          PHP_PREFIX=$(php-config --prefix)
-          echo "PHP_PREFIX=$PHP_PREFIX"
-
-          # 寻找并软链接 libphp.so 到 PHP 库目录
-          sudo mkdir -p "$PHP_PREFIX/lib"
-          for f in /usr/lib/libphp*.so /usr/lib/x86_64-linux-gnu/libphp*.so; do
-            if [ -f "$f" ]; then
-              echo "Found $f, copying/linking to $PHP_PREFIX/lib/libphp.so and /usr/lib/libphp.so"
-              sudo cp -f "$f" "$PHP_PREFIX/lib/libphp.so"
-              sudo ln -sf "$f" /usr/lib/libphp.so || true
-              break
-            fi
-          done
-
-          echo "[CI] Step 2: Build swoole/phpx"
-          PHPX_DIR="$GITHUB_WORKSPACE/vendor/swoole/phpx"
-          cd "$PHPX_DIR"
-
-          # 拷贝系统中所有与 mpfr/gmp 相关的头文件到 phpx/include 目录，彻底杜绝找不到头文件
-          sudo find /usr/include -name "*mpfr*.h" -o -name "*gmp*.h" | while read -r h; do
-            echo "Copying header: $h to $PHPX_DIR/include/"
-            cp -f "$h" "$PHPX_DIR/include/" || true
-          done
-
-          cmake . -Dphp_dir="$PHP_PREFIX" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
-          make phpx -j$(nproc)
-          sudo make install
-          sudo ldconfig
-          cd "$GITHUB_WORKSPACE"
-
-          echo "[CI] Step 3: Run package.sh"
           chmod +x package.sh start.sh
-          export PHP_HOME="$PHP_PREFIX"
-          export PHPX_HOME="$PHPX_DIR"
           ./package.sh
           tar -czvf ${{ matrix.archive_name }} -C dist .
 

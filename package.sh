@@ -14,40 +14,30 @@ else
     exit 1
 fi
 
-# 1. 检查并链接 libphp.so (针对 Ubuntu / Debian 环境)
-if [ ! -f "/usr/lib/libphp.so" ]; then
-    for f in /usr/lib/libphp*.so /usr/lib/x86_64-linux-gnu/libphp*.so; do
-        if [ -f "$f" ]; then
-            echo "[INFO] Found PHP embed library: $f, linking to /usr/lib/libphp.so"
-            sudo ln -sf "$f" /usr/lib/libphp.so || true
-            break
-        fi
-    done
-fi
-
-# 2. 检查并编译 swoole/phpx C++ 动态库
-PHPX_DIR="$SCRIPT_DIR/vendor/swoole/phpx"
-if [ -d "$PHPX_DIR" ]; then
-    if [ ! -f "$PHPX_DIR/lib/libphpx.so" ] && [ ! -f "$PHPX_DIR/lib/libphpx.a" ]; then
-        echo "[INFO] Building PHPX library in $PHPX_DIR ..."
-        (cd "$PHPX_DIR" && cmake . && make -j$(nproc))
-    fi
-    export PHPX_HOME="$PHPX_DIR"
-fi
-
-# 3. 确定 PHP_HOME 路径
+# 1. 确认 PHP_HOME
 if [ -z "$PHP_HOME" ]; then
     PHP_PREFIX=$(php-config --prefix 2>/dev/null || echo "/usr")
     export PHP_HOME="$PHP_PREFIX"
 fi
 
-# Ensure build directory and php.ini
+# 2. 编译 PHPX
+PHPX_DIR="$SCRIPT_DIR/vendor/swoole/phpx"
+if [ -d "$PHPX_DIR" ] && [ ! -f "$PHPX_DIR/lib/libphpx.so" ] && [ ! -f "$PHPX_DIR/lib/libphpx.a" ]; then
+    echo "[INFO] Building PHPX library in $PHPX_DIR ..."
+    cd "$PHPX_DIR"
+    cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
+    make phpx -j$(nproc)
+    cd "$SCRIPT_DIR"
+fi
+export PHPX_HOME="$PHPX_DIR"
+
+# 3. Ensure build directory and php.ini
 mkdir -p "$SCRIPT_DIR/build"
 if [ -f "$SCRIPT_DIR/php.ini" ]; then
     cp -f "$SCRIPT_DIR/php.ini" "$SCRIPT_DIR/build/php.ini"
 fi
 
-# Compile project
+# 4. Compile project via TPC
 echo "[INFO] Running TPC compiler with PHP_HOME=$PHP_HOME PHPX_HOME=$PHPX_HOME ..."
 php $TPC_BIN "$SCRIPT_DIR/project.yml"
 
