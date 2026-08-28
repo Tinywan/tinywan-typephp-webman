@@ -31,6 +31,17 @@ cd dist
 .\dist\run.bat
 ```
 
+Linux release packages provide the same self-contained entry point:
+
+```sh
+cd dist
+./webman-server start
+```
+
+The `webman-server` launcher sets `PHPRC` and the local library path before
+executing the compiled `webman-server.bin`, so the adjacent `php.ini` is used
+even when the binary is started directly.
+
 ## 2. 踩坑与问题解决汇总 (Troubleshooting)
 
 ### 一、环境配置问题 (Environment)

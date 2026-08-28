@@ -62,11 +62,11 @@ mkdir -p "$SCRIPT_DIR/dist"
 
 # Copy executable
 if [ -f "$SCRIPT_DIR/build/webman-server" ]; then
-    cp -f "$SCRIPT_DIR/build/webman-server" "$SCRIPT_DIR/dist/webman-server"
-    chmod +x "$SCRIPT_DIR/dist/webman-server"
+    cp -f "$SCRIPT_DIR/build/webman-server" "$SCRIPT_DIR/dist/webman-server.bin"
+    chmod +x "$SCRIPT_DIR/dist/webman-server.bin"
 elif [ -f "$SCRIPT_DIR/build/webman_server" ]; then
-    cp -f "$SCRIPT_DIR/build/webman_server" "$SCRIPT_DIR/dist/webman-server"
-    chmod +x "$SCRIPT_DIR/dist/webman-server"
+    cp -f "$SCRIPT_DIR/build/webman_server" "$SCRIPT_DIR/dist/webman-server.bin"
+    chmod +x "$SCRIPT_DIR/dist/webman-server.bin"
 fi
 
 # Copy PHPX runtime library
@@ -96,7 +96,7 @@ fi
 # 自动通过 ldd 探测并打包所有第三方基础依赖库 (如 gmp, mpfr 等)
 mkdir -p "$SCRIPT_DIR/dist/lib"
 echo "[INFO] Scanning and bundling all shared library dependencies via ldd ..."
-for bin_or_lib in "$SCRIPT_DIR/dist/webman-server" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so"; do
+for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so"; do
     if [ -f "$bin_or_lib" ]; then
         ldd "$bin_or_lib" 2>/dev/null | grep "=>" | awk '{print $3}' | while read -r libpath; do
             if [ -f "$libpath" ]; then
@@ -120,7 +120,7 @@ done
 # Set $ORIGIN RPATH to executable and libraries if patchelf is available
 if command -v patchelf &> /dev/null; then
     echo "[INFO] Setting RPATH to \$ORIGIN:\$ORIGIN/lib for all binaries in dist ..."
-    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server" 2>/dev/null || true
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server.bin" 2>/dev/null || true
     for solib in "$SCRIPT_DIR"/dist/*.so "$SCRIPT_DIR"/dist/lib/*.so*; do
         [ -f "$solib" ] && patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$solib" 2>/dev/null || true
     done
@@ -151,28 +151,40 @@ opcache.enable_cli=0
 extension_dir="./ext"
 
 ; 核心进程管理与网络扩展
-[ -f ./ext/posix.so ] && extension=posix.so
-[ -f ./ext/pcntl.so ] && extension=pcntl.so
-[ -f ./ext/openssl.so ] && extension=openssl.so
-[ -f ./ext/mbstring.so ] && extension=mbstring.so
-[ -f ./ext/mysqlnd.so ] && extension=mysqlnd.so
-[ -f ./ext/pdo.so ] && extension=pdo.so
-[ -f ./ext/pdo_mysql.so ] && extension=pdo_mysql.so
-[ -f ./ext/mysqli.so ] && extension=mysqli.so
-[ -f ./ext/curl.so ] && extension=curl.so
-[ -f ./ext/fileinfo.so ] && extension=fileinfo.so
-[ -f ./ext/zip.so ] && extension=zip.so
+extension=posix.so
+extension=pcntl.so
+extension=openssl.so
+extension=mbstring.so
+extension=mysqlnd.so
+extension=pdo.so
+extension=pdo_mysql.so
+extension=mysqli.so
+extension=curl.so
+extension=fileinfo.so
+extension=zip.so
 EOF
 
 # 将 [ -f ... ] 替换为实际存在的扩展
-sed -i 's/^\[ -f \.\/ext\/\(.*\) \] && /; /' "$SCRIPT_DIR/dist/php.ini"
-for ext_so in "$SCRIPT_DIR"/dist/ext/*.so; do
-    if [ -f "$ext_so" ]; then
-        ext_name=$(basename "$ext_so")
+for ext_name in posix pcntl openssl mbstring mysqlnd pdo pdo_mysql mysqli curl fileinfo zip; do
+    if [ ! -f "$SCRIPT_DIR/dist/ext/$ext_name.so" ]; then
         # 激活存在的扩展
-        sed -i "s/^; extension=$ext_name/extension=$ext_name/" "$SCRIPT_DIR/dist/php.ini"
+        sed -i "s/^extension=$ext_name\.so$/; extension=$ext_name.so/" "$SCRIPT_DIR/dist/php.ini"
     fi
 done
+
+# Keep direct invocation self-contained: load the adjacent php.ini and libraries.
+cat > "$SCRIPT_DIR/dist/webman-server" << 'EOF'
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+export PHPRC="$SCRIPT_DIR"
+export LD_LIBRARY_PATH="$SCRIPT_DIR:$SCRIPT_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$SCRIPT_DIR/webman-server.bin" "$@"
+EOF
+chmod +x "$SCRIPT_DIR/dist/webman-server"
 
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
 

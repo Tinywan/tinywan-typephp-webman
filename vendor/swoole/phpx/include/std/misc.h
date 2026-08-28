@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include "phpx.h"
+
 extern "C" {
 #include "php.h"
 #include "zend_API.h"
@@ -28,8 +30,6 @@ extern "C" {
 #include "ext/random/php_random.h"
 #include "php_variables.h"
 }
-
-#include "phpx.h"
 
 namespace php::fn {
 
