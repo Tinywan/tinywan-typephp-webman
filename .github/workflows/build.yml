@@ -76,8 +76,11 @@ jobs:
           PHPX_DIR="$GITHUB_WORKSPACE/vendor/swoole/phpx"
           cd "$PHPX_DIR"
 
-          # 在 CMakeLists.txt 的 include_directories 中注入系统的头文件搜索路径
-          sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include)/g' CMakeLists.txt
+          # 拷贝系统中所有与 mpfr/gmp 相关的头文件到 phpx/include 目录，彻底杜绝找不到头文件
+          sudo find /usr/include -name "*mpfr*.h" -o -name "*gmp*.h" | while read -r h; do
+            echo "Copying header: $h to $PHPX_DIR/include/"
+            cp -f "$h" "$PHPX_DIR/include/" || true
+          done
 
           cmake . -Dphp_dir="$PHP_PREFIX" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF
           make phpx -j$(nproc)
