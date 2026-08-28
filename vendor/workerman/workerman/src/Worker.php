@@ -1365,8 +1365,9 @@ class Worker
      * Signal handler.
      *
      * @param int $signal
+     * @param mixed ...$args
      */
-    public static function signalHandler(int $signal): void
+    public static function signalHandler(int $signal, mixed ...$args): void
     {
         switch ($signal) {
             // Stop.
