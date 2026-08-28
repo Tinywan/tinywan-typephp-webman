@@ -475,7 +475,7 @@ if (IS_WINDOWS)
         $<$<BOOL:${ZTS_ENABLED}>:ZTS>
     )
 
-    target_compile_options(phpx PRIVATE /utf-8)
+    target_compile_options(phpx PRIVATE /utf-8 /EHsc)
 
     set_target_properties(phpx PROPERTIES
         OUTPUT_NAME "phpx"

@@ -3,6 +3,7 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <stdlib.h>
+#include <cstdlib>
 #include <corecrt_wio.h>
 
 #define PATH_MAX _MAX_PATH
