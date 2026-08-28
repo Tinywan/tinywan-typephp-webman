@@ -86,7 +86,6 @@ for candidate in "$PHP_LIB_DIR/libphp.so" "$PHP_LIB_DIR/libphp8.so" /usr/lib/lib
     fi
 done
 if [ ! -f "$SCRIPT_DIR/dist/libphp.so" ]; then
-    # 兜底搜索系统中所有 libphp*.so
     FOUND_LIBPHP=$(find /usr -name "libphp*.so" 2>/dev/null | head -n 1 || true)
     if [ -n "$FOUND_LIBPHP" ] && [ -f "$FOUND_LIBPHP" ]; then
         echo "[INFO] Found PHP runtime library via find: $FOUND_LIBPHP, copying to dist/ ..."
@@ -94,10 +93,37 @@ if [ ! -f "$SCRIPT_DIR/dist/libphp.so" ]; then
     fi
 fi
 
-# Set $ORIGIN RPATH to executable if patchelf is available
-if command -v patchelf &> /dev/null && [ -f "$SCRIPT_DIR/dist/webman-server" ]; then
-    echo "[INFO] Setting RPATH to \$ORIGIN for webman-server ..."
-    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server" || true
+# 自动通过 ldd 探测并打包所有第三方基础依赖库 (如 gmp, mpfr 等)
+mkdir -p "$SCRIPT_DIR/dist/lib"
+echo "[INFO] Scanning and bundling all shared library dependencies via ldd ..."
+for bin_or_lib in "$SCRIPT_DIR/dist/webman-server" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so"; do
+    if [ -f "$bin_or_lib" ]; then
+        ldd "$bin_or_lib" 2>/dev/null | grep "=>" | awk '{print $3}' | while read -r libpath; do
+            if [ -f "$libpath" ]; then
+                libname=$(basename "$libpath")
+                # 排除 Linux 最基础的 glibc 核心库以防跨发行版 ABI 冲突，收集 gmp/mpfr/phpx 等业务扩展库
+                case "$libname" in
+                    libc.so*|ld-linux*|libdl.so*|libpthread.so*|libm.so*|librt.so*)
+                        ;;
+                    *)
+                        if [ ! -f "$SCRIPT_DIR/dist/$libname" ] && [ ! -f "$SCRIPT_DIR/dist/lib/$libname" ]; then
+                            echo "[INFO] Bundling dependent library: $libname (from $libpath)"
+                            cp -f "$libpath" "$SCRIPT_DIR/dist/lib/" || true
+                        fi
+                        ;;
+                esac
+            fi
+        done
+    fi
+done
+
+# Set $ORIGIN RPATH to executable and libraries if patchelf is available
+if command -v patchelf &> /dev/null; then
+    echo "[INFO] Setting RPATH to \$ORIGIN:\$ORIGIN/lib for all binaries in dist ..."
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$SCRIPT_DIR/dist/webman-server" 2>/dev/null || true
+    for solib in "$SCRIPT_DIR"/dist/*.so "$SCRIPT_DIR"/dist/lib/*.so*; do
+        [ -f "$solib" ] && patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$solib" 2>/dev/null || true
+    done
 fi
 
 # Copy configurations and resources
