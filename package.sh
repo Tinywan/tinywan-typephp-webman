@@ -49,7 +49,7 @@ fi
 
 # 4. Compile project via TPC
 echo "[INFO] Running TPC compiler with PHP_HOME=$PHP_HOME PHPX_HOME=$PHPX_HOME ..."
-php $TPC_BIN "$SCRIPT_DIR/project.yml"
+php $TPC_BIN "$SCRIPT_DIR/project.linux.yml"
 
 echo "[INFO] Step 2: Packaging into dist directory..."
 rm -rf "$SCRIPT_DIR/dist"
