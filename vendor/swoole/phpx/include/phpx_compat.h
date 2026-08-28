@@ -3,12 +3,7 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <stdlib.h>
-
-#ifdef __cplusplus
-extern "C" {
-int _wchmod(const wchar_t *filename, int pmode);
-}
-#endif
+#include <corecrt_wio.h>
 
 #define PATH_MAX _MAX_PATH
 

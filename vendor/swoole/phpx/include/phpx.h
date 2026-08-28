@@ -23,9 +23,6 @@
  * which must be wrapped in extern "C" {}
  */
 extern "C" {
-#ifdef _WIN32
-int _wchmod(const wchar_t *filename, int pmode);
-#endif
 #include "php.h"
 #include "zend_ini.h"
 #include "zend_enum.h"
