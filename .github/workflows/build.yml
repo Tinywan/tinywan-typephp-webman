@@ -168,14 +168,14 @@ jobs:
             }
 
             $wchmodDeclaration = @'
-#if defined(__cplusplus)
-extern "C" {
-#endif
-int __cdecl _wchmod(const wchar_t *path, int mode);
-#if defined(__cplusplus)
-}
-#endif
-'@
+          #if defined(__cplusplus)
+          extern "C" {
+          #endif
+          int __cdecl _wchmod(const wchar_t *path, int mode);
+          #if defined(__cplusplus)
+          }
+          #endif
+          '@
             if ($content -notmatch 'int __cdecl _wchmod\(const wchar_t \*path, int mode\);') {
               $content = $content -replace '(#include <stdlib\.h>)(\r?\n)', "`$1`$2$wchmodDeclaration`$2"
               Set-Content -Path $ioutilHeader -Value $content -NoNewline -Encoding utf8
