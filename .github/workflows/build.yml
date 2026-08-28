@@ -75,7 +75,9 @@ jobs:
           echo "[CI] Step 2: Build swoole/phpx"
           PHPX_DIR="$GITHUB_WORKSPACE/vendor/swoole/phpx"
           cd "$PHPX_DIR"
-          cmake . -Dphp_dir="$PHP_PREFIX"
+          export CPLUS_INCLUDE_PATH="/usr/include:/usr/local/include:$CPLUS_INCLUDE_PATH"
+          export C_INCLUDE_PATH="/usr/include:/usr/local/include:$C_INCLUDE_PATH"
+          cmake . -Dphp_dir="$PHP_PREFIX" -DCMAKE_INCLUDE_PATH="/usr/include;/usr/local/include"
           make -j$(nproc)
           sudo make install
           sudo ldconfig
