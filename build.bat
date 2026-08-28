@@ -18,22 +18,25 @@ if exist "%PHP_HOME%\phpx" (
 )
 set "PATH=%PHP_HOME%;%PATH%"
 
-rem 2. Initialize MSVC compiler environment
-if exist "D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" (
-    call "D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
-) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
-    call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
-) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
-) else if exist "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
-    call "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
-) else if defined VS_VCVARS64 (
-    call "%VS_VCVARS64%" >nul
+rem 2. Initialize MSVC compiler environment (skip if cl.exe already available)
+where cl.exe >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    if exist "D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        call "D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+    ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+    ) else if exist "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+        call "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+    ) else if defined VS_VCVARS64 (
+        call "%VS_VCVARS64%" >nul
+    )
 )
 
 rem 3. Remove Git\usr\bin from PATH if present to avoid GNU link.exe conflict
-set PATH=%PATH:C:\Program Files\Git\usr\bin;=%
-set PATH=%PATH:D:\Program Files\Git\usr\bin;=%
+set "PATH=%PATH:C:\Program Files\Git\usr\bin;=%"
+set "PATH=%PATH:D:\Program Files\Git\usr\bin;=%"
 
 rem 4. Ensure build directory and sync php.ini
 if not exist "%~dp0build" mkdir "%~dp0build"
@@ -46,7 +49,10 @@ if exist "%PHP_HOME%\tpc.exe" (
     "%PHP_HOME%\tpc.exe" "%~dp0project.windows.yml"
 ) else if exist "%~dp0vendor\bin\tpc.php" (
     php "%~dp0vendor\bin\tpc.php" "%~dp0project.windows.yml"
-) else (
+) else if exist "%~dp0vendor\swoole\typephp\bin\tpc.php" (
     php "%~dp0vendor\swoole\typephp\bin\tpc.php" "%~dp0project.windows.yml"
+) else (
+    echo [ERROR] Cannot find tpc compiler in %PHP_HOME% or vendor/bin!
+    exit /b 1
 )
 exit /b %ERRORLEVEL%
