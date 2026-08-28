@@ -73,7 +73,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: posix, pcntl, curl, pdo_mysql, mysqli, openssl, mbstring, zip, fileinfo
+          extensions: ${{ matrix.platform == 'linux-x64' && 'posix, pcntl, curl, pdo_mysql, mysqli, openssl, mbstring, zip, fileinfo' || 'zip' }}
           coverage: none
           ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
           tools: composer:v2
