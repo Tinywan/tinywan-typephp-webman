@@ -76,6 +76,24 @@ elif [ -f "$PHPX_DIR/libphpx.so" ]; then
     cp -f "$PHPX_DIR/libphpx.so" "$SCRIPT_DIR/dist/"
 fi
 
+# Copy PHP embed runtime library (libphp.so) if present
+PHP_LIB_DIR=$(php-config --prefix 2>/dev/null)/lib
+for candidate in "$PHP_LIB_DIR/libphp.so" "$PHP_LIB_DIR/libphp8.so" /usr/lib/libphp.so /usr/lib/libphp8.4.so /usr/lib/x86_64-linux-gnu/libphp8.4.so /usr/lib/x86_64-linux-gnu/libphp.so; do
+    if [ -f "$candidate" ]; then
+        echo "[INFO] Found PHP runtime library: $candidate, copying to dist/ ..."
+        cp -f "$candidate" "$SCRIPT_DIR/dist/libphp.so"
+        break
+    fi
+done
+if [ ! -f "$SCRIPT_DIR/dist/libphp.so" ]; then
+    # 兜底搜索系统中所有 libphp*.so
+    FOUND_LIBPHP=$(find /usr -name "libphp*.so" 2>/dev/null | head -n 1 || true)
+    if [ -n "$FOUND_LIBPHP" ] && [ -f "$FOUND_LIBPHP" ]; then
+        echo "[INFO] Found PHP runtime library via find: $FOUND_LIBPHP, copying to dist/ ..."
+        cp -f "$FOUND_LIBPHP" "$SCRIPT_DIR/dist/libphp.so"
+    fi
+fi
+
 # Set $ORIGIN RPATH to executable if patchelf is available
 if command -v patchelf &> /dev/null && [ -f "$SCRIPT_DIR/dist/webman-server" ]; then
     echo "[INFO] Setting RPATH to \$ORIGIN for webman-server ..."
