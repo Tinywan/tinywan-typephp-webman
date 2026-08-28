@@ -55,6 +55,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
 
+      - name: Patch php_hash.h for C++ compatibility
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PHP_INC="$(php-config --include-dir 2>/dev/null || echo '')"
+          echo "PHP include dir: $PHP_INC"
+          if [ -n "$PHP_INC" ]; then
+            sudo find "$PHP_INC" /usr/include -name "php_hash.h" -exec sed -i 's/static inline const php_hash_ops\* php_hash_fetch_ops/static inline const struct _php_hash_ops\* php_hash_fetch_ops/g' {} + 2>/dev/null || true
+          fi
+
       - name: Configure Linux ZTS PHP embed library
         if: runner.os == 'Linux'
         shell: bash

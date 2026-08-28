@@ -79,5 +79,3 @@ mode: bin
 optimize: 2
 job: 8
 debug: false
-cxx-flags:
-  - /bigobj
