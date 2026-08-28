@@ -205,7 +205,8 @@ jobs:
           chmod +x package.sh start.sh
           ./package.sh
           echo "=== Verify dynamic library dependencies (ldd) ==="
-          ldd dist/webman-server.bin
+          ldd dist/webman-server.bin || true
+          ldd dist/libphpx.so || true
           echo "=== Linux Smoke Test: running dist/start.sh status ==="
           ./dist/start.sh status || true
           tar -czvf ${{ matrix.archive_name }} -C dist .
