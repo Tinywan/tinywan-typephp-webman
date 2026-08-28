@@ -32,6 +32,18 @@ extern "C" {
 #include <ext/standard/php_standard.h>
 }
 
+// PHP's Windows compatibility headers may define C-style function macros
+// after phpx_compat.h has been included. They collide with PHPX method names
+// such as SplFileObject::ftruncate() and mysqli_result::free().
+#if defined(WIN32) || defined(_WIN32)
+#ifdef ftruncate
+#undef ftruncate
+#endif
+#ifdef free
+#undef free
+#endif
+#endif
+
 #include "phpx_types.h"
 
 #if PHP_VERSION_ID < 80400
