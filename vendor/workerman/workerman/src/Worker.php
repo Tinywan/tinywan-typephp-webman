@@ -2061,7 +2061,7 @@ class Worker
                     Timer::add(ceil(static::$stopTimeout), 'posix_kill', [$workerPid, SIGKILL], false);
                 }
             }
-            Timer::add(1, [static::class, 'checkIfChildRunning']);
+            Timer::add(1, static::checkIfChildRunning(...));
         } // For child processes.
         else {
             if ($code && $log) {
@@ -2102,7 +2102,7 @@ class Worker
     /**
      * check if child processes is really running
      */
-    protected static function checkIfChildRunning(): void
+    public static function checkIfChildRunning(): void
     {
         foreach (static::$pidMap as $workerId => $workerPidArray) {
             foreach ($workerPidArray as $pid => $workerPid) {
