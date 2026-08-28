@@ -142,6 +142,7 @@ if [ -d "$PHP_EXT_DIR" ]; then
 fi
 
 # 生成 Linux 专用的纯净自包含 php.ini
+# 注意：PHP 扩展加载有顺序依赖（如 mysqlnd 必须在 pdo/mysqli 前加载，pdo 必须在 pdo_mysql 前加载）
 cat > "$SCRIPT_DIR/dist/php.ini" << 'EOF'
 output_buffering=0
 implicit_flush=1
@@ -150,16 +151,28 @@ opcache.enable_cli=0
 extension_dir="./ext"
 
 ; 核心进程管理与网络扩展
-extension=posix.so
-extension=pcntl.so
-extension=curl.so
-extension=pdo_mysql.so
-extension=mysqli.so
-extension=openssl.so
-extension=mbstring.so
-extension=fileinfo.so
-extension=zip.so
+[ -f ./ext/posix.so ] && extension=posix.so
+[ -f ./ext/pcntl.so ] && extension=pcntl.so
+[ -f ./ext/openssl.so ] && extension=openssl.so
+[ -f ./ext/mbstring.so ] && extension=mbstring.so
+[ -f ./ext/mysqlnd.so ] && extension=mysqlnd.so
+[ -f ./ext/pdo.so ] && extension=pdo.so
+[ -f ./ext/pdo_mysql.so ] && extension=pdo_mysql.so
+[ -f ./ext/mysqli.so ] && extension=mysqli.so
+[ -f ./ext/curl.so ] && extension=curl.so
+[ -f ./ext/fileinfo.so ] && extension=fileinfo.so
+[ -f ./ext/zip.so ] && extension=zip.so
 EOF
+
+# 将 [ -f ... ] 替换为实际存在的扩展
+sed -i 's/^\[ -f \.\/ext\/\(.*\) \] && /; /' "$SCRIPT_DIR/dist/php.ini"
+for ext_so in "$SCRIPT_DIR"/dist/ext/*.so; do
+    if [ -f "$ext_so" ]; then
+        ext_name=$(basename "$ext_so")
+        # 激活存在的扩展
+        sed -i "s/^; extension=$ext_name/extension=$ext_name/" "$SCRIPT_DIR/dist/php.ini"
+    fi
+done
 
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
 
