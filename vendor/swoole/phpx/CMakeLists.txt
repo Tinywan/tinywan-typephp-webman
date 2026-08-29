@@ -403,44 +403,74 @@ if (USE_BUNDLED_MPDECIMAL)
     list(FILTER MPDEC_C_SOURCES EXCLUDE REGEX "bench")
 
     if (IS_WINDOWS)
-        message(STATUS "Using bundled mpdecimal for Windows MSVC (64-bit without uint128)")
-        set(MPD_HEADER_CONFIG "
-#define MPD_CONFIG_64 1
-")
-        set(MPDECIMAL_DEFINES CONFIG_64 ANSI)
-        # libmpdec++ uses IMPORTEXPORT=__declspec(dllimport) by default
-        # under MSVC; bundled sources are built here, so mark them as exports.
-        list(APPEND MPDECIMAL_DEFINES BUILD_LIBMPDECXX)
+        message(STATUS "Using bundled mpdecimal DLLs for Windows MSVC (64-bit without uint128)")
+
+        # The TypePHP Windows linker expects the upstream mpdecimal DLL and
+        # import-library names.  Use the upstream MSVC header so C and C++
+        # consumers get matching dllimport/dllexport declarations.
+        configure_file(
+            ${MPDECIMAL_DIR}/libmpdec/mpdecimal64vc.h
+            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
+            COPYONLY
+        )
+
+        add_library(mpdecimal_c SHARED ${MPDEC_C_SOURCES})
+        target_include_directories(mpdecimal_c PUBLIC
+            ${MPDECIMAL_DIR}/libmpdec
+        )
+        target_compile_definitions(mpdecimal_c PRIVATE
+            CONFIG_64
+            ANSI
+            BUILD_LIBMPDEC
+        )
+        set_target_properties(mpdecimal_c PROPERTIES
+            C_STANDARD 99
+            OUTPUT_NAME "libmpdec-4.0.1"
+            ARCHIVE_OUTPUT_NAME "libmpdec-4.0.1.dll"
+            RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
+        )
+
+        add_library(mpdecimal SHARED
+            ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
+        )
+        target_include_directories(mpdecimal PUBLIC
+            ${MPDECIMAL_DIR}/libmpdec
+            ${MPDECIMAL_DIR}/libmpdec++
+        )
+        target_compile_definitions(mpdecimal PRIVATE BUILD_LIBMPDECXX)
+        target_compile_options(mpdecimal PRIVATE /EHsc)
+        target_link_libraries(mpdecimal PUBLIC mpdecimal_c)
+        set_target_properties(mpdecimal PROPERTIES
+            OUTPUT_NAME "libmpdec++-4.0.1"
+            ARCHIVE_OUTPUT_NAME "libmpdec++-4.0.1.dll"
+            RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
+        )
     else()
         message(STATUS "Using bundled mpdecimal with uint128")
         set(MPD_HEADER_CONFIG "
 #define MPD_CONFIG_64 1
 ")
         set(MPDECIMAL_DEFINES CONFIG_64 ANSI HAVE_UINT128_T)
-    endif()
 
-    configure_file(
-        ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h.in
-        ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
-        @ONLY
-    )
-    set(MPDECIMAL_HEADER_DIR ${MPDECIMAL_DIR}/libmpdec)
-    set(MPDECIMAL_SOURCES ${MPDEC_C_SOURCES})
+        configure_file(
+            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h.in
+            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
+            @ONLY
+        )
 
-    add_library(mpdecimal STATIC
-        ${MPDECIMAL_SOURCES}
-        ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
-    )
-    target_include_directories(mpdecimal PUBLIC
-        ${MPDECIMAL_HEADER_DIR}
-        ${MPDECIMAL_DIR}/libmpdec++
-    )
-    target_compile_definitions(mpdecimal PRIVATE ${MPDECIMAL_DEFINES})
-    set_target_properties(mpdecimal PROPERTIES
-        C_STANDARD 99
-        POSITION_INDEPENDENT_CODE ON
-    )
-    if (NOT IS_WINDOWS)
+        add_library(mpdecimal STATIC
+            ${MPDEC_C_SOURCES}
+            ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
+        )
+        target_include_directories(mpdecimal PUBLIC
+            ${MPDECIMAL_DIR}/libmpdec
+            ${MPDECIMAL_DIR}/libmpdec++
+        )
+        target_compile_definitions(mpdecimal PRIVATE ${MPDECIMAL_DEFINES})
+        set_target_properties(mpdecimal PROPERTIES
+            C_STANDARD 99
+            POSITION_INDEPENDENT_CODE ON
+        )
         target_compile_options(mpdecimal PRIVATE -fPIC)
     endif()
 endif()
@@ -470,12 +500,6 @@ if (IS_WINDOWS)
     )
 
     target_compile_definitions(phpx PRIVATE PHPX_EXPORTS)
-    if (USE_BUNDLED_MPDECIMAL)
-        # PHPX's decimal wrappers include decimal.hh directly.  When the
-        # bundled implementation is linked statically, avoid dllimport
-        # references for its C++ symbols under MSVC's /MD runtime.
-        target_compile_definitions(phpx PRIVATE BUILD_LIBMPDECXX)
-    endif()
 
     target_compile_definitions(phpx PUBLIC
         ZEND_WIN32
@@ -490,6 +514,7 @@ if (IS_WINDOWS)
     set_target_properties(phpx PROPERTIES
         OUTPUT_NAME "phpx"
         SUFFIX ".dll"
+        RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
     )
 
     if(PHP_EMBED_LIBRARY AND USE_PHP_EMBED)

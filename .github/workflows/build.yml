@@ -295,7 +295,7 @@ jobs:
           cd "%GITHUB_WORKSPACE%\vendor\swoole\phpx"
           if not exist "build" mkdir "build"
           cd build
-          cmake .. -G "NMake Makefiles" -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
+          cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
           nmake phpx
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" if exist "phpx.lib" copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"
@@ -312,6 +312,7 @@ jobs:
         shell: cmd
         run: |
           call package.bat
+          if errorlevel 1 exit /b 1
           powershell Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive_name }}
 
       # ---------------- 上传构建产物 (Artifacts) ----------------

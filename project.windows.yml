@@ -81,3 +81,4 @@ job: 8
 debug: false
 cxx-flags:
   - /bigobj
+  - /DNOMINMAX
