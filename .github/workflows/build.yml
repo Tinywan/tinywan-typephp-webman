@@ -34,7 +34,7 @@ jobs:
         id: matrix
         shell: bash
         env:
-          REQUESTED_PLATFORM: ${{ inputs.platform || 'all' }}
+          REQUESTED_PLATFORM: ${{ inputs.platform || 'linux' }}
         run: |
           case "$REQUESTED_PLATFORM" in
             linux)

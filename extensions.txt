@@ -8,6 +8,7 @@ openssl
 mbstring
 zip
 fileinfo
+redis
 
 # 可按需开启的扩展：
 # redis
