@@ -208,5 +208,14 @@ chmod +x "$SCRIPT_DIR/dist/webman-server"
 
 [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
 
+# 剥离所有二进制与共享库中的调试符号（最小化包体积）
+if command -v strip &> /dev/null; then
+    echo "[INFO] Stripping debug symbols to minimize package size..."
+    strip --strip-unneeded "$SCRIPT_DIR"/dist/*.bin 2>/dev/null || true
+    strip --strip-unneeded "$SCRIPT_DIR"/dist/*.so 2>/dev/null || true
+    strip --strip-unneeded "$SCRIPT_DIR"/dist/lib/*.so* 2>/dev/null || true
+    strip --strip-unneeded "$SCRIPT_DIR"/dist/ext/*.so 2>/dev/null || true
+fi
+
 echo "[INFO] Packaging completed successfully! Dist path: $SCRIPT_DIR/dist"
 ls -la "$SCRIPT_DIR/dist"
