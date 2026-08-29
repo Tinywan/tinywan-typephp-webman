@@ -100,4 +100,4 @@ output: build/webman-server
 mode: bin
 optimize: 2
 job: 1
-debug: true
+debug: false
