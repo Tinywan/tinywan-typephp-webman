@@ -45,15 +45,29 @@ sources:
   - app
 
 ignore:
-  - config
-  - public
-  - runtime
-  - app/view
-  - support
-  - vendor/workerman/webman-framework/src/support/bootstrap.php
-  - vendor/workerman/webman-framework/src/start.php
-  - vendor/workerman/webman-framework/src/windows.php
-  - vendor/workerman/webman-framework/src/Install.php
+  # ==========================================
+  # 1. 业务目录与动态资源排除
+  # ==========================================
+  - config                                              # 配置文件在运行时由 PHP 动态读取，不编译进二进制
+  - public                                              # 静态资源文件目录（CSS/JS/图片等）
+  - runtime                                             # 运行期临时日志与 PID 缓存目录
+  - app/view                                            # 视图模板文件（由渲染引擎动态解析，需随包分发）
+  - app/model                                           # 数据库模型（若未配置数据库连接或未使用时排除）
+  - app/process/Monitor.php                             # 源码热重载监控进程（AOT 编译为二进制后无需热重载）
+  - support                                             # 辅助函数与支持类定义（已在编译入口或框架内按需载入）
+
+  # ==========================================
+  # 2. Webman 框架初始化与辅助脚本排除
+  # ==========================================
+  - vendor/workerman/webman-framework/src/support/bootstrap.php # 框架传统的解释执行引导脚本（由 main.php 接管）
+  - vendor/workerman/webman-framework/src/start.php             # 传统原生 CLI 启动入口
+  - vendor/workerman/webman-framework/src/windows.php           # 传统 Windows 原生 CLI 启动脚本
+  - vendor/workerman/webman-framework/src/Install.php           # Composer 安装后触发的脚手架安装器
+
+  # ==========================================
+  # 3. Fast-Route 路由未使用的冗余算法引擎排除
+  # （Webman 默认且仅使用 GroupCountBased 算法）
+  # ==========================================
   - vendor/nikic/fast-route/src/bootstrap.php
   - vendor/nikic/fast-route/src/DataGenerator/CharCountBased.php
   - vendor/nikic/fast-route/src/DataGenerator/GroupPosBased.php
@@ -61,6 +75,11 @@ ignore:
   - vendor/nikic/fast-route/src/Dispatcher/CharCountBased.php
   - vendor/nikic/fast-route/src/Dispatcher/GroupPosBased.php
   - vendor/nikic/fast-route/src/Dispatcher/MarkBased.php
+
+  # ==========================================
+  # 4. 协程组件：Swow 扩展依赖排除
+  # （由于环境未安装 ext-swow 扩展，防止编译期因缺少 Swow 命名空间报错）
+  # ==========================================
   - vendor/workerman/coroutine/tests
   - vendor/workerman/coroutine/stubs
   - vendor/workerman/coroutine/src/Barrier/Swow.php
@@ -69,10 +88,13 @@ ignore:
   - vendor/workerman/coroutine/src/Coroutine/Swow.php
   - vendor/workerman/coroutine/src/WaitGroup/Swow.php
   - vendor/workerman/workerman/src/Events/Swow.php
+
+  # ==========================================
+  # 5. 协程组件：依赖 WeakMap/析构探针的高级连接池工具排除
+  # （避免编译期涉及 WeakMap 等复杂 GC 强相关语法）
+  # ==========================================
   - vendor/workerman/coroutine/src/Pool.php
   - vendor/workerman/coroutine/src/Utils/DestructionWatcher.php
-  - app/model
-  - app/process/Monitor.php
 
 output: build/webman-server
 mode: bin
