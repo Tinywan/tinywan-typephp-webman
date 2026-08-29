@@ -514,7 +514,6 @@ if (IS_WINDOWS)
     set_target_properties(phpx PROPERTIES
         OUTPUT_NAME "phpx"
         SUFFIX ".dll"
-        RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
     )
 
     if(PHP_EMBED_LIBRARY AND USE_PHP_EMBED)

@@ -298,6 +298,10 @@ jobs:
           cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
           nmake phpx
+          if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\build\phpx.dll" (
+            echo [ERROR] PHPX runtime library was not produced in the build directory.
+            exit /b 1
+          )
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" if exist "phpx.lib" copy /y "phpx.lib" "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\"
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib\phpx.lib" (
             echo [ERROR] PHPX import library was not produced by CMake.

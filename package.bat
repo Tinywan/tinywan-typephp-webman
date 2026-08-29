@@ -26,7 +26,12 @@ if exist "%~dp0build\webman-server.exe" (
 
 rem Copy DLL and extensions
 if exist "%PHP_HOME%\*.dll" copy /y "%PHP_HOME%\*.dll" "%~dp0dist\" >nul
-for %%F in (phpx.dll libmpdec-4.0.1.dll libmpdec++-4.0.1.dll) do (
+if not exist "%PHPX_HOME%\build\phpx.dll" (
+    echo [ERROR] Required PHPX runtime DLL not found: %PHPX_HOME%\build\phpx.dll
+    exit /b 1
+)
+copy /y "%PHPX_HOME%\build\phpx.dll" "%~dp0dist\" >nul
+for %%F in (libmpdec-4.0.1.dll libmpdec++-4.0.1.dll) do (
     if not exist "%PHPX_HOME%\lib\%%F" (
         echo [ERROR] Required PHPX runtime DLL not found: %PHPX_HOME%\lib\%%F
         exit /b 1
