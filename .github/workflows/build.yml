@@ -34,21 +34,30 @@ jobs:
         id: matrix
         shell: bash
         env:
-          REQUESTED_PLATFORM: ${{ inputs.platform || 'linux' }}
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          case "$REQUESTED_PLATFORM" in
+          PLATFORM="$REQUESTED_PLATFORM"
+          if [ -z "$PLATFORM" ]; then
+            if [[ "$TAG_NAME" == *"-linux"* ]]; then
+              PLATFORM="linux"
+            elif [[ "$TAG_NAME" == *"-windows"* ]]; then
+              PLATFORM="windows"
+            else
+              PLATFORM="all"
+            fi
+          fi
+
+          echo "Target platform selected: $PLATFORM"
+          case "$PLATFORM" in
             linux)
               matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"typephp-webman-linux-x64.tar.gz"}]}'
               ;;
             windows)
               matrix='{"include":[{"os":"windows-latest","platform":"windows-x64","archive_name":"typephp-webman-windows-x64.zip"}]}'
               ;;
-            all)
+            all|*)
               matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"typephp-webman-linux-x64.tar.gz"},{"os":"windows-latest","platform":"windows-x64","archive_name":"typephp-webman-windows-x64.zip"}]}'
-              ;;
-            *)
-              echo "Unsupported platform: $REQUESTED_PLATFORM" >&2
-              exit 1
               ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
