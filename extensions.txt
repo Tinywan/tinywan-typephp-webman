@@ -1,0 +1,15 @@
+# Webman & TypePHP 运行必需扩展列表（一行一个，支持 # 注释）
+posix
+pcntl
+curl
+pdo_mysql
+mysqli
+openssl
+mbstring
+zip
+fileinfo
+
+# 可按需开启的扩展：
+# redis
+# swoole
+# swow

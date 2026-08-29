@@ -68,12 +68,24 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Load PHP Extensions List
+        id: ext
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ] && [ -f "extensions.txt" ]; then
+            EXT_LIST=$(grep -v '^[[:space:]]*#' extensions.txt | grep -v '^[[:space:]]*$' | tr '\r\n' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
+            echo "Loaded Linux extensions: $EXT_LIST"
+            echo "list=$EXT_LIST" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=zip" >> "$GITHUB_OUTPUT"
+          fi
+
       # ---------------- Setup PHP 8.4 (参考官方配置 ZTS 与 embed 支持) ----------------
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: ${{ matrix.platform == 'linux-x64' && 'posix, pcntl, curl, pdo_mysql, mysqli, openssl, mbstring, zip, fileinfo' || 'zip' }}
+          extensions: ${{ steps.ext.outputs.list }}
           coverage: none
           ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
           tools: composer:v2

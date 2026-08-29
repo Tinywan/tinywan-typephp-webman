@@ -167,13 +167,30 @@ extension=fileinfo.so
 extension=zip.so
 EOF
 
-# 将 [ -f ... ] 替换为实际存在的扩展
-for ext_name in posix pcntl openssl mbstring mysqlnd pdo pdo_mysql mysqli curl fileinfo zip; do
-    if [ ! -f "$SCRIPT_DIR/dist/ext/$ext_name.so" ]; then
-        # 激活存在的扩展
-        sed -i "s/^extension=$ext_name\.so$/; extension=$ext_name.so/" "$SCRIPT_DIR/dist/php.ini"
-    fi
+# 如果 extensions.txt 中有其他自定义扩展，追加到 php.ini
+if [ -f "$SCRIPT_DIR/extensions.txt" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        clean_ext=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/#.*$//')
+        if [ -n "$clean_ext" ]; then
+            if ! grep -q "extension=${clean_ext}\.so" "$SCRIPT_DIR/dist/php.ini"; then
+                echo "extension=${clean_ext}.so" >> "$SCRIPT_DIR/dist/php.ini"
+            fi
+        fi
+    done < "$SCRIPT_DIR/extensions.txt"
+fi
+
+# 检查所有扩展，若 ext/ 目录下没有对应 .so（说明已静态内联进内核），则注释该行以防产生 Warning
+for ext_so in "$SCRIPT_DIR"/dist/ext/*.so; do
+    :
 done
+while IFS= read -r line || [ -n "$line" ]; do
+    if echo "$line" | grep -q "^extension="; then
+        ext_file=$(echo "$line" | cut -d'=' -f2)
+        if [ ! -f "$SCRIPT_DIR/dist/ext/$ext_file" ]; then
+            sed -i "s/^extension=$ext_file$/; extension=$ext_file/" "$SCRIPT_DIR/dist/php.ini"
+        fi
+    fi
+done < "$SCRIPT_DIR/dist/php.ini"
 
 # Keep direct invocation self-contained: load the adjacent php.ini and libraries.
 cat > "$SCRIPT_DIR/dist/webman-server" << 'EOF'
