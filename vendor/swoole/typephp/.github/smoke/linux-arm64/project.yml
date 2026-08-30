@@ -1,0 +1,9 @@
+name: linux-arm64-smoke
+mode: bin
+build-dir: build
+output: linux_arm64_smoke
+cxx-std: c++17
+
+sources:
+  - main.php
+  - cpp-src

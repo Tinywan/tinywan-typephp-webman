@@ -1,0 +1,10 @@
+{
+  "name": "typephp-wasm-test-harness",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bytecodealliance/jco": "^1.27.0",
+    "@bytecodealliance/preview2-shim": "0.20.1",
+    "puppeteer-core": "^24.16.0"
+  }
+}

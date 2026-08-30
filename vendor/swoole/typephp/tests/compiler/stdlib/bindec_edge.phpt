@@ -1,0 +1,20 @@
+--TEST--
+bindec/hexdec/octdec edge cases: invalid input
+--FILE--
+<?php
+var_dump(bindec(""));
+var_dump(hexdec(""));
+var_dump(octdec(""));
+var_dump(bindec("2"));
+var_dump(hexdec("G"));
+var_dump(bindec("1010"));
+var_dump(hexdec("A"));
+?>
+--EXPECT--
+int(0)
+int(0)
+int(0)
+int(0)
+int(0)
+int(10)
+int(10)

@@ -1,0 +1,35 @@
+--TEST--
+Bug #76713 (Segmentation fault caused by property corruption)
+--FILE--
+<?php
+function test($obj)
+{
+    return array_column(array($obj), "prop");
+}
+class C
+{
+    public $name;
+    public function __get($name)
+    {
+        return $this->name;
+    }
+}
+function main()
+{
+    $obj = new Stdclass();
+    $obj->prop = str_pad("a", 10, 'a');
+    test($obj);
+    test($obj);
+    test($obj);
+    var_dump($obj->prop);
+    $obj2 = new C();
+    $obj2->name = str_pad("b", 10, 'b');
+    test($obj2);
+    test($obj2);
+    test($obj2);
+    var_dump($obj2->prop);
+}
+?>
+--EXPECT--
+string(10) "aaaaaaaaaa"
+string(10) "bbbbbbbbbb"

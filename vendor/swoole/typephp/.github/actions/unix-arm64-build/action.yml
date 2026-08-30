@@ -1,0 +1,155 @@
+name: Unix ARM64 build
+description: Build and smoke-test TypePHP on a Unix ARM64 runner
+
+inputs:
+  php-version:
+    description: PHP minor version
+    required: true
+  os:
+    description: Package operating-system identifier
+    required: true
+  library-extension:
+    description: Shared-library extension used by PHPX
+    required: true
+  smoke-directory:
+    description: Platform smoke project directory below .github/smoke
+    required: true
+  smoke-binary:
+    description: Platform smoke executable name
+    required: true
+  smoke-output:
+    description: Expected platform smoke output
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ inputs.php-version }}
+        coverage: none
+        extensions: mbstring
+        ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+        tools: composer:v2
+      env:
+        fail-fast: true
+        phpts: ts
+        update: true
+
+    - name: Install Linux build dependencies
+      if: inputs.os == 'linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config
+
+    - name: Install macOS build dependencies
+      if: inputs.os == 'macos'
+      shell: bash
+      run: brew install cmake gmp mpfr pkg-config
+
+    - name: Verify ZTS PHP and architecture
+      shell: bash
+      run: |
+        php -r 'if (!PHP_ZTS) { fwrite(STDERR, "Expected a ZTS PHP build\n"); exit(1); }'
+        case "$(php -r 'echo PHP_VERSION;')" in
+          "${{ inputs.php-version }}"*) ;;
+          *) echo "setup-php installed an unexpected PHP version" >&2; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          arm64|aarch64) ;;
+          *) echo "Expected an ARM64 runner, got $(uname -m)" >&2; exit 1 ;;
+        esac
+
+        php_home="$(php-config --prefix)"
+        embed_library="${php_home}/lib/libphp.${{ inputs.library-extension }}"
+        test -x "${php_home}/bin/php-config"
+        test -f "${embed_library}"
+        echo "PHP_HOME=${php_home}" >> "${GITHUB_ENV}"
+        if [[ '${{ inputs.os }}' == 'linux' ]]; then
+          echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${php_home}/lib" >> "${GITHUB_ENV}"
+        else
+          echo "DYLD_LIBRARY_PATH=${PHPX_HOME}/lib:${php_home}/lib" >> "${GITHUB_ENV}"
+        fi
+        php -v
+        php-config --configure-options
+
+    - name: Patch php_hash.h C++ compatibility
+      uses: ./.github/actions/patch-php-headers
+
+    - name: Install Composer dependencies
+      shell: bash
+      run: composer install --prefer-dist --no-progress
+
+    - name: Build PHPX
+      shell: bash
+      run: |
+        cmake -S "${PHPX_HOME}" -B "${PHPX_HOME}/build" \
+          -D CMAKE_BUILD_TYPE=Release \
+          -D BUILD_TESTS=OFF \
+          -D BUILD_EXT=OFF \
+          -D GITHUB_ACTION=ON \
+          -D php_dir="${PHP_HOME}"
+        cmake --build "${PHPX_HOME}/build" --target phpx --parallel 2
+        test -f "${PHPX_HOME}/lib/libphpx.${{ inputs.library-extension }}"
+
+    - name: Build tpc
+      shell: bash
+      run: |
+        php bin/tpc.php project.yml --job 2 --no-progress
+        test -x ./tpc
+        file ./tpc
+        file ./tpc | grep -Eiq 'arm64|aarch64|ARM aarch64'
+        ./tpc --version
+
+    - name: Run platform smoke test
+      shell: bash
+      run: |
+        smoke_root=".github/smoke/${{ inputs.smoke-directory }}"
+        ./tpc "${smoke_root}/project.yml" --job 1 --no-progress
+        smoke_binary="${smoke_root}/${{ inputs.smoke-binary }}"
+        test -x "${smoke_binary}"
+        output="$("${smoke_binary}")"
+        test "${output}" = '${{ inputs.smoke-output }}'
+
+    - name: Show native dependencies
+      shell: bash
+      run: |
+        if [[ '${{ inputs.os }}' == 'linux' ]]; then
+          ldd ./tpc
+        else
+          otool -L ./tpc
+        fi
+
+    - name: Package tested compiler
+      if: startsWith(github.ref, 'refs/tags/') && inputs.php-version == '8.5'
+      shell: bash
+      run: |
+        composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
+        export TYPEPHP_PACKAGE_VERSION="${GITHUB_REF_NAME}"
+        php package.php
+        test "$(find . -maxdepth 1 -name 'tpc_v*_${{ inputs.os }}_arm64.tar.gz' -type f | wc -l)" -eq 1
+
+    - name: Upload release package
+      if: startsWith(github.ref, 'refs/tags/') && inputs.php-version == '8.5'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-${{ inputs.os }}-arm64-php-${{ inputs.php-version }}-zts
+        if-no-files-found: error
+        retention-days: 1
+        path: tpc_v*_${{ inputs.os }}_arm64.tar.gz
+
+    - name: Upload platform build outputs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tpc-${{ inputs.os }}-arm64-php-${{ inputs.php-version }}-zts
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 7
+        path: |
+          tpc
+          .github/smoke/${{ inputs.smoke-directory }}/${{ inputs.smoke-binary }}
+          .github/smoke/${{ inputs.smoke-directory }}/build/**/*.cc
+          .github/smoke/${{ inputs.smoke-directory }}/build/**/*.h

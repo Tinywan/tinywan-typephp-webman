@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TypePHP 运行时初始化与关闭流程</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #09111f;
+            --panel: #101b2d;
+            --panel-2: #142238;
+            --line: #2b3d59;
+            --text: #e7edf7;
+            --muted: #9baac0;
+            --host: #94a3b8;
+            --php: #9d8cff;
+            --phpx: #29c7c9;
+            --typephp: #ffae57;
+            --project: #57d68d;
+            --danger: #ff6b7a;
+            --warn: #ffd166;
+            --ok: #57d68d;
+            --shadow: 0 18px 50px rgba(0, 0, 0, .24);
+        }
+
+        * { box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            margin: 0;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(157, 140, 255, .14), transparent 30rem),
+                radial-gradient(circle at 90% 15%, rgba(41, 199, 201, .10), transparent 34rem),
+                var(--bg);
+            color: var(--text);
+            font: 15px/1.7 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        main { width: min(1240px, calc(100% - 32px)); margin: 0 auto 80px; }
+
+        header {
+            padding: 64px 0 32px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        h1, h2, h3 { line-height: 1.25; letter-spacing: -.02em; }
+        h1 { margin: 0 0 12px; font-size: clamp(32px, 5vw, 56px); }
+        h2 { margin: 64px 0 20px; font-size: 30px; }
+        h3 { margin: 28px 0 12px; font-size: 20px; }
+        p { margin: 10px 0; }
+        a { color: #8fcbff; }
+
+        code {
+            padding: .12em .38em;
+            border: 1px solid rgba(255, 255, 255, .08);
+            border-radius: 5px;
+            background: rgba(0, 0, 0, .24);
+            color: #f2f6fc;
+            font: .92em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        pre {
+            overflow: auto;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #07101d;
+            box-shadow: inset 0 1px rgba(255, 255, 255, .03);
+        }
+
+        pre code { padding: 0; border: 0; background: none; }
+
+        .subtitle { max-width: 920px; color: var(--muted); font-size: 18px; }
+        .meta { margin-top: 20px; color: var(--muted); font-size: 13px; }
+
+        nav {
+            position: sticky;
+            z-index: 20;
+            top: 0;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 12px 0;
+            background: rgba(9, 17, 31, .88);
+            border-bottom: 1px solid var(--line);
+            backdrop-filter: blur(14px);
+        }
+
+        nav a {
+            flex: none;
+            padding: 7px 11px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--muted);
+            text-decoration: none;
+        }
+
+        nav a:hover { color: var(--text); border-color: #567093; }
+
+        .grid { display: grid; gap: 14px; }
+        .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+        .card {
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: linear-gradient(145deg, rgba(20, 34, 56, .96), rgba(13, 24, 41, .96));
+            box-shadow: var(--shadow);
+        }
+
+        .card h3 { margin-top: 0; }
+        .card p:last-child { margin-bottom: 0; }
+        .layer-host { --accent: var(--host); }
+        .layer-php { --accent: var(--php); }
+        .layer-phpx { --accent: var(--phpx); }
+        .layer-typephp { --accent: var(--typephp); }
+        .layer-project { --accent: var(--project); }
+        .layer-card { border-top: 3px solid var(--accent); }
+        .layer-card .tag { color: var(--accent); }
+
+        .tag {
+            display: inline-block;
+            margin-bottom: 9px;
+            font-weight: 750;
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .callout {
+            margin: 20px 0;
+            padding: 16px 18px;
+            border-left: 4px solid var(--warn);
+            border-radius: 0 10px 10px 0;
+            background: rgba(255, 209, 102, .09);
+        }
+
+        .callout.danger { border-color: var(--danger); background: rgba(255, 107, 122, .09); }
+        .callout.ok { border-color: var(--ok); background: rgba(87, 214, 141, .09); }
+
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+        table { width: 100%; border-collapse: collapse; min-width: 780px; background: rgba(16, 27, 45, .78); }
+        th, td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+        th { background: #17263d; color: #dce8f8; }
+        tr:last-child td { border-bottom: 0; }
+        td:first-child, th:first-child { white-space: nowrap; }
+
+        .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 18px 0; }
+        .legend span { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+        .legend i { width: 11px; height: 11px; border-radius: 3px; background: var(--accent); }
+
+        .flowchart {
+            overflow-x: auto;
+            margin: 22px 0;
+            padding: 20px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: rgba(7, 16, 29, .72);
+            box-shadow: var(--shadow);
+        }
+
+        .flow-title { margin: 0 0 16px; font-size: 17px; }
+        .flow { display: flex; align-items: stretch; gap: 8px; min-width: 900px; }
+        .flow.vertical { min-width: 0; flex-direction: column; max-width: 920px; margin: 0 auto; }
+        .flow-step {
+            position: relative;
+            flex: 1;
+            min-width: 145px;
+            padding: 13px 12px;
+            border: 1px solid color-mix(in srgb, var(--accent), transparent 45%);
+            border-radius: 10px;
+            background: color-mix(in srgb, var(--accent) 11%, #101b2d);
+        }
+
+        .flow-step strong { display: block; color: var(--accent); }
+        .flow-step small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.45; }
+        .arrow { align-self: center; flex: none; color: #69809f; font-size: 23px; font-weight: 800; }
+        .flow.vertical .arrow { transform: rotate(90deg); }
+
+        .phase {
+            display: grid;
+            grid-template-columns: 118px minmax(0, 1fr);
+            gap: 14px;
+            align-items: start;
+            padding: 14px 0;
+            border-bottom: 1px dashed var(--line);
+        }
+
+        .phase:last-child { border-bottom: 0; }
+        .phase-name { color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+        .phase-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+        .phase-steps .flow-step { flex: 0 1 245px; }
+        .phase-steps .arrow { font-size: 18px; }
+
+        .module-stack { display: grid; gap: 10px; }
+        .module-row {
+            display: grid;
+            grid-template-columns: 150px minmax(0, 1fr) 160px;
+            gap: 10px;
+            align-items: center;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            background: rgba(20, 34, 56, .68);
+        }
+
+        .module-row .owner { color: var(--project); font-weight: 700; }
+        .module-row .shared { color: var(--phpx); }
+        .module-row .private { color: var(--typephp); text-align: right; }
+
+        .status { font-weight: 750; }
+        .yes { color: var(--ok); }
+        .no { color: var(--danger); }
+        .conditional { color: var(--warn); }
+
+        ul, ol { padding-left: 22px; }
+        li + li { margin-top: 6px; }
+
+        .source-list code { word-break: break-all; }
+        footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); }
+
+        @media (max-width: 900px) {
+            .grid.four, .grid.three, .grid.two { grid-template-columns: 1fr; }
+            .module-row { grid-template-columns: 1fr; }
+            .module-row .private { text-align: left; }
+            .phase { grid-template-columns: 1fr; }
+        }
+
+        @media print {
+            :root { color-scheme: light; --bg: #fff; --panel: #fff; --panel-2: #f7f9fc; --line: #ccd5e1; --text: #172033; --muted: #526176; }
+            body { background: #fff; }
+            nav { display: none; }
+            .card, .flowchart { box-shadow: none; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>TypePHP 运行时生命周期</h1>
+        <p class="subtitle">PHP、PHPX、TypePHP 生成模块与具体项目的 init/shutdown 调用关系；覆盖原生 bin、ext、lib，多 TypePHP 模块，以及 WASI command / component。</p>
+        <p class="meta">依据当前实现整理 · 2026-08-22 · TypePHP <code>4e00799</code> · PHPX <code>f0a67ba</code> · PHP/WASI <code>4dafa96b</code></p>
+    </header>
+
+    <nav aria-label="章节导航">
+        <a href="#layers">四层职责</a>
+        <a href="#matrix">模式对比</a>
+        <a href="#ext">EXT 多模块</a>
+        <a href="#bin">BIN + EXT</a>
+        <a href="#lib">LIB 多模块</a>
+        <a href="#wasm">WASM</a>
+        <a href="#shutdown">关闭顺序</a>
+        <a href="#names">名称辨析</a>
+        <a href="#rules">维护规则</a>
+    </nav>
+
+    <section id="layers">
+        <h2>一、先分清四个层次</h2>
+        <div class="grid four">
+            <article class="card layer-card layer-php">
+                <span class="tag">PHP / ZendVM</span>
+                <h3>运行时所有者</h3>
+                <p><code>php_embed_init()</code>、<code>php_request_startup()</code>、<code>php_embed_shutdown()</code>，以及 MINIT/RINIT/RSHUTDOWN/MSHUTDOWN 的最终调度者。</p>
+            </article>
+            <article class="card layer-card layer-phpx">
+                <span class="tag">PHPX</span>
+                <h3>C++ 安全封装与共享状态</h3>
+                <p><code>php::request_init()</code> 初始化 Decimal、Native GC、Box 资源；<code>php::request_shutdown()</code> 执行 Native finalizer 并清理请求缓存。</p>
+            </article>
+            <article class="card layer-card layer-typephp">
+                <span class="tag">TypePHP</span>
+                <h3>生成的 Zend 模块</h3>
+                <p>生成 <code>zend_module_entry</code>、项目专属 MINIT/MSHUTDOWN/RINIT/RSHUTDOWN，以及 <code>typephp_&lt;project&gt;_runtime_*</code> ABI。</p>
+            </article>
+            <article class="card layer-card layer-project">
+                <span class="tag">Project</span>
+                <h3>项目私有状态</h3>
+                <p>全局变量、静态属性、数组常量、请求模板、Python module cache、项目符号 cache，以及 bin 模式的 <code>main()</code>。</p>
+            </article>
+        </div>
+
+        <div class="callout">
+            <strong>同名但不同层：</strong>PHPX 的文件内 <code>module_init(zend_module_entry *)</code> 表示“向 Zend 注册并启动一个模块”；生成在项目命名空间里的 <code>static module_init()</code> 表示“初始化项目请求级数据”。后者不是 MINIT。
+        </div>
+
+        <h3>生命周期嵌套关系</h3>
+        <figure class="flowchart" aria-label="四层生命周期嵌套流程图">
+            <div class="flow-title">外层寿命包含内层寿命；内层必须先结束</div>
+            <div class="flow">
+                <div class="flow-step layer-php"><strong>PHP / SAPI lifetime</strong><small>SINIT → module startup → module shutdown → SSHUTDOWN</small></div>
+                <div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>TypePHP module lifetime</strong><small>MINIT → MSHUTDOWN；每个项目模块各一份</small></div>
+                <div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>PHP request lifetime</strong><small>request startup → shutdown callbacks/destructors → request shutdown</small></div>
+                <div class="arrow">→</div>
+                <div class="flow-step layer-project"><strong>Project request state</strong><small>RINIT/module_init → 执行 → RSHUTDOWN/module_clean</small></div>
+            </div>
+        </figure>
+    </section>
+
+    <section id="matrix">
+        <h2>二、模式总览</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>模式</th><th>PHP runtime 所有者</th><th>项目模块何时注册</th><th>项目 RINIT/RSHUTDOWN</th><th>入口</th><th>多模块结论</th></tr></thead>
+                <tbody>
+                <tr><td><code>ext</code></td><td>外部 PHP SAPI（CLI/FPM/Embed）</td><td>PHP module startup 期间</td><td>PHP 自动调度</td><td>外部 PHP 脚本调用编译符号</td><td><span class="status yes">支持多个</span>，但 PHP 符号不得冲突</td></tr>
+                <tr><td><code>bin</code></td><td>生成的 C++ <code>main()</code></td><td><code>php_embed_init()</code> 完成后才注册</td><td>自身项目由 PHPX 手动补调</td><td>RINIT 中 <code>php::eval(... main())</code></td><td>可再加载多个常规 ext</td></tr>
+                <tr><td><code>lib</code></td><td>宿主显式调用项目 runtime ABI</td><td>与 bin 相同，属于晚注册模块</td><td>自身项目由 PHPX 手动补调</td><td>宿主调用导出函数，无生成 main</td><td>可加载多个库；同进程只能有一个活动 Zend runtime</td></tr>
+                <tr><td>WASI command</td><td>WASM <code>_start/main</code></td><td>与原生 bin 同构</td><td>手动补调自身项目</td><td>执行 TypePHP <code>main()</code></td><td>单实例、静态链接；无动态 ext</td></tr>
+                <tr><td>WASI component library</td><td>WIT runtime resource</td><td><code>create-runtime</code> 时</td><td>resource 创建/析构负责</td><td><code>#[WasmExport]</code> 方法</td><td>每个 Component 实例仅一个活动 resource</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="ext">
+        <h2>三、EXT：PHP 自动管理多个 TypePHP 模块</h2>
+        <p>假设 PHP 同时加载 <code>typephp_app_a</code>、<code>typephp_app_b</code>。两个模块都在 PHP 收集 request handlers 之前注册，因此走标准 Zend 模块生命周期。</p>
+
+        <figure class="flowchart" aria-label="多个 TypePHP 扩展启动流程图">
+            <div class="flow-title">进程启动与一次 request</div>
+            <div class="phase">
+                <div class="phase-name">Module startup</div>
+                <div class="phase-steps">
+                    <div class="flow-step layer-php"><strong>PHP module startup</strong><small>读取 extension 配置，注册模块</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>A::MINIT</strong><small>注册 A 的类、函数、属性元数据</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>B::MINIT</strong><small>注册 B；共享 hook 采用计数</small></div>
+                </div>
+            </div>
+            <div class="phase">
+                <div class="phase-name">Request startup</div>
+                <div class="phase-steps">
+                    <div class="flow-step layer-php"><strong>php_request_startup</strong><small>zend_activate_modules()</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>A::RINIT</strong><small><code>php::request_init()</code> 首次真正初始化；A <code>module_init()</code></small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>B::RINIT</strong><small>PHPX init 幂等返回；B <code>module_init()</code></small></div>
+                </div>
+            </div>
+            <div class="phase">
+                <div class="phase-name">Request shutdown</div>
+                <div class="phase-steps">
+                    <div class="flow-step layer-php"><strong>shutdown callbacks</strong><small>先执行注册的 shutdown function 与对象析构</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>B::RSHUTDOWN</strong><small>首次 <code>php::request_shutdown()</code> 清共享 PHPX 状态；再清 B</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>A::RSHUTDOWN</strong><small>PHPX shutdown 幂等返回；再清 A</small></div>
+                </div>
+            </div>
+            <div class="phase">
+                <div class="phase-name">Module shutdown</div>
+                <div class="phase-steps">
+                    <div class="flow-step layer-typephp"><strong>B::MSHUTDOWN</strong><small>清 B persistent cache，共享 hook 计数减一</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>A::MSHUTDOWN</strong><small>最后一个模块恢复 Reflection handler、清 FiberGenerator 借用指针</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-php"><strong>PHP module shutdown</strong><small>Zend/SAPI 继续退出</small></div>
+                </div>
+            </div>
+        </figure>
+
+        <h3>多 ext 时哪些状态共享，哪些隔离</h3>
+        <div class="module-stack">
+            <div class="module-row"><span class="owner">App A</span><span class="shared">共享：同一 PHPX request、Native GC、Box 类型、Reflection/Fiber hook</span><span class="private">私有：A globals/cache</span></div>
+            <div class="module-row"><span class="owner">App B</span><span class="shared">共享：同一 PHPX request、Native GC、Box 类型、Reflection/Fiber hook</span><span class="private">私有：B globals/cache</span></div>
+            <div class="module-row"><span class="owner">App C</span><span class="shared">共享：同一 PHPX request、Native GC、Box 类型、Reflection/Fiber hook</span><span class="private">私有：C globals/cache</span></div>
+        </div>
+        <div class="callout ok"><strong>隔离保证：</strong>生成的 C++ 数据表位于 <code>typephp_&lt;project&gt;</code> 命名空间，runtime/get-module 符号也带项目名。多个 ext 不再因为 PHPX misc 或通用表名发生原生符号冲突。</div>
+        <div class="callout danger"><strong>仍然禁止：</strong>两个项目向 ZendVM 注册相同的 PHP namespace/class/function 组合。C++ 符号隔离不能消除 PHP function table/class table 的语义冲突。</div>
+    </section>
+
+    <section id="bin">
+        <h2>四、BIN：自身项目晚注册，额外 EXT 正常注册</h2>
+        <p><code>php_embed_init()</code> 内部已经完成 SAPI startup、PHP module startup 和 PHP request startup。此后 bin 才取得自身的 <code>zend_module_entry</code> 并注册，所以自身项目不在 PHP 预先收集的 RINIT/RSHUTDOWN handler 列表中。</p>
+
+        <figure class="flowchart" aria-label="Bin 加载额外 TypePHP 扩展的启动关闭流程图">
+            <div class="flow-title">bin owner + ext A + ext B</div>
+            <div class="flow vertical">
+                <div class="flow-step layer-host"><strong>C++ main()</strong><small>调用 <code>typephp_&lt;bin&gt;_runtime_init(argc, argv)</code></small></div><div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>php_embed_init()</strong><small>SAPI/PHP 启动；ext A/B 自动完成 MINIT，然后在 request startup 自动完成 RINIT</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>注册 bin 自身项目模块</strong><small><code>zend_register_module_ex()</code> + <code>zend_startup_module_ex()</code> → bin::MINIT</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>手动 bin::RINIT</strong><small><code>php::request_init()</code>（通常已被 ext 初始化）→ 项目 <code>module_init()</code></small></div><div class="arrow">→</div>
+                <div class="flow-step layer-project"><strong>php::eval(... main())</strong><small>开始执行 TypePHP 项目；所有模块共享这一 Zend request</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>shutdown function + __destruct</strong><small>项目请求状态仍然存活，先让用户清理代码执行完</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>手动 bin::RSHUTDOWN</strong><small>PHPX request shutdown → bin 项目 module_clean</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>从 module_registry 删除 bin</strong><small>触发 bin::MSHUTDOWN；避免 Embed 退出时 persistent string 重复释放</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>php_embed_shutdown()</strong><small>PHP request shutdown → ext B/A RSHUTDOWN → ext B/A MSHUTDOWN → SAPI shutdown</small></div>
+            </div>
+        </figure>
+
+        <div class="callout"><strong>为什么不能让 PHP 自动调用 bin 自身的 RSHUTDOWN？</strong>PHP 在 <code>php_embed_init()</code> 期间已经收集完 module handler 数组；bin 模块注册得更晚，不在数组里。不手动补调会遗漏项目全局变量、Native roots、请求数组模板和缓存清理。</div>
+    </section>
+
+    <section id="lib">
+        <h2>五、LIB：生命周期由宿主显式包围</h2>
+        <p>lib 与 bin 使用同一份 PHPX Embed 实现，但定义 <code>TYPEPHP_NO_MAIN</code>，不会生成 C++ <code>main()</code>。宿主必须调用项目名隔离的 ABI。</p>
+        <pre><code>typephp_demo_runtime_init(argc, argv);
+// 调用 demo 导出的 TypePHP 函数
+typephp_demo_runtime_shutdown();</code></pre>
+
+        <figure class="flowchart" aria-label="Library 生命周期流程图">
+            <div class="flow-title">单个活动 lib runtime</div>
+            <div class="flow">
+                <div class="flow-step layer-host"><strong>Host</strong><small>dlopen/LoadLibrary 只装载代码</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>runtime_init</strong><small>真正启动 PHP Embed + 项目 MINIT/RINIT</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-project"><strong>Exports</strong><small>所有调用共享一个 PHP request</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>runtime_shutdown</strong><small>项目 RSHUTDOWN/MSHUTDOWN + PHP Embed shutdown</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-host"><strong>Unload</strong><small>运行时结束后才可卸载动态库</small></div>
+            </div>
+        </figure>
+
+        <h3>同一宿主加载多个 TypePHP lib</h3>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>操作</th><th>结论</th><th>原因</th></tr></thead>
+                <tbody>
+                <tr><td>只加载 A、B 的动态库，不调用 init</td><td><span class="status yes">可以</span></td><td>导出 runtime/get-module 符号带项目名；装载代码不等于启动 ZendVM。</td></tr>
+                <tr><td><code>init(A) → use(A) → shutdown(A) → init(B)</code></td><td><span class="status conditional">可串行</span></td><td>前一 runtime 必须完整退出后，下一库才可重新启动进程级 PHP Embed 状态。</td></tr>
+                <tr><td><code>init(A) → init(B)</code>，两个同时活动</td><td><span class="status no">不支持</span></td><td>ZendVM/Embed 是进程级状态；每个 lib 的局部 <code>runtime_started</code> 无法阻止另一 lib 再次调用 <code>php_embed_init()</code>。</td></tr>
+                <tr><td>多个项目需要同时工作</td><td><span class="status conditional">一个 owner</span></td><td>使用一个 bin/lib 拥有 runtime，其余能力作为启动前加载的 ext，或合并为同一个 TypePHP 项目。</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="callout danger"><strong>关键约束：</strong>项目名隔离解决的是 C++ ABI 符号冲突，不会把一个进程切成多个 ZendVM。多个 native lib 的活动区间不得重叠；NTS 下也不得并发或重入调用同一 runtime。</div>
+    </section>
+
+    <section id="wasm">
+        <h2>六、WASM：相同内核，两种 Host 入口</h2>
+        <p>WASI 使用静态链接的 PHP、PHPX 和 TypePHP 生成代码。浏览器与 Wasmtime 的 Host API 不同，但 PHP/ZendVM 生命周期相同。当前不支持在运行时动态加载 <code>.so/.dll</code> 形式的 TypePHP ext。</p>
+        <div class="callout"><strong>两个维度不要混淆：</strong><code>mode: command/library</code> 决定生命周期入口（生成 main，或由 runtime resource 管理）；<code>wasm: component/browser</code> 决定产物与 Host 适配方式。它们是正交配置，浏览器构建并不自动等于 library 模式。</div>
+
+        <div class="grid two">
+            <article class="card">
+                <span class="tag" style="color: var(--typephp)">WASI command</span>
+                <h3>由 <code>_start/main</code> 自动包围</h3>
+                <div class="flow vertical">
+                    <div class="flow-step layer-host"><strong>Wasmtime / WASI Host</strong><small>实例化 command 并调用 <code>_start</code></small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>runtime_init</strong><small>WASI Embed + 项目 MINIT/RINIT</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-project"><strong>main()</strong><small>与原生 bin 相同的入口语义</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>runtime_shutdown</strong><small>完整执行请求、模块与 SAPI 关闭</small></div>
+                </div>
+            </article>
+            <article class="card">
+                <span class="tag" style="color: var(--phpx)">WASI component library</span>
+                <h3>由 WIT resource 包围</h3>
+                <div class="flow vertical">
+                    <div class="flow-step layer-host"><strong>Instantiate component</strong><small>只建立 WASM 实例，尚未启动 ZendVM</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>create-runtime</strong><small>调用项目 <code>runtime_init</code>，返回 resource</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-project"><strong>#[WasmExport]</strong><small>多次调用共享同一 request；异常映射为 WIT result</small></div><div class="arrow">→</div>
+                    <div class="flow-step layer-typephp"><strong>drop/dispose resource</strong><small>调用项目 <code>runtime_shutdown</code></small></div>
+                </div>
+            </article>
+        </div>
+
+        <h3>WASM 多实例与多模块</h3>
+        <ul>
+            <li><strong>同一个 Component 实例：</strong>生成的 adapter 只允许一个活动 runtime resource，并拒绝同一 resource 上的并发或重入调用。</li>
+            <li><strong>多个 Component 实例：</strong>各自拥有独立 linear memory 和 C/C++ 全局区，因此 ZendVM 状态互相隔离，可以由 Host 分别管理。</li>
+            <li><strong>同一个 WASM 内的扩展：</strong>PHP 扩展必须在 SDK/最终链接阶段静态纳入，不能像原生 PHP 一样在运行时加载多个 TypePHP 动态扩展。</li>
+            <li><strong>浏览器：</strong>应在 <code>finally</code> 中显式调用 <code>runtime[Symbol.dispose]()</code>；直接终止 Worker 只会回收整个实例，不保证 shutdown callback 被执行。</li>
+            <li><strong>Wasmtime：</strong>command 返回时自动关闭；component library 应显式 drop resource。两者与浏览器使用相同的 TypePHP runtime ABI。</li>
+        </ul>
+    </section>
+
+    <section id="shutdown">
+        <h2>七、为什么关闭顺序不能随意调整</h2>
+        <figure class="flowchart" aria-label="TypePHP 关闭顺序与资源依赖流程图">
+            <div class="flow-title">从仍可执行用户代码，到最终释放 PHP 内存池</div>
+            <div class="flow">
+                <div class="flow-step layer-php"><strong>shutdown functions</strong><small>允许访问项目 globals</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>__destruct()</strong><small>允许回调 TypePHP 方法</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-phpx"><strong>PHPX request shutdown</strong><small>Native GC finalizer 仍可访问项目状态</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-project"><strong>project module_clean</strong><small>释放 globals、数组模板和请求 cache</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-typephp"><strong>MSHUTDOWN</strong><small>清 persistent pointer cache / shared hook</small></div><div class="arrow">→</div>
+                <div class="flow-step layer-php"><strong>PHP memory manager</strong><small>最后销毁 request arena 与 interned strings</small></div>
+            </div>
+        </figure>
+
+        <ol>
+            <li><strong>用户清理代码在前：</strong>shutdown callback 和对象析构可能继续访问 TypePHP 全局变量、调用动态函数，不能在它们之前销毁项目状态。</li>
+            <li><strong>PHPX 在项目 clean 之前：</strong>Native finalizer 属于用户代码，可能访问项目 globals；因此生成的 RSHUTDOWN 当前是 <code>php::request_shutdown()</code> 后接 <code>module_clean()</code>。</li>
+            <li><strong>请求对象在 PHP 内存池之前释放：</strong>若 PHP request arena 已销毁，栈上或全局的 PHPX wrapper 再析构会变成悬空指针访问。</li>
+            <li><strong>Embed 晚注册模块要提前移出 registry：</strong>删除操作会通过 Zend 的 module destructor 执行项目 MSHUTDOWN，同时规避 Embed 对 persistent strings 的重复释放问题。</li>
+            <li><strong>多 ext 共享 PHPX：</strong>第一个进入的 TypePHP RSHUTDOWN 完成共享 PHPX cleanup，后续调用幂等返回；每个项目自己的 <code>module_clean()</code> 仍各执行一次。</li>
+        </ol>
+    </section>
+
+    <section id="names">
+        <h2>八、函数名称辨析</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>符号</th><th>定义层</th><th>寿命</th><th>职责</th></tr></thead>
+                <tbody>
+                <tr><td><code>php_embed_init/shutdown</code></td><td>PHP Embed SAPI</td><td>整个 runtime</td><td>启动/关闭 SAPI、PHP modules 和一个 PHP request。</td></tr>
+                <tr><td><code>PHP_MINIT_FUNCTION(typephp_x)</code></td><td>TypePHP 生成模块</td><td>module</td><td>注册项目类/函数/属性元数据；安装共享 TypePHP handler。</td></tr>
+                <tr><td><code>PHP_RINIT_FUNCTION(typephp_x)</code></td><td>TypePHP 生成模块</td><td>request</td><td>调用 PHPX request init，再初始化项目请求状态；bin 额外执行 main。</td></tr>
+                <tr><td><code>php::request_init/shutdown</code></td><td>PHPX</td><td>每线程/每 request 共享</td><td>管理 Decimal、Native GC、Box 和动态调用缓存；对多模块调用幂等。</td></tr>
+                <tr><td><code>static module_init()</code></td><td>生成的项目命名空间</td><td>request</td><td>初始化项目 globals、静态属性、数组常量、请求模板和 roots。</td></tr>
+                <tr><td><code>static module_clean()</code></td><td>生成的项目命名空间</td><td>request</td><td>清项目 globals/cache，并将 user-code symbol pointer 表归零。</td></tr>
+                <tr><td><code>module_init(zend_module_entry *)</code></td><td>PHPX Embed glue</td><td>module</td><td>调用 Zend API 注册晚到的 bin/lib 项目模块并触发其 MINIT。</td></tr>
+                <tr><td><code>typephp_&lt;project&gt;_runtime_init/shutdown</code></td><td>TypePHP 稳定 ABI，PHPX 实现</td><td>runtime</td><td>bin main、native lib host、WIT adapter 共同使用的外层入口。</td></tr>
+                <tr><td><code>php_&lt;project&gt;_embed_get_module</code></td><td>TypePHP 生成模块</td><td>module</td><td>返回该项目唯一的 <code>zend_module_entry</code>；项目名避免多模块 C++ 符号冲突。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="rules">
+        <h2>九、实现与维护规则</h2>
+        <div class="grid two">
+            <article class="card">
+                <h3>必须保持</h3>
+                <ul>
+                    <li>每个项目的 MINIT/MSHUTDOWN/RINIT/RSHUTDOWN 恰好各执行一次。</li>
+                    <li>所有可执行用户代码发生在项目请求状态和 PHP 内存池仍有效时。</li>
+                    <li>请求级指针在 RSHUTDOWN 清空；module persistent cache 在 MSHUTDOWN 清空。</li>
+                    <li>共享 hook 使用安装计数；项目私有表使用项目 namespace/static storage。</li>
+                    <li>WASM resource 必须显式释放，不依赖 Host GC 的最终时间。</li>
+                </ul>
+            </article>
+            <article class="card">
+                <h3>禁止出现</h3>
+                <ul>
+                    <li>在同一进程同时启动两个 native lib 所拥有的 PHP Embed runtime。</li>
+                    <li>在 <code>php_embed_shutdown()</code> 后析构持有 request zval 的 C++ 对象。</li>
+                    <li>让晚注册的 bin/lib 项目依赖 PHP 自动 RINIT/RSHUTDOWN。</li>
+                    <li>在多 ext 中使用未加项目名的全局 C++ 数据表或 runtime ABI。</li>
+                    <li>误把项目 <code>module_init()</code> 当作 Zend MINIT，或在 MINIT 中创建请求 zval。</li>
+                </ul>
+            </article>
+        </div>
+
+        <h3>排查顺序</h3>
+        <ol>
+            <li>先确认当前是 <code>bin</code>、<code>ext</code>、<code>lib</code>、WASI command 还是 component library。</li>
+            <li>确认谁拥有 PHP runtime：外部 SAPI、生成 main、native host，还是 WIT resource。</li>
+            <li>确认目标模块是启动前注册还是 <code>php_embed_init()</code> 后晚注册。</li>
+            <li>为每个项目分别记录 MINIT/RINIT/RSHUTDOWN/MSHUTDOWN 次数，不要只看共享 PHPX 标志。</li>
+            <li>崩溃若发生在 PHP memory manager shutdown，检查是否仍有项目 global、Closure、Object 或 PHPX wrapper 晚析构。</li>
+        </ol>
+    </section>
+
+    <section id="sources">
+        <h2>十、代码依据</h2>
+        <ul class="source-list">
+            <li><code>compiler/src/Translator.php::genExtension()</code>：生成项目 module entry、MINIT/MSHUTDOWN/RINIT/RSHUTDOWN、<code>module_init/module_clean</code>。</li>
+            <li><code>phpx/src/misc/typephp_main.cc</code>：原生 bin/lib 与 WASI 共用的 Embed runtime owner、晚注册模块和 shutdown 顺序。</li>
+            <li><code>phpx/src/core/base.cc::php::request_init/request_shutdown</code>：PHPX 请求级共享状态。</li>
+            <li><code>phpx/include/typephp_runtime.h</code>：项目名隔离的 runtime/get-module ABI 宏。</li>
+            <li><code>compiler/src/Build/WasmInterfaceGenerator.php</code>：WIT runtime resource、单实例约束、异常边界和 resource destructor。</li>
+            <li><code>projects/php-8.5.9/sapi/embed/php_embed.c</code>：<code>php_embed_init/shutdown</code> 内部的 SAPI/module/request 调度。</li>
+            <li><code>projects/php-8.5.9/main/main.c::php_request_shutdown()</code>：shutdown function、析构、RSHUTDOWN、内存池销毁的标准顺序。</li>
+        </ul>
+    </section>
+
+    <footer>此页面是内部实现文档。流程变化时，应同时更新对应代码注释、生命周期测试和本图。</footer>
+</main>
+</body>
+</html>

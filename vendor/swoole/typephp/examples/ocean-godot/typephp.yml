@@ -1,0 +1,7 @@
+name: typephp_ocean
+mode: lib
+version: 0.1.0
+cxx-std: c++17
+sources:
+  - php-src
+  - cpp-src

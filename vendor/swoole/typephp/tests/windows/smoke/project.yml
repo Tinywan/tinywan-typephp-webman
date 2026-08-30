@@ -1,0 +1,9 @@
+name: windows-smoke
+mode: bin
+build-dir: build
+output: windows_smoke
+cxx-std: c++17
+
+sources:
+  - main.php
+  - cpp-src

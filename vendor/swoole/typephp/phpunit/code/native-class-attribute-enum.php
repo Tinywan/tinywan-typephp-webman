@@ -1,0 +1,4 @@
+<?php
+
+#[Native]
+enum InvalidNativeEnum {}

@@ -1,0 +1,12 @@
+name: ocean_demo
+version: 0.1.0
+mode: bin
+cxx-std: c++17
+sources:
+  - main.php
+  - php-src
+  - cpp-src
+cxx-flags:
+  - "/D_CRT_SECURE_NO_WARNINGS"
+ld-flags:
+  - "opengl32.lib"

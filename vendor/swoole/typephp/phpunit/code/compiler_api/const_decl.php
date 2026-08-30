@@ -1,0 +1,3 @@
+<?php
+
+const AOT_COMPILE_TIME_CONST = 123;

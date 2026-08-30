@@ -7,9 +7,7 @@
 /tests/tmp
 /tests/.phpunit.result.cache
 /dist
-/build/*.exe
-/build/*.lib
-/build/*.exp
+/build
 dist.zip
 *.zip~
 

@@ -8,6 +8,9 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
 {
     public static $files = array (
         '253c157292f75eb38082b5acb06f3f01' => __DIR__ . '/..' . '/nikic/fast-route/src/functions.php',
+        '320cde22f66dd4f5d3fd621d3e88b98f' => __DIR__ . '/..' . '/symfony/polyfill-ctype/bootstrap.php',
+        '0e6d7bf4a5811bfa5cf40c5ccd6fae6a' => __DIR__ . '/..' . '/symfony/polyfill-mbstring/bootstrap.php',
+        '667aeda72477189d0494fecd327c3641' => __DIR__ . '/..' . '/symfony/var-dumper/Resources/functions/dump.php',
         'd2136ff22b54ac75cd96a40e0022218e' => __DIR__ . '/..' . '/workerman/webman-framework/src/support/helpers.php',
     );
 
@@ -27,29 +30,49 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
             'Workerman\\' => 10,
             'Webman\\' => 7,
         ),
+        'T' =>
+        array (
+            'TypePhp\\' => 8,
+            'Tinywan\\Jwt\\' => 12,
+        ),
         'S' =>
         array (
+            'Symfony\\Polyfill\\Mbstring\\' => 26,
+            'Symfony\\Polyfill\\Ctype\\' => 23,
+            'Symfony\\Component\\Yaml\\' => 23,
+            'Symfony\\Component\\VarDumper\\' => 28,
             'Support\\View\\' => 13,
             'Support\\Exception\\' => 18,
             'Support\\Bootstrap\\' => 18,
             'Support\\' => 8,
+            'Seld\\CliPrompt\\' => 15,
         ),
         'P' =>
         array (
             'Psr\\Log\\' => 8,
             'Psr\\Container\\' => 14,
+            'Phpx\\' => 5,
+            'PhpParser\\' => 10,
         ),
         'M' =>
         array (
             'Monolog\\' => 8,
+            'MJS\\TopSort\\Tests\\' => 18,
+            'MJS\\TopSort\\' => 12,
+        ),
+        'L' =>
+        array (
+            'League\\CLImate\\' => 15,
         ),
         'F' =>
         array (
+            'Firebase\\JWT\\' => 13,
             'FastRoute\\' => 10,
         ),
         'A' =>
         array (
             'App\\' => 4,
+            'Ajaxray\\AnsiKit\\' => 16,
         ),
     );
 
@@ -79,6 +102,30 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         array (
             0 => __DIR__ . '/..' . '/workerman/webman-framework/src',
         ),
+        'TypePhp\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/swoole/typephp/src',
+        ),
+        'Tinywan\\Jwt\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/tinywan/jwt/src',
+        ),
+        'Symfony\\Polyfill\\Mbstring\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/symfony/polyfill-mbstring',
+        ),
+        'Symfony\\Polyfill\\Ctype\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/symfony/polyfill-ctype',
+        ),
+        'Symfony\\Component\\Yaml\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/symfony/yaml',
+        ),
+        'Symfony\\Component\\VarDumper\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/symfony/var-dumper',
+        ),
         'Support\\View\\' =>
         array (
             0 => __DIR__ . '/..' . '/workerman/webman-framework/src/support/view',
@@ -95,6 +142,10 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         array (
             0 => __DIR__ . '/..' . '/workerman/webman-framework/src/support',
         ),
+        'Seld\\CliPrompt\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/seld/cli-prompt/src',
+        ),
         'Psr\\Log\\' =>
         array (
             0 => __DIR__ . '/..' . '/psr/log/src',
@@ -103,9 +154,33 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         array (
             0 => __DIR__ . '/..' . '/psr/container/src',
         ),
+        'Phpx\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/swoole/phpx/src/php',
+        ),
+        'PhpParser\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/nikic/php-parser/lib/PhpParser',
+        ),
         'Monolog\\' =>
         array (
             0 => __DIR__ . '/..' . '/monolog/monolog/src/Monolog',
+        ),
+        'MJS\\TopSort\\Tests\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/marcj/topsort/tests/Tests',
+        ),
+        'MJS\\TopSort\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/marcj/topsort/src',
+        ),
+        'League\\CLImate\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/league/climate/src',
+        ),
+        'Firebase\\JWT\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/firebase/php-jwt/src',
         ),
         'FastRoute\\' =>
         array (
@@ -114,6 +189,10 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         'App\\' =>
         array (
             0 => __DIR__ . '/../..' . '/app',
+        ),
+        'Ajaxray\\AnsiKit\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/ajaxray/ansikit/src',
         ),
     );
 

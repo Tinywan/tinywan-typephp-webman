@@ -1,0 +1,18 @@
+{
+  "name": "typephp-wasm-hello",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "wasm": "php ../../bin/tpc.php project.yml",
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@bytecodealliance/preview2-shim": "0.20.1"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.27.0",
+    "vite": "^7.1.0"
+  }
+}

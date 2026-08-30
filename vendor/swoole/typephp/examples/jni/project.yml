@@ -1,0 +1,15 @@
+name: jni-example
+version: 0.0.1
+cxxflags: |
+  -std=c++17
+  -I/usr/lib/jvm/java-25-openjdk-amd64/include
+  -I/usr/lib/jvm/java-25-openjdk-amd64/include/linux
+  -Wall
+ldflags: |
+  -L/usr/lib/jvm/java-25-openjdk-amd64/lib/server
+  -ljvm
+  -Wl,-rpath,/usr/lib/jvm/java-25-openjdk-amd64/lib/server
+sources:
+  - php-src
+  - ./cpp-src
+  - main.php

@@ -1,0 +1,4 @@
+{
+  "message": "Hello from browser fetch via PHP file_get_contents()",
+  "runtime": "WASI HTTP 0.2 + JSPI"
+}

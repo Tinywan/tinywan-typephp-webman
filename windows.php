@@ -3,6 +3,9 @@
  * Start file for windows
  */
 chdir(__DIR__);
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', __DIR__);
+}
 require_once __DIR__ . '/vendor/autoload.php';
 
 use Dotenv\Dotenv;
@@ -67,6 +70,9 @@ function write_process_file($runtimeProcessPath, $processName, $firm): string
     $configParam = $firm ? "config('plugin.$firm.process')['$processName']" : "config('process')['$processName']";
     $fileContent = <<<EOF
 <?php
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', realpath(__DIR__ . '/../../'));
+}
 require_once __DIR__ . '/../../vendor/autoload.php';
 
 use Workerman\Worker;

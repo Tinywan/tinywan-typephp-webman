@@ -1,0 +1,10 @@
+name: wasm-hello
+mode: library
+build-dir: build
+output: component/wasm-hello.wasm
+sources:
+  - src
+wasm: browser
+wasm-browser-dir: generated
+wasm-package: typephp:wasm-hello@1.0.0
+wasm-world: wasm-hello

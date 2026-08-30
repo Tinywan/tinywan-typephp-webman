@@ -1,0 +1,449 @@
+name: Windows x64
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-tpc-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPOSER_NO_INTERACTION: 1
+  COMPOSER_PROCESS_TIMEOUT: 0
+
+jobs:
+  build-tpc:
+    name: Build - PHP ${{ matrix.php }} ZTS
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          extensions: zip
+          tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
+
+      - name: Resolve PHP build environment
+        id: php-build-env
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $phpVersion = php -r 'echo PHP_VERSION;'
+          if (-not $phpVersion.StartsWith('${{ matrix.php }}.')) {
+              throw "setup-php installed PHP $phpVersion, expected ${{ matrix.php }}.x"
+          }
+          $threadSafety = php -r 'echo PHP_ZTS ? "zts" : "nts";'
+          if ($threadSafety -ne 'zts') {
+              throw "setup-php installed $threadSafety PHP, expected zts"
+          }
+          $zipAvailable = php -r 'echo class_exists("ZipArchive") ? "yes" : "no";'
+          if ($zipAvailable -ne 'yes') {
+              throw 'setup-php did not enable the ZipArchive extension required by package.php'
+          }
+          $phpExe = (Get-Command php).Source
+          $phpHome = Split-Path -Parent $phpExe
+          $archiveName = "php-devel-pack-$phpVersion-Win32-vs17-x64.zip"
+          $archive = Join-Path $env:RUNNER_TEMP $archiveName
+
+          "PHP_VERSION=$phpVersion" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "PHP_THREAD_SAFETY=$threadSafety" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "PHP_HOME=$phpHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "PHPX_HOME=${{ github.workspace }}\vendor\swoole\phpx" |
+              Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "PHP_DEVEL_ARCHIVE=$archive" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$phpVersion" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "thread_safety=$threadSafety" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "archive=$archive" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Cache PHP development package
+        id: cache-php-devel
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.php-build-env.outputs.archive }}
+          key: windows-2022-php-devel-${{ steps.php-build-env.outputs.version }}-${{ steps.php-build-env.outputs.thread_safety }}-vs17-x64
+
+      - name: Install matching PHP development SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $phpVersion = $env:PHP_VERSION
+          $phpHome = $env:PHP_HOME
+          $threadSafety = $env:PHP_THREAD_SAFETY
+          $archive = $env:PHP_DEVEL_ARCHIVE
+          $archiveName = Split-Path -Leaf $archive
+          $extractDir = Join-Path $env:RUNNER_TEMP "php-devel-$phpVersion"
+
+          if (-not (Test-Path $archive)) {
+              $downloaded = $false
+              foreach ($baseUrl in @(
+                  'https://downloads.php.net/~windows/releases',
+                  'https://downloads.php.net/~windows/releases/archives'
+              )) {
+                  try {
+                      Invoke-WebRequest -Uri "$baseUrl/$archiveName" -OutFile $archive
+                      $downloaded = $true
+                      break
+                  } catch {
+                      Remove-Item $archive -Force -ErrorAction SilentlyContinue
+                  }
+              }
+              if (-not $downloaded) {
+                  throw "Unable to download the PHP $phpVersion ZTS development pack"
+              }
+          }
+
+          Expand-Archive -Path $archive -DestinationPath $extractDir -Force
+          $sdkSource = Get-ChildItem $extractDir -Directory |
+              Where-Object { Test-Path (Join-Path $_.FullName 'include\main\php.h') } |
+              Select-Object -First 1
+          if ($null -eq $sdkSource) {
+              throw "The PHP development archive has an unexpected layout: $archiveName"
+          }
+
+          $sdk = Join-Path $phpHome 'SDK'
+          $sdkInclude = Join-Path $sdk 'include'
+          $sdkLib = Join-Path $sdk 'lib'
+          New-Item $sdkInclude, $sdkLib -ItemType Directory -Force | Out-Null
+          Copy-Item (Join-Path $sdkSource.FullName 'include\*') $sdkInclude -Recurse -Force
+          Copy-Item (Join-Path $sdkSource.FullName 'lib\*') $sdkLib -Force
+
+          $embedLibrary = Join-Path $phpHome 'php8embed.lib'
+          if (-not (Test-Path $embedLibrary)) {
+              throw "setup-php did not install php8embed.lib in $phpHome"
+          }
+          Copy-Item $embedLibrary $sdkLib -Force
+
+          $coreLibrary = 'php8ts.lib'
+          $runtimeLibrary = 'php8ts.dll'
+
+          # Temporary compatibility fix for PHP packages predating php/php-src#22940.
+          $hashHeader = Join-Path $sdkInclude 'ext\hash\php_hash.h'
+          $hashSource = [IO.File]::ReadAllText($hashHeader)
+          $invalidAllocation = 'char *base = ecalloc('
+          if ($hashSource.Contains($invalidAllocation)) {
+              $hashSource = $hashSource.Replace(
+                  $invalidAllocation,
+                  'char *base = (char *) ecalloc('
+              )
+              [IO.File]::WriteAllText(
+                  $hashHeader,
+                  $hashSource,
+                  [Text.UTF8Encoding]::new($false)
+              )
+          }
+
+          foreach ($required in @(
+              (Join-Path $sdkInclude 'main\php.h'),
+              (Join-Path $sdkLib $coreLibrary),
+              (Join-Path $sdkLib 'php8embed.lib'),
+              (Join-Path $phpHome $runtimeLibrary)
+          )) {
+              if (-not (Test-Path $required)) {
+                  throw "Required PHP SDK file is missing: $required"
+              }
+          }
+
+          Write-Host "Using PHP $phpVersion from $phpHome"
+
+      - name: Save PHP development package
+        if: steps.cache-php-devel.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.php-build-env.outputs.archive }}
+          key: ${{ steps.cache-php-devel.outputs.cache-primary-key }}
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Patch PHPX Windows CMake target ordering
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $cmakeFile = Join-Path $env:PHPX_HOME 'CMakeLists.txt'
+          $source = [IO.File]::ReadAllText($cmakeFile).Replace("`r`n", "`n")
+          $copyBlockPattern = '(?ms)^    # 复制 DLL 到输出目录\n    file\(GLOB MPDEC_DLLS .*?^    endforeach\(\)\n'
+          $copyBlock = [regex]::Match($source, $copyBlockPattern)
+          if (-not $copyBlock.Success) {
+              throw 'Unable to locate the pre-target PHPX mpdecimal copy block'
+          }
+          $source = $source.Remove($copyBlock.Index, $copyBlock.Length)
+
+          $targetPattern = '(?ms)(add_library\(phpx SHARED \$\{SRC_FILES\}\)\nset_target_properties\(phpx PROPERTIES\n    CLEAN_DIRECT_OUTPUT 1\n\)\n)'
+          $target = [regex]::Match($source, $targetPattern)
+          if (-not $target.Success) {
+              throw 'Unable to locate the PHPX target declaration'
+          }
+
+          $copyBlockText = $copyBlock.Value.Replace('    # 复制 DLL 到输出目录', '    # Copy mpdecimal DLLs after the phpx target exists.')
+          $guardedCopyBlock = "`nif (IS_WINDOWS)`n$copyBlockText" + "endif()`n"
+          $source = $source.Insert($target.Index + $target.Length, $guardedCopyBlock)
+          [IO.File]::WriteAllText($cmakeFile, $source, [Text.UTF8Encoding]::new($false))
+
+          $targetOffset = $source.IndexOf('add_library(phpx SHARED')
+          $copyOffset = $source.IndexOf('add_custom_command(TARGET phpx POST_BUILD')
+          if ($targetOffset -lt 0 -or $copyOffset -le $targetOffset) {
+              throw 'PHPX post-build command still precedes its target declaration'
+          }
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache GMP and MPFR
+        id: cache-gmp-mpfr
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\typephp-cache\vcpkg-x64-windows
+          key: windows-2022-msvc-vcpkg-gmp-mpfr-x64-v1
+
+      - name: Install GMP and MPFR
+        if: steps.cache-gmp-mpfr.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $triplet = 'x64-windows'
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe'
+          & $vcpkg install "gmp:$triplet" "mpfr:$triplet"
+          if ($LASTEXITCODE -ne 0) {
+              throw "vcpkg failed with exit code $LASTEXITCODE"
+          }
+
+          $installed = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\$triplet"
+          $cache = Join-Path $env:RUNNER_TEMP 'typephp-cache\vcpkg-x64-windows'
+          New-Item "$cache\include", "$cache\lib", "$cache\bin" -ItemType Directory -Force |
+              Out-Null
+          Copy-Item (Join-Path $installed 'include\*') "$cache\include" -Recurse -Force
+
+          foreach ($library in @('gmp.lib', 'gmpxx.lib', 'mpfr.lib')) {
+              $source = Join-Path $installed "lib\$library"
+              if (-not (Test-Path $source)) {
+                  throw "vcpkg did not install $library"
+              }
+              Copy-Item $source "$cache\lib" -Force
+          }
+          Copy-Item (Join-Path $installed 'bin\*.dll') "$cache\bin" -Force
+
+      - name: Save GMP and MPFR
+        if: steps.cache-gmp-mpfr.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\typephp-cache\vcpkg-x64-windows
+          key: ${{ steps.cache-gmp-mpfr.outputs.cache-primary-key }}
+
+      - name: Stage GMP and MPFR
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $cache = Join-Path $env:RUNNER_TEMP 'typephp-cache\vcpkg-x64-windows'
+          $sdkInclude = Join-Path $env:PHP_HOME 'SDK\include'
+          $sdkLib = Join-Path $env:PHP_HOME 'SDK\lib'
+          Copy-Item "$cache\include\*" $sdkInclude -Recurse -Force
+
+          foreach ($library in @('gmp.lib', 'gmpxx.lib', 'mpfr.lib')) {
+              $source = Join-Path $cache "lib\$library"
+              if (-not (Test-Path $source)) {
+                  throw "The dependency cache does not contain $library"
+              }
+              Copy-Item $source $sdkLib -Force
+          }
+          Copy-Item "$cache\bin\*.dll" $env:PHP_HOME -Force
+
+      - name: Cache mpdecimal
+        id: cache-mpdecimal
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.PHPX_HOME }}\thirdparty\mpdecimal\vcbuild\dist64
+          key: windows-2022-msvc-mpdecimal-x64-${{ hashFiles('vendor/swoole/phpx/thirdparty/mpdecimal/**') }}
+
+      - name: Build mpdecimal
+        if: steps.cache-mpdecimal.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $buildScript = Join-Path $env:PHPX_HOME 'thirdparty\mpdecimal\vcbuild\vcbuild64.bat'
+          $buildDirectory = Split-Path -Parent $buildScript
+          Push-Location $buildDirectory
+          try {
+              & cmd.exe /d /s /c vcbuild64.bat
+              if ($LASTEXITCODE -ne 0) {
+                  throw "mpdecimal build failed with exit code $LASTEXITCODE"
+              }
+          } finally {
+              Pop-Location
+          }
+
+      - name: Save mpdecimal
+        if: steps.cache-mpdecimal.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.PHPX_HOME }}\thirdparty\mpdecimal\vcbuild\dist64
+          key: ${{ steps.cache-mpdecimal.outputs.cache-primary-key }}
+
+      - name: Stage mpdecimal
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $dist = Join-Path $env:PHPX_HOME 'thirdparty\mpdecimal\vcbuild\dist64'
+          $sdkInclude = Join-Path $env:PHP_HOME 'SDK\include'
+          $sdkLib = Join-Path $env:PHP_HOME 'SDK\lib'
+          Copy-Item (Join-Path $dist '*.lib') $sdkLib -Force
+          Copy-Item (Join-Path $dist '*.dll') $sdkLib -Force
+          Copy-Item (Join-Path $dist '*.dll') $env:PHP_HOME -Force
+          Copy-Item (Join-Path $dist 'mpdecimal.h') $sdkInclude -Force
+          Copy-Item (Join-Path $dist 'decimal.hh') $sdkInclude -Force
+
+      - name: Build PHPX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $phpxBuild = Join-Path $env:PHPX_HOME 'build'
+          $sdkLib = Join-Path $env:PHP_HOME 'SDK\lib'
+          cmake -S $env:PHPX_HOME -B $phpxBuild -G Ninja `
+              -D CMAKE_BUILD_TYPE=Release `
+              -D BUILD_TESTS=OFF `
+              -D BUILD_EXT=OFF `
+              -D GITHUB_ACTION=ON `
+              -D MPDECIMAL_LIBRARY="$sdkLib\libmpdec-4.0.1.dll.lib" `
+              -D MPDECIMALXX_LIBRARY="$sdkLib\libmpdec++-4.0.1.dll.lib"
+          if ($LASTEXITCODE -ne 0) {
+              throw "PHPX configuration failed with exit code $LASTEXITCODE"
+          }
+
+          cmake --build $phpxBuild --target phpx --parallel 2
+          if ($LASTEXITCODE -ne 0) {
+              throw "PHPX build failed with exit code $LASTEXITCODE"
+          }
+
+          foreach ($required in @(
+              (Join-Path $env:PHPX_HOME 'lib\phpx.lib'),
+              (Join-Path $phpxBuild 'phpx.dll')
+          )) {
+              if (-not (Test-Path $required)) {
+                  throw "Required PHPX build output is missing: $required"
+              }
+          }
+
+      - name: Build tpc.exe
+        shell: pwsh
+        run: |
+          php bin\tpc.php project.yml --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "TypePHP build failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path 'tpc.exe')) {
+              throw 'The compiler did not produce tpc.exe'
+          }
+
+      - name: Run Windows smoke tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $env:PATH = "$env:PHPX_HOME\build;$env:PATH"
+          & .\tpc.exe tests\windows\smoke\project.yml --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "Windows smoke project compilation failed with exit code $LASTEXITCODE"
+          }
+
+          $smokeExe = Join-Path '${{ github.workspace }}' 'tests\windows\smoke\windows_smoke.exe'
+          if (-not (Test-Path $smokeExe)) {
+              throw "Windows smoke executable was not generated: $smokeExe"
+          }
+
+          $processInfo = [Diagnostics.ProcessStartInfo]::new()
+          $processInfo.FileName = $smokeExe
+          $processInfo.ArgumentList.Add('zts')
+          $processInfo.UseShellExecute = $false
+          $processInfo.RedirectStandardOutput = $true
+          $processInfo.RedirectStandardError = $true
+
+          $process = [Diagnostics.Process]::new()
+          $process.StartInfo = $processInfo
+          if (-not $process.Start()) {
+              throw 'Unable to start the Windows smoke executable'
+          }
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+
+          Write-Host "Windows smoke stdout: $stdout"
+          Write-Host "Windows smoke stderr: $stderr"
+          Write-Host "Windows smoke exit code: $($process.ExitCode)"
+          if ($process.ExitCode -ne 0) {
+              throw "Windows smoke executable failed with exit code $($process.ExitCode)"
+          }
+          if ($stdout.Trim() -ne 'windows-smoke-ok:zts') {
+              throw "Unexpected Windows smoke output: $stdout"
+          }
+
+      - name: Package tested Windows compiler
+        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
+          if ($LASTEXITCODE -ne 0) {
+              throw "Production Composer install failed with exit code $LASTEXITCODE"
+          }
+          $env:TYPEPHP_PACKAGE_VERSION = $env:GITHUB_REF_NAME
+          php package.php
+          if ($LASTEXITCODE -ne 0) {
+              throw "Windows packaging failed with exit code $LASTEXITCODE"
+          }
+
+          $packages = @(Get-ChildItem 'tpc_v*_windows_*.zip' -File)
+          if ($packages.Count -ne 1) {
+              throw "Expected one Windows release package, found $($packages.Count)"
+          }
+
+      - name: Upload Windows release package
+        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: error
+          retention-days: 1
+          path: tpc_v*_windows_*.zip
+
+      - name: Upload Windows build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpc-windows-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            tpc.exe
+            tests/windows/smoke/windows_smoke.exe
+            tests/windows/smoke/build/**/*.cc
+            tests/windows/smoke/build/**/*.h
+            tests/windows/smoke/build/**/*.rsp

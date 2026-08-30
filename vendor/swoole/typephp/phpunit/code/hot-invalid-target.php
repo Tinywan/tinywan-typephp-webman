@@ -1,0 +1,6 @@
+<?php
+
+#[Hot]
+class InvalidHotTarget
+{
+}

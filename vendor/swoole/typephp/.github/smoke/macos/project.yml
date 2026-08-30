@@ -1,0 +1,9 @@
+name: macos-smoke
+mode: bin
+build-dir: build
+output: macos_smoke
+cxx-std: c++17
+
+sources:
+  - main.php
+  - cpp-src

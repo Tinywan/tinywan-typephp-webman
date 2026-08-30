@@ -1,0 +1,28 @@
+name: ssh_tunnel_manager
+version: 0.1.0
+mode: bin
+cxx-std: c++17
+sources:
+  - main.php
+  - app
+  - php-src
+  - cpp-src
+
+resource:
+  # Used as the Windows PE/Explorer icon. Qt's in-window icon is embedded in
+  # cpp-src/ssh_tunnel_icons.cc so it also works on Linux and macOS.
+  icon: icon/ssh_tunnel_manager.ico
+
+# Debian/Ubuntu Qt 6 development package layout. For a non-system Qt SDK,
+# replace these flags with the paths printed by:
+#   pkg-config --cflags --libs Qt6Widgets
+cxx-flags:
+  - "-fPIC"
+  - "-I/usr/include/x86_64-linux-gnu/qt6"
+  - "-I/usr/include/x86_64-linux-gnu/qt6/QtCore"
+  - "-I/usr/include/x86_64-linux-gnu/qt6/QtGui"
+  - "-I/usr/include/x86_64-linux-gnu/qt6/QtWidgets"
+ld-flags:
+  - "-lQt6Widgets"
+  - "-lQt6Gui"
+  - "-lQt6Core"

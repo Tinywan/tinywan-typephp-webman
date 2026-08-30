@@ -47,6 +47,75 @@
             "install-path": "../ajaxray/ansikit"
         },
         {
+            "name": "firebase/php-jwt",
+            "version": "v7.1.0",
+            "version_normalized": "7.1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/googleapis/php-jwt.git",
+                "reference": "b374a5d1a4f1f67fadc2165cdb284645945e2fc0"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/googleapis/php-jwt/zipball/b374a5d1a4f1f67fadc2165cdb284645945e2fc0",
+                "reference": "b374a5d1a4f1f67fadc2165cdb284645945e2fc0",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.0"
+            },
+            "require-dev": {
+                "guzzlehttp/guzzle": "^7.4",
+                "phpfastcache/phpfastcache": "^9.2",
+                "phpseclib/phpseclib": "~3.0",
+                "phpspec/prophecy-phpunit": "^2.0",
+                "phpunit/phpunit": "^9.5",
+                "psr/cache": "^2.0||^3.0",
+                "psr/http-client": "^1.0",
+                "psr/http-factory": "^1.0"
+            },
+            "suggest": {
+                "ext-sodium": "Support EdDSA (Ed25519) signatures",
+                "paragonie/sodium_compat": "Support EdDSA (Ed25519) signatures when libsodium is not present",
+                "phpseclib/phpseclib": "Support PS256 (RSASSA-PSS) signatures"
+            },
+            "time": "2026-06-11T17:54:14+00:00",
+            "type": "library",
+            "installation-source": "dist",
+            "autoload": {
+                "psr-4": {
+                    "Firebase\\JWT\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "BSD-3-Clause"
+            ],
+            "authors": [
+                {
+                    "name": "Neuman Vong",
+                    "email": "neuman+pear@twilio.com",
+                    "role": "Developer"
+                },
+                {
+                    "name": "Anant Narayanan",
+                    "email": "anant@php.net",
+                    "role": "Developer"
+                }
+            ],
+            "description": "A simple library to encode and decode JSON Web Tokens (JWT) in PHP. Should conform to the current spec.",
+            "homepage": "https://github.com/googleapis/php-jwt",
+            "keywords": [
+                "jwt",
+                "php"
+            ],
+            "support": {
+                "issues": "https://github.com/googleapis/php-jwt/issues",
+                "source": "https://github.com/googleapis/php-jwt/tree/v7.1.0"
+            },
+            "install-path": "../firebase/php-jwt"
+        },
+        {
             "name": "league/climate",
             "version": "3.12.0",
             "version_normalized": "3.12.0.0",
@@ -615,6 +684,60 @@
             "install-path": "../swoole/phpx"
         },
         {
+            "name": "swoole/typephp",
+            "version": "v0.6.6",
+            "version_normalized": "0.6.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/swoole/typephp.git",
+                "reference": "d19809af9b2e5e57e908b10a652803e03af38415"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/swoole/typephp/zipball/d19809af9b2e5e57e908b10a652803e03af38415",
+                "reference": "d19809af9b2e5e57e908b10a652803e03af38415",
+                "shasum": ""
+            },
+            "require": {
+                "ajaxray/ansikit": "^0.3",
+                "composer-runtime-api": "^2.2",
+                "ext-dom": "*",
+                "league/climate": "^3.10",
+                "marcj/topsort": "^2.0",
+                "nikic/php-parser": "^5.6",
+                "php": ">=8.4 <8.6",
+                "swoole/phpx": "~2.6.4",
+                "symfony/var-dumper": "^8.0",
+                "symfony/yaml": "^8.0"
+            },
+            "require-dev": {
+                "friendsofphp/php-cs-fixer": "^3.40",
+                "phpstan/phpstan": "^2.2",
+                "phpunit/phpunit": "^10.4"
+            },
+            "suggest": {
+                "ext-pcntl": "Required for process control features."
+            },
+            "time": "2026-08-27T09:18:03+00:00",
+            "bin": [
+                "bin/tpc.php"
+            ],
+            "type": "library",
+            "installation-source": "dist",
+            "autoload": {
+                "psr-4": {
+                    "TypePhp\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "description": "TypePHP native AOT compiler",
+            "support": {
+                "issues": "https://github.com/swoole/typephp/issues",
+                "source": "https://github.com/swoole/typephp/tree/v0.6.6"
+            },
+            "install-path": "../swoole/typephp"
+        },
+        {
             "name": "symfony/polyfill-ctype",
             "version": "v1.37.0",
             "version_normalized": "1.37.0.0",
@@ -958,6 +1081,48 @@
             "install-path": "../symfony/yaml"
         },
         {
+            "name": "tinywan/jwt",
+            "version": "v2.0.1",
+            "version_normalized": "2.0.1.0",
+            "dist": {
+                "type": "zip",
+                "url": "https://mirrors.tencent.com/repository/composer/tinywan/jwt/v2.0.1/tinywan-jwt-v2.0.1.zip",
+                "reference": "c31b3de7b180abf6c498a85d87033f31a14d6c67",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "firebase/php-jwt": "^6.8||^7.0",
+                "php": "^8.2",
+                "workerman/webman-framework": "^1.2.1||^2.0"
+            },
+            "require-dev": {
+                "carthage-software/mago": "^1.0@RC",
+                "illuminate/database": "^11.0",
+                "mockery/mockery": "^1.5",
+                "pestphp/pest": "^3.0",
+                "topthink/think-orm": "^2.0",
+                "workerman/webman": "^1.0"
+            },
+            "time": "2026-08-02T10:01:47+00:00",
+            "type": "library",
+            "installation-source": "dist",
+            "autoload": {
+                "psr-4": {
+                    "Tinywan\\Jwt\\": "src"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "JSON Web Token (JWT) for webman plugin",
+            "support": {
+                "issues": "https://github.com/Tinywan/webman-jwt/issues",
+                "source": "https://github.com/Tinywan/webman-jwt/tree/v2.0.1"
+            },
+            "install-path": "../tinywan/jwt"
+        },
+        {
             "name": "workerman/coroutine",
             "version": "v1.1.6",
             "version_normalized": "1.1.6.0",
@@ -1157,6 +1322,7 @@
         "nikic/php-parser",
         "seld/cli-prompt",
         "swoole/phpx",
+        "swoole/typephp",
         "symfony/polyfill-ctype",
         "symfony/polyfill-mbstring",
         "symfony/var-dumper",

@@ -1,0 +1,360 @@
+name: Linux x64
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPOSER_NO_INTERACTION: 1
+  COMPOSER_PROCESS_TIMEOUT: 0
+
+jobs:
+  build:
+    # Compilation is always required; `--skip-tests` only suppresses downstream test jobs.
+    name: Build - PHP ${{ matrix.php }} ZTS
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Checkout phpy
+        uses: actions/checkout@v4
+        with:
+          repository: swoole/phpy
+          path: third_party/phpy
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+          tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
+
+      - name: Verify ZTS PHP
+        shell: bash
+        run: |
+          php -r 'if (!PHP_ZTS) { fwrite(STDERR, "Expected a ZTS PHP build\n"); exit(1); }'
+          case "$(php -r 'echo PHP_VERSION;')" in
+            "${{ matrix.php }}"*) ;;
+            *) echo "setup-php installed an unexpected PHP version" >&2; exit 1 ;;
+          esac
+
+      - name: Patch php_hash.h C++ compatibility
+        uses: ./.github/actions/patch-php-headers
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
+
+      - name: Configure ZTS PHP embed library
+        shell: bash
+        run: |
+          php_home="$(php-config --prefix)"
+          embed_library="${php_home}/lib/libphp.so"
+          test -x "${php_home}/bin/php-config"
+          test -f "${embed_library}"
+          echo "PHP_HOME=${php_home}" >> "${GITHUB_ENV}"
+          echo "Using ZTS PHP $(php-config --version) embed library: ${embed_library}"
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Build PHPX
+        shell: bash
+        run: |
+          cmake -S "${PHPX_HOME}" -B "${PHPX_HOME}/build" \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D BUILD_TESTS=OFF \
+            -D BUILD_EXT=OFF \
+            -D GITHUB_ACTION=ON \
+            -D php_dir="${PHP_HOME}"
+          cmake --build "${PHPX_HOME}/build" --target phpx --parallel 2
+          test -f "${PHPX_HOME}/lib/libphpx.so"
+
+      - name: Build phpy
+        working-directory: third_party/phpy
+        run: |
+          phpize
+          ./configure
+          make -j2
+          test -f modules/phpy.so
+
+      - name: Enable phpy extension
+        shell: bash
+        run: |
+          php_ini_dir="$(php-config --ini-dir)"
+          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
+            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          php --ri phpy
+
+      - name: Configure native library path
+        shell: bash
+        run: echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${PHP_HOME}/lib" >> "${GITHUB_ENV}"
+
+      - name: Build tpc
+        shell: bash
+        run: |
+          php bin/tpc.php project.yml --job 2 --no-progress
+          test -x ./tpc
+          file ./tpc
+          file ./tpc | grep -Eiq 'x86-64|x86_64|amd64'
+          ./tpc --version
+
+      - name: Upload Linux x64 build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpc-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            tpc
+            vendor/swoole/phpx/lib/libphpx.so
+            third_party/phpy/modules/phpy.so
+
+  phpunit:
+    name: PHPUnit - PHP ${{ matrix.php }} ZTS
+    if: ${{ startsWith(github.ref, 'refs/tags/') || !contains(github.event.head_commit.message || '', '--skip-tests') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          extensions: curl, redis, mbstring, ffi
+          ini-values: ffi.enable=1, phpy.enable_operator_overloading=0, precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+          tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
+
+      - name: Verify ZTS PHP
+        shell: bash
+        run: |
+          php -r 'if (!PHP_ZTS) { fwrite(STDERR, "Expected a ZTS PHP build\n"); exit(1); }'
+          case "$(php -r 'echo PHP_VERSION;')" in
+            "${{ matrix.php }}"*) ;;
+            *) echo "setup-php installed an unexpected PHP version" >&2; exit 1 ;;
+          esac
+
+      - name: Patch php_hash.h C++ compatibility
+        uses: ./.github/actions/patch-php-headers
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Download Linux x64 build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tpc-linux-x64-php-${{ matrix.php }}-zts
+          path: .
+
+      - name: Verify Linux x64 build outputs
+        shell: bash
+        run: |
+          test -f ./tpc
+          test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f third_party/phpy/modules/phpy.so
+          chmod +x ./tpc
+          file ./tpc | grep -Eiq 'x86-64|x86_64|amd64'
+
+      - name: Enable phpy extension
+        shell: bash
+        run: |
+          php_ini_dir="$(php-config --ini-dir)"
+          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
+            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          php --ri phpy
+
+      - name: Configure native library path
+        shell: bash
+        run: echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:$(php-config --prefix)/lib" >> "${GITHUB_ENV}"
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit
+
+  phpt:
+    name: PHPT - PHP ${{ matrix.php }} ZTS
+    if: ${{ startsWith(github.ref, 'refs/tags/') || !contains(github.event.head_commit.message || '', '--skip-tests') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      NO_INTERACTION: 1
+      REPORT_EXIT_STATUS: 1
+      TYPEPHP_PHPT_GENERATED_ARTIFACT_DIR: ${{ github.workspace }}/build/phpt-generated
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          extensions: curl, redis, mbstring, ffi
+          ini-values: ffi.enable=1, phpy.enable_operator_overloading=0, opcache.jit=0, precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+          tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
+
+      - name: Verify ZTS PHP
+        shell: bash
+        run: |
+          php -r 'if (!PHP_ZTS) { fwrite(STDERR, "Expected a ZTS PHP build\n"); exit(1); }'
+          case "$(php -r 'echo PHP_VERSION;')" in
+            "${{ matrix.php }}"*) ;;
+            *) echo "setup-php installed an unexpected PHP version" >&2; exit 1 ;;
+          esac
+
+      - name: Patch php_hash.h C++ compatibility
+        uses: ./.github/actions/patch-php-headers
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev
+
+      - name: Configure ZTS PHP embed library
+        shell: bash
+        run: |
+          php_home="$(php-config --prefix)"
+          embed_library="${php_home}/lib/libphp.so"
+          test -x "${php_home}/bin/php-config"
+          test -f "${embed_library}"
+          echo "PHP_HOME=${php_home}" >> "${GITHUB_ENV}"
+          echo "Using ZTS PHP $(php-config --version) embed library: ${embed_library}"
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Download Linux x64 build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tpc-linux-x64-php-${{ matrix.php }}-zts
+          path: .
+
+      - name: Verify Linux x64 build outputs
+        shell: bash
+        run: |
+          test -f ./tpc
+          test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f third_party/phpy/modules/phpy.so
+          chmod +x ./tpc
+          file ./tpc | grep -Eiq 'x86-64|x86_64|amd64'
+
+      - name: Enable phpy extension
+        shell: bash
+        run: |
+          php_ini_dir="$(php-config --ini-dir)"
+          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
+            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          php --ri phpy
+
+      - name: Configure native library path
+        shell: bash
+        run: |
+          test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f "${PHP_HOME}/lib/libphp.so"
+          echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${PHP_HOME}/lib" >> "${GITHUB_ENV}"
+
+      - name: Show build environment
+        run: |
+          ./tpc --version
+          php -v
+          php --ini
+          ldd ./tpc | grep -E 'libphp(x)?[0-9.]*\.so'
+          cmake --version
+          c++ --version
+
+      - name: Run compiler PHPT suite with bootstrap compiler
+        run: |
+          mkdir -p build
+          php run-tests.php -q -j8 --compiler ./tpc \
+            -w build/failed-tests.txt -W build/test-results.txt tests/compiler
+
+      - name: Package tested Linux compiler
+        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        shell: bash
+        run: |
+          composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
+          export TYPEPHP_PACKAGE_VERSION="${GITHUB_REF_NAME}"
+          php package.php
+          test "$(find . -maxdepth 1 -name 'tpc_v*_linux_*.tar.gz' -type f | wc -l)" -eq 1
+
+      - name: Upload Linux release package
+        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: error
+          retention-days: 1
+          path: tpc_v*_linux_*.tar.gz
+
+      - name: Upload PHPT failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpt-failures-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            build/failed-tests.txt
+            build/test-results.txt
+            build/**/*.cc
+            build/**/*.h
+            php_test_results_*.txt
+            tests/compiler/**/*.diff
+            tests/compiler/**/*.log
+            tests/compiler/**/*.out

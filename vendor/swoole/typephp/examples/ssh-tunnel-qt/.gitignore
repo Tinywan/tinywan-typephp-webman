@@ -1,0 +1,4 @@
+*.o
+/build/
+/ssh_tunnel_manager
+/ssh_tunnel_manager.exe

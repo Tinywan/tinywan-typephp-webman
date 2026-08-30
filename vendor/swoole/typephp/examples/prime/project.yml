@@ -1,0 +1,13 @@
+name: prime2
+version: 0.0.1
+cxxflags: |
+  -std=c++17
+  -I/usr/include/python3.10
+  -Wall
+ldflags: |
+  -L/usr/lib/x86_64-linux-gnu/
+  -lssl
+sources:
+  - php-src
+  - ./cpp-src
+  - main.php

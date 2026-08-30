@@ -1,0 +1,12 @@
+name: tetris
+version: 1.0.0
+mode: bin
+sources:
+  - main.php
+  - ./php-src
+  - ./cpp-src
+ld-flags:
+  - "-lSDL2"
+cxx-flags:
+  - "-I/usr/include/SDL2"
+  - "-D_REENTRANT"

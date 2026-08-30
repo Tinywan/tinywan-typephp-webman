@@ -1,0 +1,9 @@
+name: test
+type: ext
+version: 0.0.1
+ignore:
+  - ext-redis
+  - ext-POD_MYSQL
+sources:
+  - call.php
+  - main.php

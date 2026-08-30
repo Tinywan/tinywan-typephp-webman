@@ -1,0 +1,7 @@
+name: landlord
+version: 1.0.0
+mode: bin
+sources:
+  - main.php
+  - ./php-src
+  - ./cpp-src

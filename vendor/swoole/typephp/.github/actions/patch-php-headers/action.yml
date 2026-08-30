@@ -1,0 +1,21 @@
+name: Patch PHP headers for C++
+description: Apply temporary upstream PHP header fixes required by generated C++.
+
+runs:
+  using: composite
+  steps:
+    # Temporary workaround for php/php-src#22935. Some supported PHP packages
+    # contain a php_hash.h revision that is valid C but invalid C++. Remove
+    # this action when all PHP 8.4/8.5 packages include php/php-src#22940.
+    - name: Patch php_hash.h
+      shell: bash
+      run: |
+        php_include_dir="$(php-config --include-dir)"
+        php_hash_header="${php_include_dir}/ext/hash/php_hash.h"
+
+        if grep -Fq 'char *base = ecalloc(' "${php_hash_header}"; then
+          sudo patch --directory="${php_include_dir}" --strip=1 \
+            < "${GITHUB_ACTION_PATH}/../../patches/php-hash-cxx.patch"
+        else
+          echo "php_hash.h already contains the upstream C++ fix"
+        fi

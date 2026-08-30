@@ -1,0 +1,44 @@
+{
+  "name": "tinywan/jwt",
+  "description": "JSON Web Token (JWT) for webman plugin",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": "^8.2",
+    "ext-json": "*",
+    "workerman/webman-framework": "^1.2.1||^2.0",
+    "firebase/php-jwt": "^6.8||^7.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Tinywan\\Jwt\\": "src"
+    }
+  },
+  "require-dev": {
+    "carthage-software/mago": "^1.0@RC",
+    "pestphp/pest": "^3.0",
+    "mockery/mockery": "^1.5",
+    "topthink/think-orm": "^2.0",
+    "illuminate/database": "^11.0",
+    "workerman/webman": "^1.0"
+  },
+  "config": {
+    "allow-plugins": {
+      "carthage-software/mago": true,
+      "pestphp/pest-plugin": true
+    }
+  },
+  "scripts": {
+    "format:check": "mago format --check",
+    "format": "mago format",
+    "lint": "mago lint --baseline mago-lint-baseline.toml",
+    "analyse": "mago analyze --baseline mago-analyze-baseline.toml",
+    "test": "pest tests",
+    "check": [
+      "@format:check",
+      "@lint",
+      "@analyse",
+      "@test"
+    ]
+  }
+}

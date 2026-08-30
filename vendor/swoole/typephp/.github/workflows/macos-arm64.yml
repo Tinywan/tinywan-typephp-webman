@@ -1,0 +1,43 @@
+name: macOS ARM64
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPOSER_NO_INTERACTION: 1
+  COMPOSER_PROCESS_TIMEOUT: 0
+
+jobs:
+  build:
+    name: Build - PHP ${{ matrix.php }} ZTS
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Build and smoke test
+        uses: ./.github/actions/unix-arm64-build
+        with:
+          php-version: ${{ matrix.php }}
+          os: macos
+          library-extension: dylib
+          smoke-directory: macos
+          smoke-binary: macos_smoke
+          smoke-output: macos-arm64-smoke-ok:zts

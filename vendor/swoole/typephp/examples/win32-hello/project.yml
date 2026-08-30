@@ -1,0 +1,19 @@
+name: win32-hello
+version: 0.0.1
+mode: bin
+
+# Windows 资源文件配置示例
+# resource:
+#   icon: icon.ico
+#   version-info:
+#     file-version: 0.0.1.0
+#     product-version: 0.0.1.0
+#     company-name: "My Company"
+#     file-description: "Win32 Hello World Application"
+#     legal-copyright: "Copyright (C) 2026 My Company"
+#     product-name: "Win32 Hello"
+#     original-filename: "win32-hello.exe"
+
+sources:
+  - hello-win.php
+  - ./cpp-src

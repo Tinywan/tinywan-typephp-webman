@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111f">
+    <title>TypePHP · WASI 0.2 Browser Lab</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow"><span class="pulse"></span> WASI 0.2 · Preview 2</p>
+                <h1>TypePHP<br><span>Browser Lab</span></h1>
+                <p class="lede">同一个由 PHP、PHPX 与 TypePHP 静态链接的 Component，在浏览器 Worker 中直接执行。</p>
+            </div>
+            <div class="runtime-orbit" aria-hidden="true">
+                <div class="orbit-ring"></div>
+                <div class="runtime-core">PHP<br><strong>AOT</strong></div>
+                <span class="satellite one">WASI</span>
+                <span class="satellite two">Wasm</span>
+                <span class="satellite three">C++17</span>
+            </div>
+        </header>
+
+        <section class="control-panel panel">
+            <div class="panel-heading">
+                <div>
+                    <p class="section-label">Launch configuration</p>
+                    <h2>配置本次运行</h2>
+                </div>
+                <div id="status" class="status idle"><span></span>Ready</div>
+            </div>
+            <div class="form-grid">
+                <label>
+                    <span>命令行参数</span>
+                    <input id="args" value="Ada 42 --browser" autocomplete="off">
+                    <small>空格分隔，支持单引号和双引号</small>
+                </label>
+                <label>
+                    <span>环境变量</span>
+                    <input id="env" value="DEMO_GREETING=Hello from Chrome" autocomplete="off">
+                    <small>每行一个 KEY=VALUE</small>
+                </label>
+                <label class="wide">
+                    <span>标准输入</span>
+                    <textarea id="stdin" rows="2">A message sent through WASI stdin.</textarea>
+                </label>
+            </div>
+            <div class="actions">
+                <label class="switch-row">
+                    <input id="persistent" type="checkbox" checked>
+                    <span class="switch"><i></i></span>
+                    <span><strong>OPFS 持久化</strong><small>刷新页面后保留虚拟文件系统</small></span>
+                </label>
+                <div class="button-row">
+                    <button id="reset" class="button secondary" type="button">清空存储</button>
+                    <button id="run" class="button primary" type="button"><span>运行 TypePHP</span><b>→</b></button>
+                </div>
+            </div>
+        </section>
+
+        <section class="results">
+            <article class="feature-card accent-cyan">
+                <div class="icon">⌁</div><p>Runtime</p><h3 id="runtime-value">等待运行</h3><small id="platform-value">—</small>
+            </article>
+            <article class="feature-card accent-violet">
+                <div class="icon">◷</div><p>Clock</p><h3 id="clock-value">—</h3><small>WASI wall clock</small>
+            </article>
+            <article class="feature-card accent-amber">
+                <div class="icon">✦</div><p>Secure random</p><h3 id="random-value">—</h3><small id="token-value">WASI random</small>
+            </article>
+            <article class="feature-card accent-green">
+                <div class="icon">▱</div><p>Filesystem</p><h3 id="filesystem-value">—</h3><small id="files-value">Memory FS + OPFS snapshot</small>
+            </article>
+            <article class="feature-card accent-cyan">
+                <div class="icon">⇄</div><p>HTTP fetch</p><h3 id="http-value">—</h3><small id="http-detail">file_get_contents() + WASI HTTP</small>
+            </article>
+        </section>
+
+        <section class="detail-grid">
+            <article class="panel data-panel">
+                <p class="section-label">Guest inputs</p>
+                <h2>参数、环境与标准流</h2>
+                <dl>
+                    <div><dt>argv</dt><dd id="argv-value">—</dd></div>
+                    <div><dt>env</dt><dd id="env-value">—</dd></div>
+                    <div><dt>stdin</dt><dd id="stdin-value">—</dd></div>
+                </dl>
+            </article>
+            <article class="panel precision-panel">
+                <p class="section-label">Language-level numeric types</p>
+                <h2>高精度计算</h2>
+                <dl>
+                    <div><dt>BigInt</dt><dd id="bigint-value">—</dd></div>
+                    <div><dt>Decimal</dt><dd id="decimal-value">—</dd></div>
+                    <div><dt>BigFloat</dt><dd id="bigfloat-value">—</dd></div>
+                </dl>
+            </article>
+        </section>
+
+        <section class="panel extensions-panel">
+            <div>
+                <p class="section-label">PHP runtime</p>
+                <h2>静态编译的 PHP 扩展</h2>
+            </div>
+            <strong id="extension-count">等待运行</strong>
+            <div id="extension-list" class="extension-list" aria-live="polite">
+                <span>由 get_loaded_extensions() 动态读取</span>
+            </div>
+            <article id="extension-detail" class="extension-detail" aria-live="polite">
+                <div class="extension-empty">
+                    <strong>选择一个扩展</strong>
+                    <span>点击上方扩展名称，由 JavaScript 调用 Wasm 导出函数读取详情。</span>
+                </div>
+            </article>
+        </section>
+
+        <details class="console panel">
+            <summary><span>Raw component output</span><kbd>stdout / stderr</kbd></summary>
+            <pre id="output">尚未运行。</pre>
+        </details>
+
+        <footer>
+            <span>TypePHP → C++17 → WASI 0.2 Component</span>
+            <span>运行于独立 ES module Worker · HTTP 通过 JSPI 挂起等待</span>
+        </footer>
+    </main>
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

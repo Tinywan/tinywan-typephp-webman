@@ -1,0 +1,39 @@
+name: tpc
+build-mode: bin
+version: 0.6.6
+cxx-std: c++17
+cxx-flags:
+  - -Wall
+
+# Windows 资源文件配置（图标、版本信息等）
+# 仅在 Windows 平台编译 bin 模式时生效
+resource:
+  # 图标文件路径（相对于 project.yml 所在目录，也支持绝对路径）
+  icon: swoole-logo.ico
+  # 版本信息
+  version-info:
+    file-version: 0.6.6.1112
+    product-version: 0.6.6
+    company-name: "上海识沃网络科技有限公司"
+    file-description: "TypePHP Compiler"
+    internal-name: "typephp"
+    legal-copyright: "Copyright (C) 2026 上海识沃网络科技有限公司"
+    legal-trademarks: "Swoole is a trademark of 上海识沃网络科技有限公司"
+    original-filename: "tpc.exe"
+    product-name: "TypePHP"
+    comments: "PHP 原生编译器，可将 PHP 项目编译为 Windows/Linux/macOS 平台原生的可执行文件"
+
+# Windows 应用程序清单文件（缺省不携带 manifest）
+# 仅在 Windows 平台编译 bin 模式时生效
+# 清单文件为 XML 格式，可配置 UAC 权限级别、DPI 感知、运行时依赖等
+# 示例：如需启用，取消注释下一行并指定 manifest 文件路径
+# manifest: app.manifest
+
+sources:
+  - ./src
+  - vendor/nikic/php-parser/lib/PhpParser/NodeVisitor.php
+  - vendor/nikic/php-parser/lib/PhpParser/NodeVisitorAbstract.php
+
+ignore:
+  - ./src/Assert.php
+  - ./src/polyfills.php

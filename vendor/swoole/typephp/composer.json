@@ -1,0 +1,38 @@
+{
+  "name": "swoole/typephp",
+  "description": "TypePHP native AOT compiler",
+  "type": "library",
+  "bin": [
+    "bin/tpc.php"
+  ],
+  "require": {
+    "php": ">=8.4 <8.6",
+    "composer-runtime-api": "^2.2",
+    "nikic/php-parser": "^5.6",
+    "league/climate": "^3.10",
+    "marcj/topsort": "^2.0",
+    "symfony/var-dumper": "^8.0",
+    "symfony/yaml": "^8.0",
+    "swoole/phpx": "~2.6.4",
+    "ajaxray/ansikit": "^0.3",
+    "ext-dom": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.4",
+    "friendsofphp/php-cs-fixer": "^3.40",
+    "phpstan/phpstan": "^2.2"
+  },
+  "autoload": {
+    "psr-4": {
+      "TypePhp\\": "src"
+    }
+  },
+  "scripts": {
+    "cs-fix": "php-cs-fixer fix $1",
+    "analyse": "phpstan analyse --memory-limit 512M -l 5 -c phpstan.neon",
+    "rector": "rector process --clear-cache"
+  },
+  "suggest": {
+    "ext-pcntl": "Required for process control features."
+  }
+}

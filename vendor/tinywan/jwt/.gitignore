@@ -1,0 +1,7 @@
+build
+vendor
+.idea
+.vscode
+.phpunit*
+coverage.xml
+composer.lock

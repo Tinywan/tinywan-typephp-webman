@@ -1,0 +1,10 @@
+[configuration]
+entry_symbol = "typephp_ocean_bridge_init"
+compatibility_minimum = "4.4"
+reloadable = true
+
+[libraries]
+windows.debug.x86_64 = "res://bin/typephp_ocean_godot_bridge.dll"
+windows.release.x86_64 = "res://bin/typephp_ocean_godot_bridge.dll"
+windows.template_debug.x86_64 = "res://bin/typephp_ocean_godot_bridge.dll"
+windows.template_release.x86_64 = "res://bin/typephp_ocean_godot_bridge.dll"

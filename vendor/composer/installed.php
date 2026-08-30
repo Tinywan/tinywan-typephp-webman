@@ -19,6 +19,15 @@
             'aliases' => array(),
             'dev_requirement' => true,
         ),
+        'firebase/php-jwt' => array(
+            'pretty_version' => 'v7.1.0',
+            'version' => '7.1.0.0',
+            'reference' => 'b374a5d1a4f1f67fadc2165cdb284645945e2fc0',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../firebase/php-jwt',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
         'league/climate' => array(
             'pretty_version' => '3.12.0',
             'version' => '3.12.0.0',
@@ -106,6 +115,15 @@
             'aliases' => array(),
             'dev_requirement' => true,
         ),
+        'swoole/typephp' => array(
+            'pretty_version' => 'v0.6.6',
+            'version' => '0.6.6.0',
+            'reference' => 'd19809af9b2e5e57e908b10a652803e03af38415',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../swoole/typephp',
+            'aliases' => array(),
+            'dev_requirement' => true,
+        ),
         'symfony/polyfill-ctype' => array(
             'pretty_version' => 'v1.37.0',
             'version' => '1.37.0.0',
@@ -141,6 +159,15 @@
             'install_path' => __DIR__ . '/../symfony/yaml',
             'aliases' => array(),
             'dev_requirement' => true,
+        ),
+        'tinywan/jwt' => array(
+            'pretty_version' => 'v2.0.1',
+            'version' => '2.0.1.0',
+            'reference' => 'c31b3de7b180abf6c498a85d87033f31a14d6c67',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../tinywan/jwt',
+            'aliases' => array(),
+            'dev_requirement' => false,
         ),
         'workerman/coroutine' => array(
             'pretty_version' => 'v1.1.6',

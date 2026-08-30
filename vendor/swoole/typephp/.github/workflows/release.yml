@@ -1,0 +1,141 @@
+name: Package release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Wait for tested binary packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_for_workflow() {
+              local workflow="$1"
+              local output_name="$2"
+              local run_json run_id status conclusion
+
+              for attempt in $(seq 1 960); do
+                  run_json="$(gh run list \
+                      --repo "${GITHUB_REPOSITORY}" \
+                      --workflow "${workflow}" \
+                      --commit "${GITHUB_SHA}" \
+                      --event push \
+                      --limit 20 \
+                      --json databaseId,status,conclusion,headBranch,createdAt)"
+                  run_id="$(jq -r --arg tag "${GITHUB_REF_NAME}" '
+                      [.[] | select(.headBranch == $tag)]
+                      | sort_by(.createdAt)
+                      | last
+                      | .databaseId // empty
+                  ' <<<"${run_json}")"
+
+                  if [[ -z "${run_id}" ]]; then
+                      echo "Waiting for ${workflow} to start for tag ${GITHUB_REF_NAME}..."
+                      sleep 15
+                      continue
+                  fi
+
+                  status="$(jq -r --argjson id "${run_id}" '
+                      .[] | select(.databaseId == $id) | .status
+                  ' <<<"${run_json}")"
+                  conclusion="$(jq -r --argjson id "${run_id}" '
+                      .[] | select(.databaseId == $id) | .conclusion
+                  ' <<<"${run_json}")"
+                  if [[ "${status}" == "completed" ]]; then
+                      if [[ "${conclusion}" != "success" ]]; then
+                          echo "${workflow} run ${run_id} completed with ${conclusion}" >&2
+                          exit 1
+                      fi
+                      echo "${workflow} run ${run_id} succeeded"
+                      echo "${output_name}=${run_id}" >> "${GITHUB_ENV}"
+                      return 0
+                  fi
+
+                  echo "Waiting for ${workflow} run ${run_id}: ${status}"
+                  sleep 15
+              done
+
+              echo "Timed out waiting for ${workflow}" >&2
+              exit 1
+          }
+
+          wait_for_workflow linux-x64.yml TESTS_RUN_ID
+          wait_for_workflow windows-build.yml WINDOWS_RUN_ID
+          wait_for_workflow linux-arm64.yml LINUX_ARM64_RUN_ID
+          wait_for_workflow macos-arm64.yml MACOS_ARM64_RUN_ID
+
+      - name: Download tested packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux-x64 dist/linux-arm64 dist/macos-arm64 dist/windows
+          gh run download "${TESTS_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'release-linux-*' \
+              --dir dist/linux-x64
+          gh run download "${WINDOWS_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'release-windows-*' \
+              --dir dist/windows
+          gh run download "${LINUX_ARM64_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'release-linux-arm64-*' \
+              --dir dist/linux-arm64
+          gh run download "${MACOS_ARM64_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'release-macos-arm64-*' \
+              --dir dist/macos-arm64
+
+          test "$(find dist -type f -name 'tpc_v*_linux_x64.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -type f -name 'tpc_v*_linux_arm64.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -type f -name 'tpc_v*_macos_arm64.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -type f -name 'tpc_v*_windows_x64.zip' | wc -l)" -eq 1
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+              -exec cp '{}' release-assets/ \;
+          test "$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 4
+          (
+              cd release-assets
+              sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+          )
+          ls -lh release-assets
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f | sort)
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --clobber
+          else
+              gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --verify-tag \
+                  --title "TypePHP ${GITHUB_REF_NAME}" \
+                  --generate-notes
+          fi

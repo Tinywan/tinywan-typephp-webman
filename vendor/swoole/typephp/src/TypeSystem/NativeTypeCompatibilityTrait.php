@@ -1,0 +1,289 @@
+<?php
+/**
+ * This file is part of TypePHP.
+ *
+ * Resolves native return types, inheritance compatibility, and converted call arguments.
+ */
+
+namespace TypePhp\TypeSystem;
+
+use TypePhp\Type;
+
+use PhpParser\Node;
+use TypePhp\Entity\ArgInfo;
+
+trait NativeTypeCompatibilityTrait
+{
+    protected function getReturnType(): string
+    {
+        $type = $this->functionDef->returnType;
+        if ($type === Type::STREAM) {
+            return Type::VAR;
+        }
+        return $type;
+    }
+
+    protected function getReturnClass(): string
+    {
+        return $this->functionDef->returnClass;
+    }
+
+    protected function isInheritedFrom(string $class, string $expected): bool
+    {
+        // 继承关系判断的唯一入口。调用者不应直接使用 PHP 运行时反射函数判断普通项目类。
+        // 对 AOT 已扫描到的项目类/接口，必须走 classDef/interfaceDef 中的 extends/implements 图；
+        // 对 PHP 内置类/接口，可以使用 Zend 运行时反射，因为这部分属于目标 PHP 运行时的固定能力；
+        // 对动态类返回 true 表示“静态阶段无法否定”，后续必须保留运行时检查兜底。
+        $class = ltrim($class, '\\');
+        $expected = ltrim($expected, '\\');
+        if (strcasecmp($class, $expected) === 0) {
+            return true;
+        }
+
+        $internal = ($this->isInternalClass($expected) or $this->isInternalInterface($expected));
+        $isInterface = ($this->hasInterface($expected) or $this->isInternalInterface($expected));
+
+        if ($this->hasInterface($class)) {
+            if (!$isInterface) {
+                return false;
+            }
+            return $this->interfaceExtends($class, $expected);
+        }
+
+        if ($this->isInternalClass($class) or $this->isInternalInterface($class)) {
+            // 只允许内置类型之间使用 Zend 的继承关系。这里不是查询任意用户类，
+            // 因此不会把编译器进程加载过的外部库类混入项目静态类型系统。
+            if (!$internal) {
+                return false;
+            }
+            return is_subclass_of($class, $expected);
+        }
+
+        // 类不存在，说明这是一个动态类，跳过静态检查，需要运行时检查
+        if (!$this->hasClass($class)) {
+            return true;
+        }
+        $classDef = $this->getClass($class);
+        if ($classDef->nativeObject
+            && strcasecmp($expected, 'Stringable') === 0
+            && $this->findNativeObjectMethod($class, '__toString') !== null
+        ) {
+            // PHP implicitly marks every class with __toString() as
+            // Stringable. Native classes have no zend_class_entry, so preserve
+            // that relation in the compile-time class graph instead.
+            return true;
+        }
+        while (true) {
+            if ($isInterface) {
+                if ($classDef->implements and in_array($expected, $classDef->implements)) {
+                    return true;
+                }
+                // Check transitive interface inheritance (e.g., Iterator extends Traversable)
+                foreach ($classDef->implements as $iface) {
+                    $stack = [$iface];
+                    while ($stack) {
+                        $check = array_pop($stack);
+                        if (strcasecmp($check, $expected) === 0) {
+                            return true;
+                        }
+                        if (!$this->hasInterface($check)) {
+                            if ($internal && $this->isInternalInterface($check) && is_subclass_of($check, $expected)) {
+                                return true;
+                            }
+                            continue;
+                        }
+                        $interfaceDef = $this->getInterface($check);
+                        foreach ($interfaceDef->extendsList ?: ($interfaceDef->extends ? [$interfaceDef->extends] : []) as $parentIface) {
+                            $stack[] = $parentIface;
+                        }
+                    }
+                }
+            } else {
+                if (strcasecmp($class, $expected) === 0) {
+                    return true;
+                }
+                if (!$this->hasClass($class)) {
+                    // 原生类继承自一个内置类，例如: UserError extends Exception ，然后 $expected 预期是 Throwable
+                    // 这种情况，需要使用 ZendVM 获取继承关系
+                    if ($this->isInternalClass($class) and $internal) {
+                        return $class === $expected or is_subclass_of($class, $expected);
+                    }
+                    return false;
+                }
+            }
+            if (!$classDef->extends) {
+                return false;
+            }
+            $class = $classDef->extends;
+            if ($this->isInternalClass($class)) {
+                // 项目类可以继承内置类。进入内置父类链后，后续关系交给 Zend 判断；
+                // 但 expected 也必须是内置类/接口，否则不能跨到外部用户类命名空间做运行时反射。
+                return $internal && is_subclass_of($class, $expected);
+            }
+            $classDef = $this->getClass($class);
+        }
+    }
+
+    private function interfaceExtends(string $interface, string $expected): bool
+    {
+        // 接口继承需要单独处理，因为 interfaceDef 没有 classDef 的父类链。
+        // 这里同样只遍历 AOT 已知接口图；遇到内置接口时，才允许使用 Zend 的 is_subclass_of()。
+        $stack = [$interface];
+        while ($stack) {
+            $check = array_pop($stack);
+            if (strcasecmp($check, $expected) === 0) {
+                return true;
+            }
+            if (!$this->hasInterface($check)) {
+                if ($this->isInternalInterface($check) && $this->isInternalInterface($expected) && is_subclass_of($check, $expected)) {
+                    return true;
+                }
+                continue;
+            }
+            $interfaceDef = $this->getInterface($check);
+            foreach ($interfaceDef->extendsList ?: ($interfaceDef->extends ? [$interfaceDef->extends] : []) as $parentInterface) {
+                $stack[] = $parentInterface;
+            }
+        }
+        return false;
+    }
+
+    protected function getTypeConvertedArg(
+        Node\Arg $arg,
+        ArgInfo $argInfo,
+        string $callableName = '',
+        int $argIndex = 0
+    ): string
+    {
+        $type = $this->detectTypeOfExpr($arg->value);
+        $this->assertExprCanBeUsedAsValue($arg->value, 'function argument');
+        if ($this->isVarExpr($arg->value)) {
+            $this->assertStdContainerDoesNotEscapeNativeObjects(
+                $arg,
+                $this->parseIdentifier($arg->value),
+            );
+        }
+
+        if (!empty($argInfo->typeCheck)) {
+            $this->checkCompositeTypeAssignment(
+                $arg,
+                $argInfo->typeCheck,
+                $argInfo->typeStr,
+                $arg->value,
+                'argument `$' . ($argInfo->phpName ?: $this->unescapeVarName($argInfo->name)) . '`'
+            );
+        }
+
+        $declaredClass = $argInfo->declaredClass ?: $argInfo->class;
+        $argumentClass = $this->detectClassOfExpr($arg->value);
+        if ($this->isNativeObjectClass($argumentClass)
+            && !$this->isNativeObjectClass($declaredClass)
+        ) {
+            if ($declaredClass !== '' && $this->isInterface($declaredClass)) {
+                $this->fatalError(
+                    $arg,
+                    "Native objects cannot be converted to interface `{$declaredClass}`",
+                );
+            }
+            $this->fatalError(
+                $arg,
+                'Native objects cannot cross a PHP/ZendVM argument boundary',
+            );
+        }
+        if ($this->isNativeObjectClass($declaredClass)) {
+            if ($argInfo->nullable && $this->isNull($arg->value)) {
+                return 'nullptr';
+            }
+            $class = $argumentClass;
+            if ($class === '' || !$this->isNativeObjectClass($class)
+                || !$this->isObjectClassStaticallyAssignableTo($class, $declaredClass)
+            ) {
+                $argName = $argInfo->phpName ?: $this->unescapeVarName($argInfo->name);
+                $this->fatalError(
+                    $arg,
+                    "Argument `{$argName}` must be a native object of type `{$declaredClass}`"
+                );
+            }
+            $expr = $this->parseOrderedArg($arg);
+            return $this->materializeCallArgValue($arg->value, $expr);
+        }
+
+        if ($argInfo->byRef) {
+            if ($this->isReferenceWrapperCall($arg->value)) {
+                $inner = $this->unwrapReferenceWrapperCall($arg->value, $arg);
+                $this->assertNativeObjectReferenceForbidden($inner, $arg);
+                $this->assertReadonlyPropertyReferenceForbidden($inner, $arg, false);
+                if ($this->isVarExpr($inner)) {
+                    $arg->value = $inner;
+                } else {
+                    $expr = $this->expandRefvalExpr($inner, $arg);
+                    if ($expr !== null) {
+                        return $expr;
+                    }
+                    $this->fatalError($arg, 'The refval function only accepts a variable, array element, or object property');
+                }
+            } else {
+                $this->assertNativeObjectReferenceForbidden($arg->value, $arg);
+                $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
+            }
+            if ($this->isVarExpr($arg->value)) {
+                $var = $this->parseVariable($arg->value);
+                // 若参数是引用类型，可以传入未定义变量，将立即创建变量作为引用
+                if (!$this->hasLocalVar($var)) {
+                    $this->addLocalVar($var, Type::VAR);
+                }
+            }
+            return $this->convertToRef($arg->value);
+        }
+
+        $expr = $this->parseOrderedArg($arg);
+        $expr = $this->materializeCallArgValue($arg->value, $expr);
+
+        if (($type === Type::VAR || $type === Type::REF) && $this->isStrictScalarType($argInfo->type)) {
+            // A native scalar ABI value has already lost its zval type. Preserve
+            // the dynamic value until strict_types validation has completed.
+            // The PHPX helper evaluates the expression exactly once and returns
+            // the final native ABI type without an immediately-invoked closure.
+            $this->checkVarAssignExpr($arg, $argInfo->type, $type);
+            return $this->genStrictScalarArgConversion(
+                $argInfo,
+                $expr,
+                $callableName,
+                (string) ($argIndex + 1)
+            );
+        }
+
+        $this->checkVarAssignExpr($arg, $argInfo->type, $type);
+
+        if ($argInfo->type === Type::VAR && $this->isVarExpr($arg->value)) {
+            $varName = $this->parseIdentifier($arg->value);
+            if ($this->isStdContainer($varName)) {
+                return $varName;
+            }
+        }
+
+        if ($argInfo->type === Type::OBJECT) {
+            if ($declaredClass !== '') {
+                $class = $this->detectDeclaredClassOfExpr($arg->value);
+                if ($class !== '') {
+                    // native call 是性能热点，若静态阶段已经证明实参 is-a 声明类型，
+                    // 就不要再生成 php::toObject($expr, target_ce) 做重复运行时检查。
+                    // 如果无法证明，但右值是已知 concrete object，说明一定不兼容，直接编译期 fatal；
+                    // 其他动态/外部库/any 场景保留 php::toObject() 作为运行时兜底。
+                    if ($this->isObjectClassStaticallyAssignableTo($class, $declaredClass)) {
+                        return $type === Type::OBJECT ? $expr : $this->convertObjectExpr($expr);
+                    }
+                    if ($this->isKnownConcreteObjectExpr($arg->value, $class)) {
+                        $argName = $argInfo->phpName ?: $this->unescapeVarName($argInfo->name);
+                        $this->fatalError($arg, "Argument `{$argName}` must be an instance of `{$declaredClass}`, `{$class}` given");
+                    }
+                }
+                return $this->convertObjectExpr($expr, $this->getClassEntryPtr($declaredClass));
+            }
+            return $type === Type::OBJECT ? $expr : $this->convertObjectExpr($expr);
+        }
+
+        return $this->convertExprType($expr, $argInfo->type, $type);
+    }
+
+}
