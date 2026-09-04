@@ -451,5 +451,32 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.archive_name }}
+          name: "Release ${{ github.ref_name }}"
+          generate_release_notes: true
+          body: |
+            ### 🚀 TypePHP Webman 发行说明 (${{ github.ref_name }})
+
+            基于 **TypePHP (Swoole AOT 编译器)** 将 **Webman Framework** 预先编译为原生机器码的高性能发行版。
+
+            #### 📦 发布包资产说明 (Artifacts)
+            - **`typephp-webman-linux-x64.tar.gz`**：Linux x64 动态自包含完整版
+              - 内置 PHP 8.4+ 运行时与自包含动态共享库
+              - 完整集成关键扩展：`posix`, `pcntl`, `redis`, `igbinary`, `msgpack`, `sockets`, `event` 等
+              - 解压后执行 `./start.sh start` 或 `./start.sh status` 即可直接运行
+            - **`typephp-webman-linux-x64-static.tar.gz`**：Linux x64 全静态独立版 (Full-Static)
+              - 基于 **TypePHP v0.7+ `--full-static`** 与 Clang + Musl 工具链编译
+              - 生成不依赖任何外部系统库 (`libc.so`) 的纯静态 ELF 可执行文件
+              - 适用于 Alpine Linux、轻量级容器（Scratch / Busybox）以及任意 Linux 发行版
+            - **`typephp-webman-windows-x64.zip`**：Windows x64 独立运行版
+              - 基于 MSVC 构建，自带配套 PHP SDK 与所需 DLL 动态库
+              - 解压后在 CMD / PowerShell 中运行 `webman-server.exe` 或 `start.bat`
+
+            #### 💡 运行与验证
+            ```bash
+            # Linux 运行测试
+            tar -zxvf typephp-webman-linux-x64.tar.gz
+            ./start.sh start
+            ./start.sh status
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
