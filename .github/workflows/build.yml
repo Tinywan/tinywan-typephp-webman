@@ -312,11 +312,12 @@ jobs:
             echo "[CI Warning] Full-static compilation requires pre-linked libphp.a from swoole-cli SDK."
             echo "[CI Warning] Falling back to building portable bundle so static release asset is available."
             ./package.sh
-            # 兼容 static 命名
             if [ -f dist/webman-server.bin ] && [ ! -f dist/webman-server ]; then
               cp -f dist/webman-server.bin dist/webman-server
             fi
           fi
+          # 清理非目标文件，确保发布包干净
+          rm -f dist/*.tar.gz dist/*.zip
           echo "=== Packaging ${{ matrix.archive_name }} ==="
           tar -czvf ${{ matrix.archive_name }} -C dist .
           ls -lh ${{ matrix.archive_name }}
@@ -518,28 +519,19 @@ jobs:
         with:
           files: ${{ matrix.archive_name }}
           name: "Release ${{ github.ref_name }}"
-          generate_release_notes: true
           body: |
-            ### 🚀 TypePHP Webman 发行说明 (${{ github.ref_name }})
+            ### 🚀 TypePHP Webman 发行版 (${{ github.ref_name }})
 
-            基于 **TypePHP (Swoole AOT 编译器)** 将 **Webman Framework** 预先编译为原生机器码的高性能发行版。
+            基于 **TypePHP (Swoole AOT 编译器)** 将 **Webman** 预编译为原生机器码发行版。
 
-            #### 📦 发布包资产说明 (Artifacts)
-            - **`typephp-webman-linux-x64.tar.gz`**：Linux x64 动态自包含完整版
-              - 内置 PHP 8.4+ 运行时与自包含动态共享库
-              - 完整集成关键扩展：`posix`, `pcntl`, `redis`, `igbinary`, `msgpack`, `sockets`, `event` 等
-              - 解压后执行 `./start.sh start` 或 `./start.sh status` 即可直接运行
-            - **`typephp-webman-linux-x64-static.tar.gz`**：Linux x64 全静态独立版 (Full-Static)
-              - 基于 **TypePHP v0.7+ `--full-static`** 与 Clang + Musl 工具链编译
-              - 生成不依赖任何外部系统库 (`libc.so`) 的纯静态 ELF 可执行文件
-              - 适用于 Alpine Linux、轻量级容器（Scratch / Busybox）以及任意 Linux 发行版
+            #### 📦 发布包资产
+            - **`typephp-webman-linux-x64.tar.gz`**：Linux x64 自包含完整运行版
+            - **`typephp-webman-linux-x64-static.tar.gz`**：Linux x64 独立运行版
             - **`typephp-webman-windows-x64.zip`**：Windows x64 独立运行版
-              - 基于 MSVC 构建，自带配套 PHP SDK 与所需 DLL 动态库
-              - 解压后在 CMD / PowerShell 中运行 `webman-server.exe` 或 `start.bat`
 
-            #### 💡 运行与验证
+            #### 💡 快速运行
             ```bash
-            # Linux 运行测试
+            # Linux 解压运行
             tar -zxvf typephp-webman-linux-x64.tar.gz
             ./start.sh start
             ./start.sh status
