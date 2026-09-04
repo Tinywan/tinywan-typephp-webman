@@ -68,7 +68,7 @@ jobs:
 
   build:
     needs: select-platform
-    name: Build on ${{ matrix.os }}
+    name: Build ${{ matrix.platform }} (${{ matrix.build_type }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
