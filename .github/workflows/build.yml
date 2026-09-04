@@ -248,7 +248,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v1
+          key: linux-musl-phpx-full-static-sdk-v2
 
       - name: Prepare Musl Full-Static SDK (if cache miss)
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
@@ -280,13 +280,28 @@ jobs:
           cp -f vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
           cp -f vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
 
-          # 4. 如果没有 libphp.a，利用 ar 将 libphp 静态归档
+          # 4. 组装/提取 libphp.a
           docker run --rm -v "$(pwd):/host" alpine:3.20 sh -c "
             apk add --no-cache binutils && \
             if [ ! -f /host/$SDK_DIR/lib/libphp.a ]; then
               ar cr /host/$SDK_DIR/lib/libphp.a
             fi
           "
+
+          # 5. 编译全静态 libphpx.a 并归档至 SDK 目录
+          echo "[CI] Compiling static libphpx.a ..."
+          cmake -S vendor/swoole/phpx/full-static -B vendor/swoole/phpx/build/full-static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPHPX_PHP_INCLUDE_DIR="$(pwd)/$SDK_DIR/include/php" \
+            -DPHPX_GMP_INCLUDE_DIR=/usr/include \
+            -DPHPX_GMP_LIB_DIR=/usr/lib/x86_64-linux-gnu \
+            -DPHPX_MPFR_INCLUDE_DIR=/usr/include \
+            -DPHPX_MPFR_LIB_DIR=/usr/lib/x86_64-linux-gnu
+
+          cmake --build vendor/swoole/phpx/build/full-static -j$(nproc)
+          cp -f vendor/swoole/phpx/build/full-static/libphpx.a "$SDK_DIR/lib/libphpx.a"
+
+          ls -la "$SDK_DIR/lib"
           ls -la "$SDK_DIR/lib/musl"
 
       - name: Save Full-Static SDK Cache
@@ -294,7 +309,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v1
+          key: linux-musl-phpx-full-static-sdk-v2
 
       # ---------------- Linux 全静态版编译与打包 ----------------
       - name: Build and Package on Linux (Full Static)

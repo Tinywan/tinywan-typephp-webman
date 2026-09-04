@@ -43,6 +43,14 @@ if [ "$FULL_STATIC_MODE" = "1" ]; then
         echo "[ERROR] musl startup file crt1.o not found at $SDK_DIR/lib/musl/crt1.o!"
         exit 1
     fi
+    if [ ! -f "$SDK_DIR/lib/libphpx.a" ]; then
+        echo "[ERROR] static libphpx.a not found at $SDK_DIR/lib/libphpx.a!"
+        exit 1
+    fi
+    if [ ! -f "$SDK_DIR/lib/libphp.a" ]; then
+        echo "[ERROR] static libphp.a not found at $SDK_DIR/lib/libphp.a!"
+        exit 1
+    fi
 else
     # 常规动态编译流程：确认 PHP_HOME 并编译动态 PHPX
     if [ -z "$PHP_HOME" ]; then
