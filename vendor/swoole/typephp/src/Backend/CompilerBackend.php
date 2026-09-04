@@ -5,18 +5,18 @@ namespace TypePhp\Backend;
 use TypePhp\Platform\PlatformBase;
 
 /**
- * 编译器后端抽象基类
- * 定义所有编译器必须实现的接口
+ * Abstract base class for compiler backends.
+ * Defines the interface that all compilers must implement.
  */
 abstract class CompilerBackend
 {
     /**
-     * 平台实例
+     * The platform instance.
      */
     protected PlatformBase $platform;
 
     /**
-     * 最近创建的 Response File 路径，用于构建完成后清理
+     * Path of the most recently created Response File, used for cleanup after the build completes.
      */
     protected string $lastResponseFile = '';
 
@@ -26,17 +26,17 @@ abstract class CompilerBackend
     }
 
     /**
-     * 获取编译器名称
+     * Get the compiler name.
      */
     abstract public function getName(): string;
 
     /**
-     * 获取编译器命令
+     * Get the compiler command.
      */
     abstract public function getCompilerCommand(): string;
 
     /**
-     * 获取链接器命令
+     * Get the linker command.
      */
     abstract public function getLinkerCommand(): string;
 
@@ -51,7 +51,7 @@ abstract class CompilerBackend
     }
 
     /**
-     * 构建完整的编译命令
+     * Build the complete compile command.
      */
     abstract public function buildCompileCommand(
         string $sourceFile,
@@ -60,7 +60,7 @@ abstract class CompilerBackend
     ): string;
 
     /**
-     * 构建 C 文件的编译命令（不包含 C++ 特定选项）
+     * Build the compile command for C files (excludes C++-specific options).
      */
     abstract public function buildCCompileCommand(
         string $sourceFile,
@@ -69,9 +69,9 @@ abstract class CompilerBackend
     ): string;
 
     /**
-     * 构建原生源文件的编译命令（汇编/Objective-C 等，使用 -x 指定语言）
+     * Build the compile command for native source files (assembly/Objective-C, etc., using -x to specify the language).
      *
-     * @param string $language GCC/Clang 语言标识（assembler, objective-c, objective-c++ 等）
+     * @param string $language GCC/Clang language identifier (assembler, objective-c, objective-c++, etc.)
      */
     abstract public function buildNativeCompileCommand(
         string $sourceFile,
@@ -81,7 +81,7 @@ abstract class CompilerBackend
     ): string;
 
     /**
-     * 构建完整的链接命令
+     * Build the complete link command.
      */
     abstract public function buildLinkCommand(
         array $objectFiles,
@@ -90,33 +90,35 @@ abstract class CompilerBackend
     ): string;
 
     /**
-     * 构建编译选项（不含文件路径）
-     * @param array $config 编译配置
-     *   - optimize: 优化级别 (0-3)
-     *   - debug_info: 是否生成调试信息
-     *   - sanitize: sanitizer 类型 (address, undefined, etc.)
-     *   - cpp_std: C++ 标准版本
-     *   - is_zts: 是否为 ZTS 模式
-     *   - build_mode: 构建模式 ('bin' or 'ext')
-     *   - enable_profiler: 是否启用性能分析
-     *   - suppressed_warnings: 需要屏蔽的警告代码数组
-     *   - cxxflags: 用户自定义编译标志
-     *   - compiler_pdb: MSVC 编译器 PDB 输出路径
+     * Build compile options (excludes file paths).
+     *
+     * @param array $config Compile configuration
+     *   - optimize: optimization level (0-3)
+     *   - debug_info: whether to generate debug information
+     *   - sanitize: sanitizer type (address, undefined, etc.)
+     *   - cpp_std: C++ standard version
+     *   - is_zts: whether ZTS mode is enabled
+     *   - build_mode: build mode ('bin' or 'ext')
+     *   - enable_profiler: whether to enable profiling
+     *   - suppressed_warnings: array of warning codes to suppress
+     *   - cxxflags: user-defined compile flags
+     *   - compiler_pdb: MSVC compiler PDB output path
      */
     abstract public function buildCompileOptions(array $config = []): string;
 
     /**
-     * 构建链接选项（不含文件路径）
-     * @param array $config 链接配置
-     *   - debug_info: 是否生成调试信息
-     *   - no_console: 是否隐藏控制台窗口
-     *   - build_mode: 构建模式 ('bin' or 'ext')
-     *   - sanitize: sanitizer 类型
+     * Build link options (excludes file paths).
+     *
+     * @param array $config Link configuration
+     *   - debug_info: whether to generate debug information
+     *   - no_console: whether to hide the console window
+     *   - build_mode: build mode ('bin' or 'ext')
+     *   - sanitize: sanitizer type
      */
     abstract public function buildLinkOptions(array $config = []): string;
 
     /**
-     * 获取平台实例
+     * Get the platform instance.
      */
     public function getPlatform(): PlatformBase
     {
@@ -124,7 +126,7 @@ abstract class CompilerBackend
     }
 
     /**
-     * 格式化包含路径
+     * Format include paths.
      */
     protected function formatIncludePaths(array $includePaths): string
     {
@@ -132,7 +134,7 @@ abstract class CompilerBackend
     }
 
     /**
-     * 格式化库路径
+     * Format library paths.
      */
     protected function formatLibraryPaths(array $libraryPaths): string
     {
@@ -140,7 +142,7 @@ abstract class CompilerBackend
     }
 
     /**
-     * 格式化库文件
+     * Format library files.
      */
     protected function formatLibraries(array $libraries): string
     {
@@ -157,11 +159,11 @@ abstract class CompilerBackend
     }
 
     /**
-     * 将目标文件列表写入 Response File，避免命令行参数过长超出 OS 限制（Windows 8191 字符）
+     * Write the object file list to a Response File to avoid exceeding the OS command-line length limit (8191 characters on Windows).
      *
-     * @param array  $objectFiles 目标文件路径列表
-     * @param string $targetFile  最终输出文件路径（Response File 写入同目录）
-     * @return string 链接器参数，如 @build/project.rsp
+     * @param array  $objectFiles List of object file paths.
+     * @param string $targetFile  Final output file path (the Response File is written to the same directory).
+     * @return string Linker argument, e.g. @build/project.rsp
      */
     protected function createResponseFile(array $objectFiles, string $targetFile): string
     {
@@ -169,7 +171,7 @@ abstract class CompilerBackend
         $this->lastResponseFile = $rspFile;
         $lines = [];
         foreach ($objectFiles as $file) {
-            // 路径含空格时用双引号包裹，MSVC link.exe 和 GCC/Clang 均支持
+            // Wrap paths containing spaces in double quotes; supported by both MSVC link.exe and GCC/Clang.
             if (str_contains($file, ' ')) {
                 $file = '"' . $file . '"';
             }
@@ -180,7 +182,7 @@ abstract class CompilerBackend
     }
 
     /**
-     * 删除最近创建的 Response File 临时文件
+     * Delete the most recently created Response File temporary file.
      */
     public function cleanupResponseFile(): void
     {

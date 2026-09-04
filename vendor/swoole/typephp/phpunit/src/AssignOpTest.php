@@ -26,4 +26,14 @@ class AssignOpTest extends \BaseTest
     {
         $this->exec('Cannot use -- on php::Decimal', 'decimal-pre-dec.php');
     }
+
+    public function testPreIncrementUndefinedVar(): void
+    {
+        $this->exec('The variable `$value` is undefined', 'undefined-pre-inc.php');
+    }
+
+    public function testPreDecrementUndefinedVar(): void
+    {
+        $this->exec('The variable `$value` is undefined', 'undefined-pre-dec.php');
+    }
 }

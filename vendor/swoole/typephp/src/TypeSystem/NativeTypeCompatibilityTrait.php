@@ -30,10 +30,14 @@ trait NativeTypeCompatibilityTrait
 
     protected function isInheritedFrom(string $class, string $expected): bool
     {
-        // 继承关系判断的唯一入口。调用者不应直接使用 PHP 运行时反射函数判断普通项目类。
-        // 对 AOT 已扫描到的项目类/接口，必须走 classDef/interfaceDef 中的 extends/implements 图；
-        // 对 PHP 内置类/接口，可以使用 Zend 运行时反射，因为这部分属于目标 PHP 运行时的固定能力；
-        // 对动态类返回 true 表示“静态阶段无法否定”，后续必须保留运行时检查兜底。
+        // The single entry point for inheritance checks. Callers must not use PHP
+        // runtime reflection functions directly to judge ordinary project classes.
+        // For project classes/interfaces already scanned by AOT, the extends/
+        // implements graph in classDef/interfaceDef must be followed; for PHP
+        // built-in classes/interfaces, Zend runtime reflection may be used, since
+        // these are fixed capabilities of the target PHP runtime. Returning true
+        // for a dynamic class means "cannot be disproven at static time", so a
+        // runtime check must be retained as a fallback.
         $class = ltrim($class, '\\');
         $expected = ltrim($expected, '\\');
         if (strcasecmp($class, $expected) === 0) {
@@ -51,19 +55,32 @@ trait NativeTypeCompatibilityTrait
         }
 
         if ($this->isInternalClass($class) or $this->isInternalInterface($class)) {
-            // 只允许内置类型之间使用 Zend 的继承关系。这里不是查询任意用户类，
-            // 因此不会把编译器进程加载过的外部库类混入项目静态类型系统。
+            // Zend's inheritance relation is only used between built-in types.
+            // This is not a query on an arbitrary user class, so external library
+            // classes loaded by the compiler process are never mixed into the
+            // project's static type system.
             if (!$internal) {
                 return false;
             }
             return is_subclass_of($class, $expected);
         }
 
-        // 类不存在，说明这是一个动态类，跳过静态检查，需要运行时检查
+        // If the class does not exist, it is a dynamic class; skip the static
+        // check and defer to a runtime check
         if (!$this->hasClass($class)) {
             return true;
         }
         $classDef = $this->getClass($class);
+        if ($classDef->enum) {
+            if (strcasecmp($expected, 'UnitEnum') === 0) {
+                return true;
+            }
+            if ($classDef->enumBackingType !== null
+                && strcasecmp($expected, 'BackedEnum') === 0
+            ) {
+                return true;
+            }
+        }
         if ($classDef->nativeObject
             && strcasecmp($expected, 'Stringable') === 0
             && $this->findNativeObjectMethod($class, '__toString') !== null
@@ -103,8 +120,9 @@ trait NativeTypeCompatibilityTrait
                     return true;
                 }
                 if (!$this->hasClass($class)) {
-                    // 原生类继承自一个内置类，例如: UserError extends Exception ，然后 $expected 预期是 Throwable
-                    // 这种情况，需要使用 ZendVM 获取继承关系
+                    // A native class extends a built-in class (e.g. UserError extends
+                    // Exception), and $expected is Throwable. In this case ZendVM must
+                    // be used to obtain the inheritance relation.
                     if ($this->isInternalClass($class) and $internal) {
                         return $class === $expected or is_subclass_of($class, $expected);
                     }
@@ -116,8 +134,11 @@ trait NativeTypeCompatibilityTrait
             }
             $class = $classDef->extends;
             if ($this->isInternalClass($class)) {
-                // 项目类可以继承内置类。进入内置父类链后，后续关系交给 Zend 判断；
-                // 但 expected 也必须是内置类/接口，否则不能跨到外部用户类命名空间做运行时反射。
+                // Project classes may extend built-in classes. Once the built-in
+                // parent chain is entered, further relations are delegated to Zend;
+                // however, $expected must also be a built-in class/interface,
+                // otherwise runtime reflection cannot cross into the external user
+                // class namespace.
                 return $internal && is_subclass_of($class, $expected);
             }
             $classDef = $this->getClass($class);
@@ -126,8 +147,10 @@ trait NativeTypeCompatibilityTrait
 
     private function interfaceExtends(string $interface, string $expected): bool
     {
-        // 接口继承需要单独处理，因为 interfaceDef 没有 classDef 的父类链。
-        // 这里同样只遍历 AOT 已知接口图；遇到内置接口时，才允许使用 Zend 的 is_subclass_of()。
+        // Interface inheritance is handled separately because interfaceDef has no
+        // parent chain like classDef. Only the AOT-known interface graph is
+        // traversed here; Zend's is_subclass_of() is allowed only when a built-in
+        // interface is encountered.
         $stack = [$interface];
         while ($stack) {
             $check = array_pop($stack);
@@ -228,7 +251,8 @@ trait NativeTypeCompatibilityTrait
             }
             if ($this->isVarExpr($arg->value)) {
                 $var = $this->parseVariable($arg->value);
-                // 若参数是引用类型，可以传入未定义变量，将立即创建变量作为引用
+                // For a by-reference parameter, an undefined variable may be passed;
+                // it is created immediately as a reference
                 if (!$this->hasLocalVar($var)) {
                     $this->addLocalVar($var, Type::VAR);
                 }
@@ -266,10 +290,13 @@ trait NativeTypeCompatibilityTrait
             if ($declaredClass !== '') {
                 $class = $this->detectDeclaredClassOfExpr($arg->value);
                 if ($class !== '') {
-                    // native call 是性能热点，若静态阶段已经证明实参 is-a 声明类型，
-                    // 就不要再生成 php::toObject($expr, target_ce) 做重复运行时检查。
-                    // 如果无法证明，但右值是已知 concrete object，说明一定不兼容，直接编译期 fatal；
-                    // 其他动态/外部库/any 场景保留 php::toObject() 作为运行时兜底。
+                    // Native calls are a performance hot path. If the static phase
+                    // has already proven the argument is-a the declared type, do not
+                    // emit php::toObject($expr, target_ce) to repeat the runtime
+                    // check. If it cannot be proven but the right-hand side is a
+                    // known concrete object, it is necessarily incompatible, so fail
+                    // at compile time; other dynamic/external-library/any scenarios
+                    // keep php::toObject() as a runtime fallback.
                     if ($this->isObjectClassStaticallyAssignableTo($class, $declaredClass)) {
                         return $type === Type::OBJECT ? $expr : $this->convertObjectExpr($expr);
                     }

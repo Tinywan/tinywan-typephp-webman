@@ -70,7 +70,7 @@ final class PropertyAccessResolver
         while (true) {
             $classDef = $this->compiler->getClassDef($findClass);
             if ($classDef === null) {
-                // 非编译单元内的类：尝试按内置类的声明属性解析（offset 缓存）
+                // Class outside the compilation unit: attempt to resolve it by the internal class's declared property (offset cache)
                 return $this->resolveInternalClassProperty($expr, $property, $findClass, $class, $scope, $static);
             }
 
@@ -160,11 +160,11 @@ final class PropertyAccessResolver
     }
 
     /**
-     * 解析 PHP 内置类的声明属性，使其可以进入稳定属性 offset 缓存。
+     * Resolve the declared property of a PHP internal class so it can enter the stable property offset cache.
      *
-     * 仅处理反射可见的声明属性：动态属性、魔术属性（__get/__set）反射不可见，
-     * 返回 null 回退到按名字符串查找路径。内置类在 MINIT 注册、进程级存活，
-     * 其声明属性的 offset 终身不变，缓存安全。
+     * Only declared properties visible to reflection are handled: dynamic properties and magic properties (__get/__set) are not visible to reflection,
+     * so return null to fall back to the by-name string lookup path. Internal classes are registered at MINIT and live for the whole process,
+     * so the offset of their declared properties never changes and caching is safe.
      */
     private function resolveInternalClassProperty(
         NodeAbstract $expr,
@@ -182,7 +182,7 @@ final class PropertyAccessResolver
             return null;
         }
         $propRef = $ref->getProperty($property);
-        // PHP 8.4 属性钩子必须由引擎调用，offset 直读会绕过钩子，回退字符串路径
+        // PHP 8.4 property hooks must be invoked by the engine; reading the offset directly would bypass the hook, so fall back to the string path
         if ($propRef->hasHooks()) {
             return null;
         }
@@ -209,8 +209,8 @@ final class PropertyAccessResolver
             $this->fatal($expr, "Cannot access private property `{$property}` of class `{$displayClass}`");
         }
 
-        // 复合类型（union/intersection）的运行时检查结构依赖 AST 构建，
-        // 无法从反射便捷还原，回退字符串路径以保证类型安全
+        // The runtime check structure for composite types (union/intersection) depends on the AST,
+        // which cannot be conveniently reconstructed from reflection, so fall back to the string path to preserve type safety
         $propType = $propRef->getType();
         if ($propType !== null && !$propType instanceof \ReflectionNamedType) {
             return null;

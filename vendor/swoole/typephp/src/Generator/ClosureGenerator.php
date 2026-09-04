@@ -37,15 +37,19 @@ trait ClosureGenerator
                 ? $this->getClassEntryPtr($this->getFullClassName())
                 : 'nullptr';
         }
-        $parameterNames = [];
+        $parameterDescriptors = [];
         foreach ($params as $param) {
             $name = is_string($param->var->name)
                 ? $param->var->name
                 : $this->unescapeVarName($this->parseIdentifier($param->var));
-            $parameterNames[] = $this->genCharPtr($name, true);
+            $parameterDescriptors[] = 'php::ClosureParameter{'
+                . $this->genCharPtr($name, true) . ', '
+                . $this->escapeBool($param->byRef) . ', '
+                . $this->escapeBool($param->variadic) . ', '
+                . $this->escapeBool(!$param->variadic && $param->default === null) . '}';
         }
-        return 'php::newClosure(' . $callback . ', ' . $uses . ', ' . $thisArg . ', ' . $scope
-            . ', { ' . implode(', ', $parameterNames) . ' })';
+        return 'php::newClosureWithParameters(' . $callback . ', ' . $uses . ', ' . $thisArg . ', ' . $scope
+            . ', { ' . implode(', ', $parameterDescriptors) . ' }, php::ClosureStrictTypes::Enabled)';
     }
 
     protected function parseArrowFunction(Expr\ArrowFunction $expr): string
@@ -56,9 +60,6 @@ trait ClosureGenerator
         $params = [];
 
         foreach ($expr->params as $i => $param) {
-            if ($param->byRef) {
-                $this->fatalError($expr, 'Closure cannot use reference parameter');
-            }
             if ($param->var instanceof Variable) {
                 $params[$param->var->name] = $i;
             }
@@ -115,6 +116,20 @@ trait ClosureGenerator
 
     private function doGenClosure(Expr\ArrowFunction|Expr\Closure $expr, array $params, array $uses = []): string
     {
+        // Closure signatures flow through the same declaration validation in
+        // parseTypeDecl() as named functions (e.g. callable inside an
+        // intersection or DNF member). Bare class names are skipped here: the
+        // native-object walk below already resolves each of them through
+        // parseTypeDecl() and owns the trait-context name rewrite, so
+        // resolving them twice would re-qualify an already qualified name.
+        foreach ($params as $param) {
+            if (!$param->type instanceof Node\Name) {
+                $this->resolveTypeDecl($param->type, self::DECL_TYPE_OF_PARAM);
+            }
+        }
+        if (!$expr->returnType instanceof Node\Name) {
+            $this->resolveTypeDecl($expr->returnType, self::DECL_TYPE_OF_RETURN);
+        }
         if ($this->classDef?->nativeObject && !$expr->static) {
             $this->fatalError($expr, 'Native objects cannot be bound as $this to Zend closures');
         }
@@ -153,6 +168,14 @@ trait ClosureGenerator
         } elseif ($expr->byRef) {
             $this->fatalError($expr, 'Closure and arrow functions cannot return by reference');
         }
+        foreach ($params as $param) {
+            if ($param->byRef && $param->variadic) {
+                $this->fatalError(
+                    $param,
+                    'By-reference variadic parameters are not supported on dynamic Closures',
+                );
+            }
+        }
         $tmpVar = $this->genTmpVarName();
 
         $code = $this->getIndent() .
@@ -190,9 +213,6 @@ trait ClosureGenerator
         $code .= $this->genParameterCountCheck($requiredArgCount, count($params), $hasVariadic);
 
         foreach ($params as $i => $param) {
-            if ($param->byRef) {
-                $this->fatalError($expr, 'Closure cannot use reference parameter');
-            }
             $var = $this->parseIdentifier($param->var);
             $phpName = is_string($param->var->name) ? $param->var->name : $this->unescapeVarName($var);
             if ($param->variadic) {
@@ -210,11 +230,20 @@ trait ClosureGenerator
                 $code .= $this->genClosureParamTypeCheck($param, $var, $phpName, $i, true);
                 continue;
             }
-            $argExpr = $param->default === null
-                ? 'php::getCallArg(' . $i . ')'
-                : 'php::getCallArg(' . $i . ', ' . $this->parseParamDefaultValue($param->default) . ')';
-            $code .= $this->getIndent() . 'auto ' . $var . ' = ' . $argExpr . ';' . PHP_EOL;
-            $this->addArgument($var, Type::VAR);
+            if ($param->byRef) {
+                $argExpr = $param->default === null
+                    ? 'php::getCallArgByRef(' . $i . ')'
+                    : 'php::getCallArgByRef(' . $i . ', php::newReference('
+                        . $this->parseParamDefaultValue($param->default) . '))';
+                $code .= $this->getIndent() . Type::REF . ' ' . $var . ' = ' . $argExpr . ';' . PHP_EOL;
+                $this->addArgument($var, Type::REF);
+            } else {
+                $argExpr = $param->default === null
+                    ? 'php::getCallArg(' . $i . ')'
+                    : 'php::getCallArg(' . $i . ', ' . $this->parseParamDefaultValue($param->default) . ')';
+                $code .= $this->getIndent() . 'auto ' . $var . ' = ' . $argExpr . ';' . PHP_EOL;
+                $this->addArgument($var, Type::VAR);
+            }
             if (CompileTimeAttribute::consume($param, 'Immutable')) {
                 $this->context->immutableVars[$var] = true;
                 if ($this->immutableTypeNodeMayBeObject($param->type)) {
@@ -270,7 +299,8 @@ trait ClosureGenerator
                     $this->fatalError($useItem->var, 'Incorrect Closure use syntax, only variable names are allowed');
                 }
                 if ($useItem->byRef) {
-                    // 闭包的 use 语法，若为引用类型，可以就地创建变量
+                    // For a closure use clause, a by-reference capture may create
+                    // the variable in place if it does not exist yet
                     if (!isset($oriContext->localVars[$var])
                         && !isset($oriContext->staticVars[$var])) {
                         $oriContext->localVars[$var] = Type::REF;
@@ -469,11 +499,19 @@ trait ClosureGenerator
 
     private function genClosureParamTypeCheck(Node\Param $param, string $var, string $phpName, int $index, bool $variadic): string
     {
-        if (!$param->type instanceof NullableType && !$param->type instanceof UnionType && !$param->type instanceof IntersectionType) {
+        if (!$param->byRef
+            && !$param->type instanceof NullableType
+            && !$param->type instanceof UnionType
+            && !$param->type instanceof IntersectionType
+        ) {
             return '';
         }
 
-        $typeInfo = $this->buildTypeCheckFromNode($param->type);
+        if ($param->type === null) {
+            return '';
+        }
+
+        $typeInfo = $this->buildTypeCheckFromNode($param->type, $param->byRef);
         if (empty($typeInfo['check'])) {
             return '';
         }

@@ -7,7 +7,7 @@ use TypePhp\Platform\Windows;
 use TypePhp\Platform\Macos;
 
 /**
- * Clang 编译器后端实现
+ * Clang compiler backend implementation.
  */
 class Clang extends GccLikeBackend
 {
@@ -34,7 +34,7 @@ class Clang extends GccLikeBackend
     }
 
     /**
-     * Windows 下优先使用 lld-link，找不到时回退到 link.exe
+     * On Windows, prefer lld-link; fall back to link.exe if it is not available.
      */
     public static function detectWindowsLinker(): string
     {
@@ -62,7 +62,7 @@ class Clang extends GccLikeBackend
         return 'link';
     }
 
-    // ──── 钩子方法覆盖 ────
+    // ──── Hook method overrides ────
 
     protected function getCompilerPrefixFlags(): string
     {

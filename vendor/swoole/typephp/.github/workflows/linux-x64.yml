@@ -51,6 +51,14 @@ jobs:
           phpts: ts
           update: true
 
+      - name: Show PHP environment
+        shell: bash
+        run: |
+          php -v
+          php-config --version
+          php --ini
+          php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
+
       - name: Verify ZTS PHP
         shell: bash
         run: |
@@ -164,6 +172,14 @@ jobs:
           phpts: ts
           update: true
 
+      - name: Show PHP environment
+        shell: bash
+        run: |
+          php -v
+          php-config --version
+          php --ini
+          php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
+
       - name: Verify ZTS PHP
         shell: bash
         run: |
@@ -215,6 +231,113 @@ jobs:
       - name: Run PHPUnit
         run: vendor/bin/phpunit
 
+  integration:
+    name: EXT/LIB - PHP ${{ matrix.php }} ZTS
+    if: ${{ startsWith(github.ref, 'refs/tags/') || !contains(github.event.head_commit.message || '', '--skip-tests') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.4", "8.5"]
+    env:
+      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+
+    steps:
+      - name: Checkout TypePHP
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+          tools: composer:v2
+        env:
+          fail-fast: true
+          phpts: ts
+          update: true
+
+      - name: Show PHP environment
+        shell: bash
+        run: |
+          php -v
+          php-config --version
+          php --ini
+          php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
+
+      - name: Verify ZTS PHP and FPM
+        shell: bash
+        run: |
+          php -r 'if (!PHP_ZTS) { fwrite(STDERR, "Expected a ZTS PHP build\n"); exit(1); }'
+          case "$(php -r 'echo PHP_VERSION;')" in
+            "${{ matrix.php }}"*) ;;
+            *) echo "setup-php installed an unexpected PHP version" >&2; exit 1 ;;
+          esac
+          php_home="$(php-config --prefix)"
+          php_fpm=""
+          for candidate in \
+            "${php_home}/sbin/php-fpm" \
+            "${php_home}/bin/php-fpm" \
+            "/usr/sbin/php-fpm${{ matrix.php }}" \
+            "/usr/bin/php-fpm${{ matrix.php }}"; do
+            if test -x "${candidate}"; then
+              php_fpm="${candidate}"
+              break
+            fi
+          done
+          test -n "${php_fpm}"
+          "${php_fpm}" -v
+          "${php_fpm}" -i > /tmp/typephp-fpm-info.txt
+          grep -q 'Thread Safety => enabled' /tmp/typephp-fpm-info.txt
+          echo "PHP_HOME=${php_home}" >> "${GITHUB_ENV}"
+          echo "PHP_FPM=${php_fpm}" >> "${GITHUB_ENV}"
+
+      - name: Patch php_hash.h C++ compatibility
+        uses: ./.github/actions/patch-php-headers
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Download Linux x64 build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tpc-linux-x64-php-${{ matrix.php }}-zts
+          path: .
+
+      - name: Verify integration build inputs
+        shell: bash
+        run: |
+          test -f ./tpc
+          test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f "${PHP_HOME}/lib/libphp.so"
+          chmod +x ./tpc
+          echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${PHP_HOME}/lib" >> "${GITHUB_ENV}"
+
+      - name: Run EXT/LIB integration tests
+        shell: bash
+        run: |
+          php -n bin/run-integration-tests.php \
+            --compiler=./tpc \
+            --php="$(command -v php)" \
+            --php-fpm="${PHP_FPM}"
+
+      - name: Upload integration failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-failures-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: ignore
+          retention-days: 7
+          path: build/integration-*
+
   phpt:
     name: PHPT - PHP ${{ matrix.php }} ZTS
     if: ${{ startsWith(github.ref, 'refs/tags/') || !contains(github.event.head_commit.message || '', '--skip-tests') }}
@@ -241,12 +364,20 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
           extensions: curl, redis, mbstring, ffi
-          ini-values: ffi.enable=1, phpy.enable_operator_overloading=0, opcache.jit=0, precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
+          ini-values: ffi.enable=1, phpy.enable_operator_overloading=0, precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
           tools: composer:v2
         env:
           fail-fast: true
           phpts: ts
           update: true
+
+      - name: Show PHP environment
+        shell: bash
+        run: |
+          php -v
+          php-config --version
+          php --ini
+          php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
 
       - name: Verify ZTS PHP
         shell: bash

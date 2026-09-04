@@ -188,7 +188,7 @@ class Constants
             'description' => 'Run the compiled binary after build',
             'noValue' => true,
         ],
-        // 内部开发选项，用于定位特定行的翻译问题，请勿写入用户文档
+        // Internal development option used to locate translation issues on a specific line. Do not write it into user documentation.
         'debug-line' => [
             'longPrefix' => 'debug-line',
             'description' => 'Enable debug line',
@@ -229,6 +229,12 @@ class Constants
         'march' => [
             'longPrefix'  => 'march',
             'description' => 'Target CPU instruction set for code generation (e.g. native, x86-64-v3, armv8-a)',
+            'required'    => false,
+            'defaultValue' => '',
+        ],
+        'compiler' => [
+            'longPrefix'  => 'compiler',
+            'description' => 'C++ compiler command to use (e.g. --compiler=/usr/bin/clang)',
             'required'    => false,
             'defaultValue' => '',
         ],
@@ -302,13 +308,19 @@ class Constants
             'required'    => false,
             'multiple'    => true,
         ],
+        'full-static' => [
+            'longPrefix'  => 'full-static',
+            'description' => 'Enable fully-static linking using the bundled SDK (phpx/full-static/sdk)',
+            'required'    => false,
+            'noValue'     => true,
+        ],
     ];
 
     /**
-     * MSVC 编译器警告屏蔽列表
-     * 这些警告来自 Windows SDK 和 PHP SDK 头文件，都是编译器噪音，不影响功能
+     * MSVC compiler warning suppression list.
+     * These warnings come from Windows SDK and PHP SDK headers and are compiler noise that does not affect functionality.
      *
-     * @var array<string, string> 键为警告编号，值为说明
+     * @var array<string, string> key is the warning number, value is the description
      */
     public const array MSVC_SUPPRESSED_WARNINGS = [
         '4244' => '类型转换可能丢失数据 (int -> smaller type)',

@@ -59,12 +59,21 @@ class ClassDefExtendedTest extends TestCase
     public function testTraitAliasesAndIgnoredCanBeSet(): void
     {
         $class = new ClassDef('User', Modifiers::PUBLIC);
-        $class->traitAliases['Full\\Trait::method'] = ['alias' => 'newName'];
-        $class->traitIgnored['Full\\Trait::other'] = true;
+        $class->traitAliases['full\\trait::method'][] = [
+            'group' => '1:0',
+            'trait' => 'Full\\Trait',
+            'method' => 'method',
+            'newName' => 'newName',
+            'newModifier' => 0,
+        ];
+        $class->traitIgnored['full\\trait::other'][] = [
+            'winnerTrait' => 'Full\\Winner',
+            'loserTrait' => 'Full\\Trait',
+            'method' => 'other',
+        ];
 
-        $this->assertArrayHasKey('Full\\Trait::method', $class->traitAliases);
-        $this->assertArrayHasKey('Full\\Trait::other', $class->traitIgnored);
-        $this->assertTrue($class->traitIgnored['Full\\Trait::other']);
+        $this->assertSame('newName', $class->traitAliases['full\\trait::method'][0]['newName']);
+        $this->assertSame('Full\\Winner', $class->traitIgnored['full\\trait::other'][0]['winnerTrait']);
     }
 
     public function testExtendsCanBeSet(): void

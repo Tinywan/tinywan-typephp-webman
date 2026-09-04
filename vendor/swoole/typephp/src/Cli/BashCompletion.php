@@ -22,6 +22,7 @@ final class BashCompletion
         $directoryOptions = implode('|', array_map(self::bashPattern(...), CompletionMetadata::directoryOptions()));
         $pythonFileOptions = implode('|', array_map(self::bashPattern(...), CompletionMetadata::pythonFileOptions()));
         $outputFileOptions = implode('|', array_map(self::bashPattern(...), CompletionMetadata::outputFileOptions()));
+        $commandOptions = implode('|', array_map(self::bashPattern(...), CompletionMetadata::commandOptions()));
         $equalsCases = '';
         foreach (CompletionMetadata::values() as $option => $values) {
             if (!str_ends_with($option, '=')) {
@@ -43,6 +44,14 @@ final class BashCompletion
                 . '            while IFS= read -r candidate; do' . "\n"
                 . '                COMPREPLY+=("' . $prefix . '=${candidate}")' . "\n"
                 . '            done < <(compgen -d -- "$value")' . "\n"
+                . "            return\n            ;;\n";
+        }
+        foreach (CompletionMetadata::commandEqualsOptions() as $option) {
+            $prefix = substr($option, 0, -1);
+            $equalsCases .= '        ' . self::bashPattern($prefix) . "=*)\n"
+                . '            value="${current#' . $prefix . '=}"' . "\n"
+                . '            COMPREPLY=( $(compgen -c -P ' . self::quote($prefix . '=')
+                . ' -- "$value") )' . "\n"
                 . "            return\n            ;;\n";
         }
 
@@ -113,6 +122,10 @@ _typephp_tpc()
         {$outputFileOptions})
             compopt -o filenames
             _typephp_tpc_complete_paths -f "\$current"
+            return
+            ;;
+        {$commandOptions})
+            _typephp_tpc_complete_paths -c "\$current"
             return
             ;;
     esac

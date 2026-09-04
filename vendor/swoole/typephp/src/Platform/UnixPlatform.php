@@ -3,8 +3,8 @@
 namespace TypePhp\Platform;
 
 /**
- * Unix-like 平台基类（Linux, macOS）
- * 包含 GCC/Clang 通用标志语法的共享实现
+ * Base class for Unix-like platforms (Linux, macOS).
+ * Contains the shared implementation of common GCC/Clang flag syntax.
  */
 abstract class UnixPlatform extends PlatformBase
 {
@@ -99,8 +99,24 @@ abstract class UnixPlatform extends PlatformBase
     public function getPhpDir(): string
     {
         $phpDir = getenv('PHP_HOME');
-        if ($phpDir && is_dir($phpDir)) {
-            return rtrim($phpDir, '\/');
+        if (is_string($phpDir) && $phpDir !== '') {
+            $phpDir = rtrim($phpDir, '\/');
+            if (!is_dir($phpDir)) {
+                throw new \RuntimeException("PHP_HOME is not a directory: {$phpDir}");
+            }
+            return $phpDir;
+        }
+
+        // On Ubuntu/PPA multi-version installations, php8.4 and php-config8.4 coexist,
+        // while the unversioned php-config may be pointed at another version by
+        // update-alternatives. Prefer locating the versioned php-config from the
+        // version suffix of PHP_BINARY to avoid an ABI mismatch.
+        $versionedConfig = $this->findVersionedPhpConfig(dirname(realpath(PHP_BINARY) ?: PHP_BINARY));
+        if ($versionedConfig !== null) {
+            $prefix = $this->getPhpConfigValue($versionedConfig, '--prefix');
+            if ($prefix !== null && is_dir($prefix)) {
+                return rtrim($prefix, '/');
+            }
         }
 
         // Composer executes tpc.php with an already selected PHP binary. Use
@@ -129,7 +145,7 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 获取 RPATH 选项
+     * Get the RPATH options.
      */
     public function getRpathOptions(array $paths): string
     {
@@ -146,7 +162,7 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 获取 PIC 选项
+     * Get the PIC option.
      */
     public function getPicFlag(): string
     {
@@ -154,7 +170,7 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 构建 PHP 包含路径（使用 php-config 动态获取）
+     * Build the PHP include paths (obtained dynamically via php-config).
      */
     public function buildPhpIncludePaths(string $phpDir): array
     {
@@ -194,26 +210,117 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 查找 php-config 可执行文件
+     * Locate the php-config executable.
      */
     protected function findPhpConfig(string $phpDir): ?string
     {
-        $candidate = $phpDir . '/bin/php-config';
-        if (is_executable($candidate)) {
-            return $candidate;
+        $candidates = [];
+        $phpDir = rtrim($phpDir, '/');
+
+        $phpHome = getenv('PHP_HOME');
+        if (is_string($phpHome) && $phpHome !== '') {
+            $phpHome = rtrim($phpHome, '/');
+            $expected = realpath($phpHome) ?: $phpHome;
+            $actual = realpath($phpDir) ?: $phpDir;
+            if ($actual === $expected) {
+                // PHP_HOME is authoritative. Ubuntu/PPA installs several PHP
+                // versions under /usr, so prefer php-config8.x over the
+                // unversioned php-config selected by update-alternatives.
+                $versioned = $this->findVersionedPhpConfig($phpDir . '/bin');
+                if ($versioned !== null) {
+                    $candidates[] = $versioned;
+                }
+                $candidate = $phpDir . '/bin/php-config';
+                if (is_executable($candidate)) {
+                    $candidates[] = $candidate;
+                }
+
+                if ($candidates === []) {
+                    throw new \RuntimeException(
+                        "PHP_HOME does not provide an executable bin/php-config: {$phpDir}"
+                    );
+                }
+
+                foreach (array_unique($candidates) as $config) {
+                    if ($this->phpConfigMatchesCurrentPhp($config)) {
+                        return $config;
+                    }
+                }
+                $this->reportPhpConfigVersionMismatch($candidates[0]);
+            }
         }
 
+        // Prefer the config belonging to the requested installation. If its
+        // unversioned config belongs to another PHP, the version check below
+        // will continue with the config beside the running PHP binary.
+        $candidate = $phpDir . '/bin/php-config';
+        if (is_executable($candidate)) {
+            $candidates[] = $candidate;
+        }
+
+        $versioned = $this->findVersionedPhpConfig(dirname(realpath(PHP_BINARY) ?: PHP_BINARY));
+        if ($versioned !== null) {
+            $candidates[] = $versioned;
+        }
+
+        // PATH is only a fallback, and its prefix must match the selected PHP.
         $whichResult = trim(shell_exec('which php-config 2>/dev/null'));
         if ($whichResult && is_executable($whichResult)) {
             $prefix = $this->getPhpConfigValue($whichResult, '--prefix');
             $expected = realpath($phpDir) ?: rtrim($phpDir, '/');
             $actual = $prefix === null ? null : (realpath($prefix) ?: rtrim($prefix, '/'));
             if ($actual === $expected) {
-                return $whichResult;
+                $candidates[] = $whichResult;
             }
         }
 
+        // Return the first candidate whose major/minor version matches the current PHP.
+        foreach (array_unique($candidates) as $config) {
+            if ($this->phpConfigMatchesCurrentPhp($config)) {
+                return $config;
+            }
+        }
+
+        // Report a clear error when candidates exist but none matches the version.
+        if ($candidates !== []) {
+            $this->reportPhpConfigVersionMismatch($candidates[0]);
+        }
+
         return null;
+    }
+
+    /** Find php-config8.x for the PHP version executing the compiler. */
+    private function findVersionedPhpConfig(string $binDir): ?string
+    {
+        $candidate = rtrim($binDir, '/') . '/php-config' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        return is_executable($candidate) ? $candidate : null;
+    }
+
+    /**
+     * Verify that php-config's major/minor version matches the currently running PHP.
+     */
+    private function phpConfigMatchesCurrentPhp(string $phpConfig): bool
+    {
+        $version = $this->getPhpConfigValue($phpConfig, '--version');
+        if ($version === null) {
+            return false;
+        }
+        if (preg_match('/^(\d+\.\d+)\.\d+/', $version, $match)) {
+            return $match[1] === PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        }
+        return false;
+    }
+
+    private function reportPhpConfigVersionMismatch(string $phpConfig): void
+    {
+        $version = $this->getPhpConfigValue($phpConfig, '--version') ?? 'unknown';
+        throw new \RuntimeException(sprintf(
+            "The `php-config` (%s) reports PHP %s, but the running PHP is %s. " .
+            'Set PHP_HOME to the matching PHP installation.',
+            $phpConfig,
+            $version,
+            PHP_VERSION,
+        ));
     }
 
     protected function getPhpConfigValue(string $phpConfig, string $option): ?string
@@ -240,7 +347,7 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 构建 PHP 库路径
+     * Build the PHP library paths.
      */
     public function buildPhpLibPaths(string $phpDir): array
     {
@@ -249,7 +356,7 @@ abstract class UnixPlatform extends PlatformBase
     }
 
     /**
-     * 检测 PHP 库文件
+     * Detect the PHP library files.
      */
     public function detectPhpLibs(string $phpDir): array
     {

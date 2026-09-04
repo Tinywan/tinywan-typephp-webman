@@ -113,9 +113,11 @@ class InheritanceErrorTest extends TestCase
         $this->exec('must be compatible', 'inheritance_error_byref.php');
     }
 
-    public function testVariadicMismatch()
+    public function testTrailingVariadicMayAbsorbParentParameter()
     {
-        $this->exec('must be compatible', 'inheritance_error_variadic.php');
+        // Zend accepts a trailing child variadic standing in for the remaining
+        // parent parameter positions (zend_do_perform_implementation_check).
+        $this->assertCompiles('inheritance_error_variadic.php');
     }
 
     public function testMethodVisibilityMismatch()

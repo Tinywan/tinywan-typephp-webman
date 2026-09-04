@@ -201,7 +201,7 @@ trait MagicMethodDetector
             }
         }
 
-        // 重建 params 字符串，使 C++ 函数签名使用 auto-fill 后的类型
+        // Rebuild the params string so the C++ function signature uses the auto-filled types
         $list = [];
         foreach ($fnDef->argInfoList as $argInfo) {
             if ($argInfo->variadic) {

@@ -145,27 +145,130 @@ function main(): void
 PHP,
         ];
 
-        yield 'closure reference parameter' => [
+        yield 'Decimal round mode' => [
             'convert',
-            'Closure cannot use reference parameter',
+            'round() with Decimal supports at most 2 arguments',
             <<<'PHP'
 <?php
 function main(): void
 {
-    $callback = static function (&$value): void { // @diagnostic
-    };
+    round(std::decimal('2.5'), 0, PHP_ROUND_HALF_DOWN); // @diagnostic
 }
 PHP,
         ];
 
-        yield 'arrow function reference parameter' => [
+        yield 'round excessive arguments with Decimal' => [
             'convert',
-            'Closure cannot use reference parameter',
+            'round() expects at most 3 argument(s), 4 given',
             <<<'PHP'
 <?php
 function main(): void
 {
-    $callback = static fn (&$value): mixed => $value; // @diagnostic
+    round(std::decimal('2.5'), 0, PHP_ROUND_HALF_DOWN, 4); // @diagnostic
+}
+PHP,
+        ];
+
+        yield 'break level exceeds enclosing depth' => [
+            'convert',
+            "Cannot 'break' 2 levels",
+            <<<'PHP'
+<?php
+function main(): void
+{
+    while (true) {
+        break 2; // @diagnostic
+    }
+}
+PHP,
+        ];
+
+        yield 'continue level exceeds enclosing depth' => [
+            'convert',
+            "Cannot 'continue' 2 levels",
+            <<<'PHP'
+<?php
+function main(): void
+{
+    while (true) {
+        continue 2; // @diagnostic
+    }
+}
+PHP,
+        ];
+
+        yield 'break level must be a positive integer literal' => [
+            'convert',
+            "'break' operator accepts only positive integer literals",
+            <<<'PHP'
+<?php
+function main(): void
+{
+    while (true) {
+        break 0; // @diagnostic
+    }
+}
+PHP,
+        ];
+
+        yield 'continue level must be a positive integer literal' => [
+            'convert',
+            "'continue' operator accepts only positive integer literals",
+            <<<'PHP'
+<?php
+function main(): void
+{
+    while (true) {
+        continue 1 + 1; // @diagnostic
+    }
+}
+PHP,
+        ];
+
+        yield 'duplicate implicit class import' => [
+            'prepare',
+            'Cannot use Webman\\Route\\Route as Route because the name is already in use',
+            <<<'PHP'
+<?php
+namespace DuplicateImport;
+
+use support\annotation\route\Route;
+use Webman\Route\Route; // @diagnostic
+
+function main(): void
+{
+}
+PHP,
+        ];
+
+        yield 'duplicate class import alias is case insensitive' => [
+            'prepare',
+            'Cannot use Second\\Package\\Route as route because the name is already in use',
+            <<<'PHP'
+<?php
+namespace DuplicateImport;
+
+use First\Package\Route as Route;
+use Second\Package\Route as route; // @diagnostic
+
+function main(): void
+{
+}
+PHP,
+        ];
+
+        yield 'duplicate function import alias is case insensitive' => [
+            'prepare',
+            'Cannot use function Second\\Package\\dispatch as handler because the name is already in use',
+            <<<'PHP'
+<?php
+namespace DuplicateImport;
+
+use function First\Package\dispatch as Handler;
+use function Second\Package\dispatch as handler; // @diagnostic
+
+function main(): void
+{
 }
 PHP,
         ];
@@ -212,14 +315,54 @@ function main(): void
 PHP,
         ];
 
-        yield 'reference variadic parameter' => [
-            'prepare',
-            'Variadic parameters cannot be passed by reference',
+        yield 'dynamic Closure reference variadic parameter' => [
+            'convert',
+            'By-reference variadic parameters are not supported on dynamic Closures',
             <<<'PHP'
 <?php
-function collect(&...$values): array // @diagnostic
+function main(): void
 {
-    return $values;
+    $callback = static function (&...$values): void { // @diagnostic
+    };
+}
+PHP,
+        ];
+
+        yield 'literal passed to reference variadic parameter' => [
+            'convert',
+            'The left value of assignment operation can only be variable, array item, object property, class static property',
+            <<<'PHP'
+<?php
+function collect(&...$values): void
+{
+}
+
+function main(): void
+{
+    collect(42); // @diagnostic
+}
+PHP,
+        ];
+
+        yield 'reference variadic override must preserve by-reference contract' => [
+            'convert',
+            'Declaration of `BrokenIncrementer::increment()` must be compatible with `IncrementContract::increment()`',
+            <<<'PHP'
+<?php
+interface IncrementContract
+{
+    public function increment(int &...$values): void;
+}
+
+class BrokenIncrementer implements IncrementContract // @diagnostic
+{
+    public function increment(int ...$values): void
+    {
+    }
+}
+
+function main(): void
+{
 }
 PHP,
         ];

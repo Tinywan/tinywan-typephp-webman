@@ -18,12 +18,12 @@ class Extractor
     }
 
     /**
-     * 提取函数定义.
+     * Extract function definitions.
      *
-     * @param string $filename 文件路径
-     * @param array $prefixes 函数名前缀列表
+     * @param string $filename File path
+     * @param array $prefixes List of function-name prefixes
      *
-     * @return array 函数列表
+     * @return array List of functions
      */
     public function extractFunctions(string $filename, array $prefixes = ['php_']): array
     {
@@ -34,10 +34,10 @@ class Extractor
         $this->info("分析文件: {$filename}");
         $this->info('函数前缀: ' . implode(', ', $prefixes));
 
-        // 运行 ctags
+        // Run ctags.
         $tags = $this->runCtags($filename);
 
-        // 过滤和解析函数
+        // Filter and parse functions.
         $functions = [];
         foreach ($tags as $tag) {
             if ($tag['kind'] !== 'function') {
@@ -46,7 +46,7 @@ class Extractor
 
             $funcName = $tag['name'] ?? '';
 
-            // 检查前缀
+            // Check the prefix.
             $matched = false;
             foreach ($prefixes as $prefix) {
                 if (str_starts_with($funcName, $prefix)) {
@@ -59,7 +59,7 @@ class Extractor
                 continue;
             }
 
-            // 解析函数详细信息
+            // Parse the detailed function information.
             $funcInfo = $this->parseFunction($filename, $tag);
             if ($funcInfo) {
                 $functions[] = $funcInfo;
@@ -72,7 +72,7 @@ class Extractor
     }
 
     /**
-     * 批量提取多个文件.
+     * Extract functions from multiple files in bulk.
      */
     public function extractFromFiles(array $files, array $prefixes = ['php_']): array
     {
@@ -91,7 +91,7 @@ class Extractor
     }
 
     /**
-     * 检查 ctags 是否可用.
+     * Check whether ctags is available.
      */
     private function checkCtags(): void
     {
@@ -107,7 +107,7 @@ class Extractor
     }
 
     /**
-     * 运行 ctags 命令.
+     * Run the ctags command.
      */
     private function runCtags(string $filename): array
     {
@@ -123,7 +123,7 @@ class Extractor
             throw new \RuntimeException('ctags 执行失败');
         }
 
-        // 解析 JSON 输出
+        // Parse the JSON output.
         $tags  = [];
         $lines = explode("\n", trim($output));
 
@@ -144,7 +144,7 @@ class Extractor
     }
 
     /**
-     * 解析单个函数的详细信息.
+     * Parse the detailed information of a single function.
      */
     private function parseFunction(string $filename, array $tag): ?array
     {
@@ -155,17 +155,17 @@ class Extractor
             return null;
         }
 
-        // 提取完整的函数签名
+        // Extract the complete function signature.
         $signature = $this->extractSignature($filename, $lineNum, $funcName);
 
         if (empty($signature)) {
             return null;
         }
 
-        // 解析返回类型
+        // Parse the return type.
         $returnType = $this->parseReturnType($signature, $funcName);
 
-        // 解析参数
+        // Parse the parameters.
         $parameters = $this->parseParameters($signature, $funcName);
 
         return [
@@ -183,7 +183,7 @@ class Extractor
     }
 
     /**
-     * 从源文件中提取完整的函数签名.
+     * Extract the complete function signature from the source file.
      */
     private function extractSignature(string $filename, int $lineNum, string $funcName): string
     {
@@ -193,7 +193,7 @@ class Extractor
             return '';
         }
 
-        // 从函数声明行开始收集，直到遇到 { 或 ;
+        // Collect lines starting from the function declaration until a { or ; is reached.
         $signatureLines = [];
         $maxLines       = min($lineNum + 20, count($lines));
 
@@ -201,37 +201,37 @@ class Extractor
             $line             = $lines[$i];
             $signatureLines[] = $line;
 
-            // 检查是否到达函数体或声明结束
+            // Check whether the function body or the end of the declaration has been reached.
             if (strpos($line, '{') !== false || strpos($line, ';') !== false) {
                 break;
             }
         }
 
-        // 合并并清理
+        // Join and clean up.
         $signature = implode(' ', $signatureLines);
 
-        // 移除 { 或 ; 之后的内容
+        // Remove everything after the { or ;.
         $signature = preg_replace('/[{;].*$/', '', $signature);
 
-        // 合并多个空白字符
+        // Collapse multiple whitespace characters.
         $signature = preg_replace('/\s+/', ' ', $signature);
 
-        // 清理首尾空白
+        // Trim leading and trailing whitespace.
         return trim($signature);
     }
 
     /**
-     * 解析返回类型.
+     * Parse the return type.
      */
     private function parseReturnType(string $signature, string $funcName): string
     {
-        // 匹配: <返回类型> <函数名>(
+        // Match: <return type> <function name>(
         $pattern = '/^(.+?)\s+' . preg_quote($funcName, '/') . '\s*\(/';
 
         if (preg_match($pattern, $signature, $matches)) {
             $returnType = trim($matches[1]);
 
-            // 移除可能的修饰符
+            // Remove possible modifiers.
             $returnType = preg_replace('/\b(static|inline|extern|virtual|explicit)\b/', '', $returnType);
             $returnType = preg_replace('/\s+/', ' ', $returnType);
             $returnType = trim($returnType);
@@ -243,11 +243,11 @@ class Extractor
     }
 
     /**
-     * 解析参数列表.
+     * Parse the parameter list.
      */
     private function parseParameters(string $signature, string $funcName): array
     {
-        // 提取括号内的参数
+        // Extract the parameters inside the parentheses.
         $pattern = '/' . preg_quote($funcName, '/') . '\s*\((.*?)\)/s';
 
         if (!preg_match($pattern, $signature, $matches)) {
@@ -256,12 +256,12 @@ class Extractor
 
         $paramsStr = trim($matches[1]);
 
-        // 空参数或 void
+        // Empty parameters or void.
         if (empty($paramsStr) || $paramsStr === 'void') {
             return [];
         }
 
-        // 分割参数（处理嵌套的模板和括号）
+        // Split the parameters (handling nested templates and parentheses).
         $params = $this->splitParameters($paramsStr);
 
         $parameters = [];
@@ -282,7 +282,7 @@ class Extractor
     }
 
     /**
-     * 智能分割参数（处理嵌套的模板和括号）.
+     * Intelligently split parameters (handling nested templates and parentheses).
      */
     private function splitParameters(string $paramsStr): array
     {
@@ -316,17 +316,17 @@ class Extractor
     }
 
     /**
-     * 解析单个参数.
+     * Parse a single parameter.
      */
     private function parseParameter(string $param): ?array
     {
         $param = trim($param);
 
-        // 移除默认值
+        // Remove the default value.
         $param = preg_replace('/\s*=\s*.*$/', '', $param);
 
-        // 尝试匹配: <类型> <名称>
-        // 支持复杂类型如: const char*, std::string&, int**, etc.
+        // Try to match: <type> <name>.
+        // Supports complex types such as: const char*, std::string&, int**, etc.
         if (preg_match('/^(.+?)\s+(\w+)\s*$/', $param, $matches)) {
             return [
                 'type' => trim($matches[1]),
@@ -334,7 +334,7 @@ class Extractor
             ];
         }
 
-        // 只有类型，没有名称
+        // Only a type, no name.
         return [
             'type' => $param,
             'name' => '',
@@ -342,7 +342,7 @@ class Extractor
     }
 
     /**
-     * 输出信息.
+     * Output an informational message.
      */
     private function info(string $message): void
     {
@@ -350,7 +350,7 @@ class Extractor
     }
 
     /**
-     * 输出警告.
+     * Output a warning.
      */
     private function warn(string $message): void
     {
@@ -358,7 +358,7 @@ class Extractor
     }
 
     /**
-     * 输出错误并退出.
+     * Output an error and exit.
      */
     private function error(string $message): void
     {

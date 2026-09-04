@@ -5,7 +5,7 @@ namespace TypePhp\Backend;
 use TypePhp\Platform\Windows;
 
 /**
- * MSVC 编译器后端实现
+ * MSVC compiler backend implementation.
  */
 class Msvc extends CompilerBackend
 {
@@ -131,7 +131,7 @@ class Msvc extends CompilerBackend
     }
 
     /**
-     * 构建 C 文件的编译命令（不包含 C++ 特定选项）
+     * Build the compile command for C files (excludes C++-specific options).
      */
     public function buildCCompileCommand(string $sourceFile, string $outputFile, array $options = []): string
     {
@@ -145,20 +145,20 @@ class Msvc extends CompilerBackend
             $cmd .= ' ' . $this->formatIncludePaths($options['include_paths']);
         }
 
-        // 平台宏定义
+        // Platform macro definitions.
         $cmd .= $this->buildCommonCompileFlags($options, false);
 
-        // 注意：C 文件不使用 /EHsc, /std:c++17, /MD 等 C++ 特定选项
+        // Note: C files do not use C++-specific options such as /EHsc, /std:c++17, /MD.
 
         return $cmd;
     }
 
     /**
-     * 构建原生源文件的编译命令
+     * Build the compile command for native source files.
      *
-     * MSVC 仅支持 C 文件（/TC），汇编和 ObjC 文件不受支持
+     * MSVC only supports C files (/TC); assembly and ObjC files are not supported.
      *
-     * @param string $language 语言标识
+     * @param string $language Language identifier.
      */
     public function buildNativeCompileCommand(string $sourceFile, string $outputFile, array $options = [], string $language = ''): string
     {
@@ -214,42 +214,42 @@ class Msvc extends CompilerBackend
     }
 
     /**
-     * 构建编译选项（实现抽象方法）
+     * Build compile options (implements the abstract method).
      */
     public function buildCompileOptions(array $config = []): string
     {
         return $this->buildCommonCompileFlags($config, true);
     }
-    
+
     /**
-     * 构建链接选项（实现抽象方法）
+     * Build link options (implements the abstract method).
      */
     public function buildLinkOptions(array $config = []): string
     {
         $cmd = '';
-    
-        // 调试
+
+        // Debug.
         if (!empty($config['debug'])) {
             $cmd .= ' /DEBUG';
         }
 
-        // Windows 子系统
+        // Windows subsystem.
         if (!empty($config['no_console'])) {
             $cmd .= ' ' . $this->platform->getSubsystemOptions(true);
         }
 
-        // CRT 配置
+        // CRT configuration.
         $cmd .= ' ' . $this->platform->getCrtConfig();
 
-        // 扩展模块选项
+        // Extension module options.
         if (!empty($config['build_mode']) && ($config['build_mode'] === 'ext' || $config['build_mode'] === 'lib')) {
             $cmd .= ' /DLL';
         }
 
-        // nologo
+        // nologo.
         $cmd .= ' /nologo';
 
-        // LTO（链接时代码生成）
+        // LTO (Link Time Code Generation).
         if (!empty($config['lto'])) {
             $cmd .= ' /LTCG';
         }
@@ -258,20 +258,20 @@ class Msvc extends CompilerBackend
     }
 
     /**
-     * 编译 Windows 资源文件 (.rc) 为目标文件 (.res)
+     * Compile a Windows resource file (.rc) into an object file (.res).
      *
-     * 使用 rc.exe（MSVC 资源编译器）将 .rc 文件编译为 .res 文件
-     * .res 文件可以直接传给 link.exe 作为输入
+     * Uses rc.exe (the MSVC resource compiler) to compile a .rc file into a .res file.
+     * The .res file can be passed directly to link.exe as input.
      *
-     * @param string $rcFile  资源文件路径 (.rc)
-     * @param string $resFile 输出资源文件路径 (.res)
-     * @return string 编译命令
+     * @param string $rcFile  Resource file path (.rc).
+     * @param string $resFile Output resource file path (.res).
+     * @return string The compile command.
      */
     public function compileResourceFile(string $rcFile, string $resFile): string
     {
-        // rc.exe 是 MSVC 自带的资源编译器
-        // /nologo: 不显示版权信息
-        // /fo: 指定输出文件
+        // rc.exe is the resource compiler bundled with MSVC.
+        // /nologo: suppress the copyright banner.
+        // /fo: specify the output file.
         $cmd = 'rc.exe /nologo';
         $cmd .= ' /fo ' . escapeshellarg($resFile);
         $cmd .= ' ' . escapeshellarg($rcFile);

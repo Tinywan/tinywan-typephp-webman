@@ -3,98 +3,98 @@
 namespace TypePhp\Platform;
 
 /**
- * 平台抽象基类
- * 定义所有平台必须实现的接口
+ * Abstract platform base class.
+ * Defines the interface every platform must implement.
  */
 abstract class PlatformBase
 {
     /**
-     * 获取平台名称
+     * Get the platform name.
      */
     abstract public function getName(): string;
 
     /**
-     * 判断是否为当前平台
+     * Determine whether this is the current platform.
      */
     abstract public function isCurrent(): bool;
 
     /**
-     * 获取编译器包含路径参数
+     * Get the compiler include-path flags.
      */
     abstract public function getIncludeFlags(array $includePaths): string;
 
     /**
-     * 获取链接器库路径参数
+     * Get the linker library-path flags.
      */
     abstract public function getLibraryPathFlags(array $libraryPaths): string;
 
     /**
-     * 获取链接库参数
+     * Get the link-library flags.
      */
     abstract public function getLibraryFlags(array $libraries): string;
 
     /**
-     * 获取文件扩展名
+     * Get the object file extension.
      */
     abstract public function getObjectExtension(): string;
 
     /**
-     * 获取可执行文件扩展名
+     * Get the executable file extension.
      */
     abstract public function getExecutableExtension(): string;
 
     /**
-     * 获取动态库扩展名
+     * Get the shared library extension.
      */
     abstract public function getSharedLibraryExtension(): string;
 
     /**
-     * 获取生成共享库所需的链接器选项
+     * Get the linker options required to produce a shared library.
      */
     abstract public function getSharedLinkFlag(): string;
 
     /**
-     * 获取无控制台程序的子系统选项；不适用的平台返回空字符串
+     * Get the subsystem options for a console-less program; platforms where this does not apply return an empty string.
      */
     abstract public function getSubsystemOptions(bool $noConsole): string;
 
     /**
-     * 获取平台 C 运行库链接配置；不适用的平台返回空字符串
+     * Get the platform C runtime library link configuration; platforms where this does not apply return an empty string.
      */
     abstract public function getCrtConfig(): string;
 
     /**
-     * 获取路径分隔符
+     * Get the path separator.
      */
     abstract public function getPathSeparator(): string;
 
     /**
-     * 获取该平台默认使用的 C++ 编译器命令
+     * Get the default C++ compiler command for this platform.
      */
     abstract public function getDefaultCompiler(): string;
 
     /**
-     * 获取 PHP 安装目录
+     * Get the PHP installation directory.
      */
     abstract public function getPhpDir(): string;
 
     /**
-     * 构建 PHP 包含路径
+     * Build the PHP include paths.
      */
     abstract public function buildPhpIncludePaths(string $phpDir): array;
 
     /**
-     * 构建 PHP 库路径
+     * Build the PHP library paths.
      */
     abstract public function buildPhpLibPaths(string $phpDir): array;
 
     /**
-     * 检测 PHP 库文件
+     * Detect the PHP library files.
      */
     abstract public function detectPhpLibs(string $phpDir): array;
 
     /**
-     * 获取指定构建模式的目标文件扩展名
+     * Get the target file extension for the given build mode.
      */
     public function getTargetExtension(string $buildMode): string
     {
@@ -104,7 +104,7 @@ abstract class PlatformBase
     }
 
     /**
-     * 获取构建前的运行库检查告警
+     * Get the runtime library check warnings issued before building.
      */
     public function getBuildLibraryWarnings(
         string $phpDir,
@@ -141,7 +141,7 @@ abstract class PlatformBase
     }
 
     /**
-     * 当前平台是否适合使用 pcntl_fork 并行编译
+     * Whether this platform is suitable for parallel compilation using pcntl_fork.
      */
     public function supportsPcntlParallelCompile(): bool
     {
@@ -154,7 +154,7 @@ abstract class PlatformBase
     }
 
     /**
-     * 规范化路径
+     * Normalize a path.
      */
     public function normalizePath(string $path): string
     {
@@ -162,7 +162,7 @@ abstract class PlatformBase
     }
 
     /**
-     * 组合路径
+     * Join path components.
      */
     public function joinPath(string ...$parts): string
     {
@@ -196,15 +196,15 @@ abstract class PlatformBase
     }
 
     /**
-     * 获取默认的 RPATH 路径列表（仅 macOS 需要）
-     * 
-     * @param string|null $phpxDir phpx 目录路径
-     * @param string|null $phpDir PHP 目录路径
-     * @return array RPATH 路径数组
+     * Get the default RPATH path list (only needed on macOS).
+     *
+     * @param string|null $phpxDir phpx directory path
+     * @param string|null $phpDir PHP directory path
+     * @return array RPATH path array
      */
     public function getDefaultRpaths(?string $phpxDir = null, ?string $phpDir = null): array
     {
-        // 默认返回空数组，由子类重写
+        // Return an empty array by default; subclasses may override.
         return [];
     }
 }

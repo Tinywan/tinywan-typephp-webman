@@ -63,11 +63,8 @@
 
 #if defined(_MSC_VER)
   #define ALWAYS_INLINE __forceinline
-  /* These public predicates are called by libmpdec++ from another TU. */
-  #define MPD_PUBLIC_INLINE
 #elif defined (__IBMC__) || defined(__COMPCERT__) || defined(LEGACY_COMPILER)
   #define ALWAYS_INLINE
-  #define MPD_PUBLIC_INLINE ALWAYS_INLINE
   #undef inline
   #define inline
 #else
@@ -76,7 +73,6 @@
   #else
     #define ALWAYS_INLINE inline
   #endif
-  #define MPD_PUBLIC_INLINE ALWAYS_INLINE
 #endif
 
 
@@ -405,42 +401,42 @@ mpd_radix(void)
 }
 
 /* Dynamic decimal */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isdynamic(const mpd_t *dec)
 {
     return !(dec->flags & MPD_STATIC);
 }
 
 /* Static decimal */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isstatic(const mpd_t *dec)
 {
     return dec->flags & MPD_STATIC;
 }
 
 /* Data of decimal is dynamic */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isdynamic_data(const mpd_t *dec)
 {
     return !(dec->flags & MPD_DATAFLAGS);
 }
 
 /* Data of decimal is static */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isstatic_data(const mpd_t *dec)
 {
     return dec->flags & MPD_STATIC_DATA;
 }
 
 /* Data of decimal is shared */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isshared_data(const mpd_t *dec)
 {
     return dec->flags & MPD_SHARED_DATA;
 }
 
 /* Data of decimal is const */
-MPD_PUBLIC_INLINE int
+ALWAYS_INLINE int
 mpd_isconst_data(const mpd_t *dec)
 {
     return dec->flags & MPD_CONST_DATA;

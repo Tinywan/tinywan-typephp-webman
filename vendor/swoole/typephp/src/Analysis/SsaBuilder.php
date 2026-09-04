@@ -42,7 +42,7 @@ class SsaVar
     public int $flags = 0;
 
     /** The AST node where this variable was defined (Assign, Param, etc.) */
-    public ?NodeAbstract $definition = null;
+    public ?Node $definition = null;
 
     /** Type constraint from instanceof/type-check conditions (e-SSA pi node) */
     public ?PiConstraint $pi = null;
@@ -184,7 +184,7 @@ class SsaBuilder
     /** @var array Parameter byRef flags: paramName => bool */
     private array $paramByRef = [];
 
-    /** @var array<string, string> goto label → block ID */
+    /** @var array<string, int> goto label → block ID */
     private array $labelBlocks = [];
 
     /** @var int The entry block ID */
@@ -348,13 +348,10 @@ class SsaBuilder
      */
     private function splitIntoBlocks(array $stmts): array
     {
-        $blocks = [];
         $currentBlock = $this->newBlock();
-        if (empty($blocks)) {
-            $currentBlock->id = 0;
-            $this->entryBlockId = 0;
-        }
-        $blocks[] = $currentBlock;
+        $currentBlock->id = 0;
+        $this->entryBlockId = 0;
+        $blocks = [$currentBlock];
 
         $this->splitStmtList($stmts, $blocks, $currentBlock);
 

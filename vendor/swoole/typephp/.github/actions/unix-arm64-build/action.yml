@@ -37,6 +37,14 @@ runs:
         phpts: ts
         update: true
 
+    - name: Show PHP environment
+      shell: bash
+      run: |
+        php -v
+        php-config --version
+        php --ini
+        php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
+
     - name: Install Linux build dependencies
       if: inputs.os == 'linux'
       shell: bash
@@ -72,7 +80,6 @@ runs:
         else
           echo "DYLD_LIBRARY_PATH=${PHPX_HOME}/lib:${php_home}/lib" >> "${GITHUB_ENV}"
         fi
-        php -v
         php-config --configure-options
 
     - name: Patch php_hash.h C++ compatibility
@@ -102,6 +109,50 @@ runs:
         file ./tpc
         file ./tpc | grep -Eiq 'arm64|aarch64|ARM aarch64'
         ./tpc --version
+
+    - name: Diagnose tpc crash
+      if: failure() && inputs.os == 'linux'
+      shell: bash
+      run: |
+        if [[ ! -x ./tpc ]]; then
+          exit 0
+        fi
+
+        debug_dir=".github/ci-debug/${{ inputs.os }}-arm64-php-${{ inputs.php-version }}"
+        mkdir -p "${debug_dir}"
+
+        if ! command -v gdb >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install --yes gdb
+        fi
+
+        {
+          uname -a
+          g++ --version
+          php -v
+          php-config --configure-options
+          php -m
+          file ./tpc
+          ldd ./tpc
+          sha256sum ./tpc "${PHPX_HOME}/lib/libphpx.so" "${PHP_HOME}/lib/libphp.so"
+          readelf -n ./tpc
+          readelf -d ./tpc
+        } > "${debug_dir}/environment.txt" 2>&1
+
+        gdb -q -batch \
+          -ex 'set pagination off' \
+          -ex 'set print thread-events off' \
+          -ex run \
+          -ex 'info registers' \
+          -ex 'info proc mappings' \
+          -ex 'info sharedlibrary' \
+          -ex 'x/32i $pc-32' \
+          -ex 'thread apply all bt full' \
+          --args ./tpc --version \
+          > "${debug_dir}/gdb.txt" 2>&1 || true
+
+        cp -L "${PHPX_HOME}/lib/libphpx.so" "${debug_dir}/libphpx.so"
+        cp -L "${PHP_HOME}/lib/libphp.so" "${debug_dir}/libphp.so"
 
     - name: Run platform smoke test
       shell: bash
@@ -150,6 +201,11 @@ runs:
         retention-days: 7
         path: |
           tpc
+          tpc.rsp
+          build/**/*.cc
+          build/**/*.h
+          build/**/*.rsp
+          .github/ci-debug/**
           .github/smoke/${{ inputs.smoke-directory }}/${{ inputs.smoke-binary }}
           .github/smoke/${{ inputs.smoke-directory }}/build/**/*.cc
           .github/smoke/${{ inputs.smoke-directory }}/build/**/*.h

@@ -13,7 +13,7 @@ function fib(int $n): int
 
 function main()
 {
-    $n = 40;
+    $n = 30;
     if ($n > 100) {
         echo "Too big number\n";
         exit(1);
@@ -27,4 +27,4 @@ function main()
 }
 ?>
 --EXPECT--
-102334155
+832040

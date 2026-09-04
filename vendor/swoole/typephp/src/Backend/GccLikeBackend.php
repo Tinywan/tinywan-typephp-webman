@@ -6,9 +6,9 @@ use TypePhp\Platform\PlatformBase;
 use TypePhp\Platform\Windows;
 
 /**
- * GCC/Clang 共享后端基类
- * 包含 Unix-like 编译器（GCC、Clang）的通用命令行构建逻辑。
- * 子类只需覆盖平台差异的钩子方法。
+ * Shared backend base class for GCC/Clang.
+ * Contains the common command-line construction logic for Unix-like compilers (GCC, Clang).
+ * Subclasses only need to override the platform-specific hook methods.
  */
 abstract class GccLikeBackend extends CompilerBackend
 {
@@ -37,21 +37,21 @@ abstract class GccLikeBackend extends CompilerBackend
         return $headerFile . '.gch';
     }
 
-    // ──── 钩子方法（子类覆盖点） ────
+    // ──── Hook methods (subclass override points) ────
 
-    /** 编译器特定的前缀标志（如 MSVC 兼容模式） */
+    /** Compiler-specific prefix flags (e.g. MSVC compatibility mode). */
     protected function getCompilerPrefixFlags(): string
     {
         return '';
     }
 
-    /** 链接器输出标志（-o vs /OUT:） */
+    /** Linker output flag (-o vs /OUT:). */
     protected function getLinkerOutputFlag(): string
     {
         return '-o';
     }
 
-    /** 格式化 sanitizer 标志 */
+    /** Format the sanitizer flag. */
     protected function formatSanitizerFlag(string $sanitizer): string
     {
         return match ($sanitizer) {
@@ -61,7 +61,7 @@ abstract class GccLikeBackend extends CompilerBackend
         };
     }
 
-    /** 获取 PIC 标志 */
+    /** Get the PIC flag. */
     protected function getPICFlag(array $config): string
     {
         if ((!empty($config['build_mode']) && ($config['build_mode'] === 'ext' || $config['build_mode'] === 'lib')) || !empty($config['pic'])) {
@@ -70,7 +70,7 @@ abstract class GccLikeBackend extends CompilerBackend
         return '';
     }
 
-    /** 构建 GCC/Clang 共享编译选项，C 和 C++ 编译路径都复用这里 */
+    /** Build the shared GCC/Clang compile flags; reused by both the C and C++ compilation paths. */
     protected function buildSharedCompileFlags(array $config, bool $includeCppStd = false): string
     {
         $cmd = '';
@@ -146,7 +146,7 @@ abstract class GccLikeBackend extends CompilerBackend
         return ' -include ' . escapeshellarg($precompiledHeader['header']);
     }
 
-    /** 获取平台特定的链接选项 */
+    /** Get platform-specific link options. */
     protected function getPlatformLinkFlags(array $config): string
     {
         $flags = '';
@@ -181,7 +181,7 @@ abstract class GccLikeBackend extends CompilerBackend
         return $flags;
     }
 
-    // ──── 抽象方法实现 ────
+    // ──── Abstract method implementations ────
 
     public function buildCompileCommand(string $sourceFile, string $outputFile, array $options = []): string
     {

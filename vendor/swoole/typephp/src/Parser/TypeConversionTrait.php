@@ -269,6 +269,16 @@ trait TypeConversionTrait
         if ($expr instanceof Node\Expr\ArrayDimFetch) {
             return $this->parseArrayDimFetchUpdate($expr) . '.toReference()';
         }
+        if ($expr instanceof Node\Expr\PropertyFetch) {
+            // A normal property read may return a temporary zval. Turning that
+            // temporary into a reference loses the typed-property source and
+            // can later detach the wrong source during destruction. Bind the
+            // reference to the actual property slot instead.
+            return $this->emitDynamicPropertyFetchRef($expr, $expr);
+        }
+        if ($expr instanceof Node\Expr\StaticPropertyFetch) {
+            return $this->emitStaticPropertyFetchRef($expr, $expr);
+        }
         $var = $this->parseIdentifier($expr);
         if ($this->isVarExpr($expr) and $this->isNativeTypeVar($var)) {
             $this->context->localVars[$var] = Type::VAR;

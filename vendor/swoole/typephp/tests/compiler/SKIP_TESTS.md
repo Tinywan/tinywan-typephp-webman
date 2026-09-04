@@ -31,17 +31,12 @@
 - **Skip 信息**: `skip: not supported`
 - **详细说明**: 复杂的动态属性访问链不支持
 
-### 5. ref-closure-param.phpt
-- **原因**: 引用参数闭包不支持
-- **Skip 信息**: `skip`
-- **详细说明**: 闭包函数中使用引用参数的场景不支持
-
-### 6. innerHTML 相关测试
+### 5. innerHTML 相关测试
 - **原因**: innerHTML DOM 操作不支持
 - **Skip 信息**: `skip innerHTML and DOM manipulation not supported in AOT`
 - **详细说明**: JavaScript 风格的 DOM 操作不是 PHP 原生功能
 
-### 7. 游离代码测试
+### 6. 游离代码测试
 - **原因**: 全局可执行表达式不支持
 - **Skip 信息**: `skip Free-floating code not allowed, must be in function/method`
 - **详细说明**: 所有可执行表达式必须在函数或类的方法中

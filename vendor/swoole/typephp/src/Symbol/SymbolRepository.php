@@ -9,12 +9,13 @@ use TypePhp\Entity\InterfaceDef;
 final class SymbolRepository
 {
     /**
-     * 存储所有函数、类方法的定义，key 是 native name，命名空间需要转为 `_`，并且必须为小写
+     * Stores the definitions of all functions and class methods. The key is the native name:
+     * the namespace must be converted to `_` and the result must be lowercase.
      * @var array<string, FunctionDef>
      */
     private array $functions = [];
     /**
-     * key 类名，包含命名空间
+     * Keyed by class name, including the namespace.
      * @var array<string, ClassDef>
      */
     private array $classes = [];

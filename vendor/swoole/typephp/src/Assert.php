@@ -759,7 +759,7 @@ class Assert
         $valid = isset($value[0]);
 
         if ($valid) {
-            $locale = setlocale(LC_CTYPE, 0);
+            $locale = setlocale(LC_CTYPE, '0');
             setlocale(LC_CTYPE, 'C');
             $valid = ctype_alpha($value[0]);
             setlocale(LC_CTYPE, $locale);
@@ -816,7 +816,7 @@ class Assert
 
     public static function alpha($value, $message = ''): bool
     {
-        $locale = setlocale(LC_CTYPE, 0);
+        $locale = setlocale(LC_CTYPE, '0');
         setlocale(LC_CTYPE, 'C');
         $valid = !ctype_alpha($value);
         setlocale(LC_CTYPE, $locale);
@@ -833,7 +833,7 @@ class Assert
 
     public static function digits($value, $message = ''): bool
     {
-        $locale = setlocale(LC_CTYPE, 0);
+        $locale = setlocale(LC_CTYPE, '0');
         setlocale(LC_CTYPE, 'C');
         $valid = !ctype_digit($value);
         setlocale(LC_CTYPE, $locale);
@@ -850,7 +850,7 @@ class Assert
 
     public static function alnum($value, $message = ''): bool
     {
-        $locale = setlocale(LC_CTYPE, 0);
+        $locale = setlocale(LC_CTYPE, '0');
         setlocale(LC_CTYPE, 'C');
         $valid = !ctype_alnum($value);
         setlocale(LC_CTYPE, $locale);
@@ -867,7 +867,7 @@ class Assert
 
     public static function lower($value, $message = ''): bool
     {
-        $locale = setlocale(LC_CTYPE, 0);
+        $locale = setlocale(LC_CTYPE, '0');
         setlocale(LC_CTYPE, 'C');
         $valid = !ctype_lower($value);
         setlocale(LC_CTYPE, $locale);
@@ -884,7 +884,7 @@ class Assert
 
     public static function upper($value, $message = ''): bool
     {
-        $locale = setlocale(LC_CTYPE, 0);
+        $locale = setlocale(LC_CTYPE, '0');
         setlocale(LC_CTYPE, 'C');
         $valid = !ctype_upper($value);
         setlocale(LC_CTYPE, $locale);

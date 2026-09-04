@@ -378,6 +378,8 @@ class PreprocessorTest extends TestCase
         $this->assertArrayHasKey('aliasmodifieruser', $classes);
         $aliases = $classes['aliasmodifieruser']->traitAliases;
         $this->assertArrayHasKey('aliasmodifiertrait::hello', $aliases);
+        $this->assertNull($aliases['aliasmodifiertrait::hello'][0]['trait']);
+        $this->assertSame('hello', $aliases['aliasmodifiertrait::hello'][0]['method']);
         $this->assertSame('hello', $aliases['aliasmodifiertrait::hello'][0]['newName']);
         $this->assertSame(Modifiers::PRIVATE, $aliases['aliasmodifiertrait::hello'][0]['newModifier']);
     }

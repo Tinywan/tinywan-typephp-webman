@@ -2,6 +2,11 @@
 
 class ClassTest extends \BaseTest
 {
+    public function testImportAliasesUseIndependentPhpSymbolDomains(): void
+    {
+        $this->compile('namespace/import-alias-domains.php');
+    }
+
     public function testZendToArrayDeclarationCannotAcceptParameters(): void
     {
         $this->expectException(\TypePhp\Exception\TestError::class);
@@ -725,9 +730,12 @@ class ClassTest extends \BaseTest
         $this->exec('abstract class `AbstractBase` cannot be instantiated', 'abstract-class-new.php');
     }
 
-    public function testOverridePrivateMethod()
+    public function testPrivateMethodMayBeRedeclared()
     {
-        $this->exec('Cannot override private method `Base::doWork()`', 'override-private-method.php');
+        // Private methods are not inherited: Zend lets a child redeclare one
+        // with any signature. Private calls bind to the declaring class's
+        // copy, so each class keeps its own implementation.
+        $this->compile('override-private-method.php');
     }
 
     public function testPromotedAsymmetricPropertyRequiresType(): void
@@ -771,12 +779,11 @@ class ClassTest extends \BaseTest
         $this->exec('Cannot access private method `BaseSecret::secret()`', 'trait-parent-method-private.php');
     }
 
-    public function testComposedTraitMethodCannotShadowPrivateParentMethod()
+    public function testComposedTraitMethodMayShadowPrivateParentMethod()
     {
-        $this->exec(
-            'Cannot override private method `PrivateMethodParent::execute()`',
-            'trait-method-shadows-private.php'
-        );
+        // A trait-composed method redeclaring a parent's PRIVATE method is
+        // valid in Zend, like any other private redeclaration.
+        $this->compile('trait-method-shadows-private.php');
     }
 
     public function testSelfCanBePartOfUnionType()

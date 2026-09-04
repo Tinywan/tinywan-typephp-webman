@@ -37,11 +37,6 @@ DebugInfo debug_info{
     0,
 };
 
-// Resolved user functions live for one request. In ZTS each worker owns an
-// independent request, so sharing this map would let one RSHUTDOWN free cache
-// entries while another thread is still calling through them.
-THREAD_LOCAL static zend_array *func_cache_map = nullptr;
-
 void error(int level, const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -275,16 +270,14 @@ Variant constant(zend_class_entry *ce, const String &name) {
         return {zend_get_constant(name.str())};
     }
 
-    auto constant_name = name.str();
-    zval *ret_constant = NULL;
-    auto c = (zend_class_constant *) zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), constant_name);
-    if (c == NULL) {
-        throwError("Undefined constant %s::%s", ZSTR_VAL(ce->name), ZSTR_VAL(constant_name));
-        ret_constant = NULL;
-    } else {
-        ret_constant = &c->value;
-    }
-    return ret_constant;
+    // Reading the raw zval out of the constants table skips the lazy
+    // evaluation Zend performs on first access, so a constant that has not
+    // been materialised yet - an enum case of an internal class, for one -
+    // comes back as an invalid value. Go through the same API as the other
+    // overloads, which evaluates the constant before returning it.
+    auto value = zend_get_class_constant_ex(ce->name, name.str(), ce, ZEND_FETCH_CLASS_EXCEPTION);
+    throwErrorIfOccurred();
+    return Variant(value);
 }
 
 static String checkedClassConstantName(const Variant &name) {
@@ -432,14 +425,9 @@ void request_shutdown() {
         return;
     }
     // Native finalizers are user code: they may access TypePHP globals and
-    // perform cached dynamic calls. Run them before tearing down any PHPX
-    // request cache; the embedding module clears its own globals afterwards.
+    // request-local call-site caches. The embedding module therefore invokes
+    // this before destroying its generated request storage and globals.
     nativeGcRequestShutdown();
-    if (func_cache_map) {
-        zend_hash_destroy(func_cache_map);
-        pefree(func_cache_map, 1);
-        func_cache_map = nullptr;
-    }
     request_active = false;
 }
 
@@ -487,10 +475,6 @@ Int toSize(const String &str) {
     return size;
 }
 
-static void free_fci_cache(zval *el) {
-    pefree((zend_fcall_info_cache *) Z_PTR_P(el), 1);
-}
-
 zend_function *getFunction(const String &name) {
     zend_fcall_info_cache fcc;
     zval *fn = NO_CONST_V(name);
@@ -503,6 +487,21 @@ zend_function *getFunction(const String &name) {
     throwErrorIfOccurred();
 
     return fcc.function_handler;
+}
+
+zend_class_entry *getInternalClassEntry(const String &name) {
+    zend_string *lcname = zend_string_tolower_ex(name.str(), true);
+    auto *ce = static_cast<zend_class_entry *>(zend_hash_find_ptr(CG(class_table), lcname));
+    zend_string_release_ex(lcname, true);
+    return ce;
+}
+
+zend_class_entry *getInternalClassEntrySafe(const String &name) {
+    auto *ce = getInternalClassEntry(name);
+    if (UNEXPECTED(ce == nullptr)) {
+        zend_error_noreturn(E_CORE_ERROR, "class '%s' is undefined", name.data());
+    }
+    return ce;
 }
 
 zend_function *getMethod(const String &class_name, const String &name) {
@@ -546,23 +545,13 @@ static void call_function_impl(const zval *zobject,
     fci.named_params = named_params;
 
     zend_fcall_info_cache fcc;
-    zend_fcall_info_cache *fci_cache = nullptr;
-    bool with_cache = explicit_scope == nullptr && Z_TYPE_P(function_name) == IS_STRING && !zobject;
+    zend_fcall_info_cache *fci_cache = &fcc;
     char *error = NULL;
 
-    if (with_cache) {
-        if (UNEXPECTED(func_cache_map == nullptr)) {
-            func_cache_map = (zend_array *) pemalloc(sizeof(zend_array), 1);
-            zend_hash_init(func_cache_map, 0, NULL, free_fci_cache, 0);
-        } else {
-            fci_cache = (zend_fcall_info_cache *) zend_hash_find_ptr(func_cache_map, Z_STR_P(function_name));
-        }
-    }
-
-    bool callable = fci_cache != nullptr;
-    if (!callable && explicit_scope != nullptr) {
+    bool callable;
+    if (explicit_scope != nullptr) {
         callable = explicit_scope->resolve(&fci.function_name, fci.object, &fcc, &error);
-    } else if (!callable) {
+    } else {
         callable = zend_is_callable_ex(&fci.function_name, fci.object, 0, NULL, &fcc, &error);
     }
 
@@ -572,18 +561,6 @@ static void call_function_impl(const zval *zobject,
         zend_throw_error(NULL, "Invalid callback %s, %s", ZSTR_VAL(callable_name), error);
         efree(error);
         zend_string_release_ex(callable_name, 0);
-    } else if (fci_cache == nullptr) {
-        fci_cache = &fcc;
-        // Zend releases CALL_VIA_TRAMPOLINE handlers after the call, while
-        // NEVER_CACHE handlers are explicitly unsuitable for persistent
-        // fcall caches. Keeping either pointer here would make the next call
-        // access freed or otherwise transient state.
-        const uint32_t non_cacheable_flags = ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_NEVER_CACHE;
-        if (with_cache && EXPECTED(!(fcc.function_handler->common.fn_flags & non_cacheable_flags))) {
-            auto _cache = (zend_fcall_info_cache *) pemalloc(sizeof(fcc), 1);
-            *_cache = fcc;
-            zend_hash_update_ptr(func_cache_map, Z_STR_P(function_name), _cache);
-        }
     }
 
     if (callable) {
@@ -877,7 +854,7 @@ Variant eval(const String &script, const char *filename) {
 }
 
 bool equals(const Variant &a, const Variant &b) {
-    return compare(a, b) == 0;
+    return a.equals(b);
 }
 
 bool same(const Variant &a, const Variant &b) {

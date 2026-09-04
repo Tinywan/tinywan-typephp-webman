@@ -126,10 +126,6 @@ final class NativeGlobalDiscovery
         array $outerLocals,
         array &$result,
     ): void {
-        if ($closure->stmts === null) {
-            return;
-        }
-
         $globals = [];
         $this->collectGlobals($closure->stmts, $globals);
         $locals = [];

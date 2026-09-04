@@ -23,41 +23,142 @@ use TypePhp\Generator\Symbol;
 
 trait PropertyAccessTrait
 {
+    /**
+     * Resolve a direct TypePHP magic-property body only for an exact, simple
+     * compiled class. The runtime helper still rechecks handlers, lazy state,
+     * declared/dynamic properties, and Zend's recursion guard before calling
+     * this function; otherwise it falls back to the standard handler.
+     *
+     * @return array{function: string, classEntry: string}|null
+     */
+    private function resolveDirectMagicPropertyAccess(
+        Expr\PropertyFetch $expr,
+        string $object,
+        string $magicMethod,
+    ): ?array {
+        if (!$this->isIdExpr($expr->name)
+            || !$this->isVarExpr($expr->var)
+            || $this->getVarType($object) !== Type::OBJECT
+        ) {
+            return null;
+        }
+
+        $class = $this->detectClassOfExpr($expr->var);
+        if ($class === '' || !$this->hasClass($class)) {
+            return null;
+        }
+
+        $exactClass = null;
+        if ($object === 'this_' && $this->isCurrentClassFinal()) {
+            $exactClass = $this->getFullClassName();
+        } elseif (isset($this->context->exactObjects[$object])) {
+            $exactClass = $this->context->exactObjects[$object];
+        } elseif ($this->isFinalClass($class)) {
+            $exactClass = $class;
+        }
+        if ($exactClass === null
+            || strcasecmp(ltrim($exactClass, '\\'), ltrim($class, '\\')) !== 0
+            || !$this->hasClass($exactClass)
+        ) {
+            return null;
+        }
+
+        $classDef = $this->getClass($exactClass);
+        $property = $this->parseIdentifier($expr->name);
+        // Keep the first implementation deliberately narrow. An internal or
+        // compiled parent may install custom object handlers; inherited magic
+        // methods also need a different generated receiver ABI.
+        if ($classDef->extends !== ''
+            || $classDef->nativeObject
+            || $classDef->trait
+            || $classDef->hasProperty($property)
+            || !$classDef->hasMethod($magicMethod)
+        ) {
+            return null;
+        }
+
+        $method = $classDef->getMethod($magicMethod);
+        if ($method->functionDef === null
+            || ($magicMethod === '__get' && $method->functionDef->returnsByRef)
+        ) {
+            return null;
+        }
+        $nativeFunction = $this->getNativeName(
+            $magicMethod,
+            $classDef->namespace,
+            $classDef->name,
+        );
+        if (!$this->hasFunction($nativeFunction)) {
+            return null;
+        }
+
+        return [
+            'function' => self::PREFIX . $nativeFunction,
+            'classEntry' => $this->getLocalClassEntryPtr($exactClass),
+        ];
+    }
+
     protected function usesTraitPropertyScope(string $object): bool
     {
         return $this->classDef?->trait && $object === 'this_';
     }
 
-    protected function emitDynamicPropertyRead(string $object, string $property): string
+    protected function emitDynamicPropertyRead(string $object, string $property, ?string $cache = null): string
     {
         if ($this->usesTraitPropertyScope($object)) {
             return 'typephp_read_property_scoped('
                 . $object . ', ' . $property . ', php::FakeScopeGuard::current(), php::AttrMode::Get)';
         }
+        if ($cache !== null) {
+            return 'typephp_read_property_cached('
+                . $object . ', ' . $property . ', php::AttrMode::Get, ' . $cache . ')';
+        }
         return "{$object}.getProperty({$property})";
     }
 
-    protected function emitDynamicPropertyWrite(string $object, string $property, string $value): string
+    protected function emitDynamicPropertyWrite(
+        string $object,
+        string $property,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         $scope = $this->usesTraitPropertyScope($object)
             ? 'php::FakeScopeGuard::current()'
-            : ($this->class ? $this->getClassEntryPtr($this->getFullClassName()) : 'nullptr');
+            : ($this->class ? $this->getLocalClassEntryPtr($this->getFullClassName()) : 'nullptr');
+        if ($cache !== null && !$this->usesTraitPropertyScope($object)) {
+            return 'typephp_write_property_cached('
+                . $object . ', ' . $property . ', ' . $value . ', ' . $scope . ', ' . $cache . ')';
+        }
         return 'typephp_write_property_scoped('
             . $object . ', ' . $property . ', ' . $value . ', ' . $scope . ')';
     }
 
-    protected function emitDynamicPropertyTargetRead(PropertyWriteTarget $target): string
+    protected function emitDynamicPropertyTargetRead(PropertyWriteTarget $target, ?string $cache = null): string
     {
         $this->assertDynamicPropertyTarget($target);
 
-        return $this->emitDynamicPropertyRead($target->getDynamicObjectExpr(), $target->getDynamicPropertyExpr());
+        return $this->emitDynamicPropertyRead(
+            $target->getDynamicObjectExpr(),
+            $target->getDynamicPropertyExpr(),
+            $cache,
+        );
     }
 
-    protected function emitDynamicPropertyTargetWrite(PropertyWriteTarget $target, string $value): string
+    protected function emitDynamicPropertyTargetWrite(
+        PropertyWriteTarget $target,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         $this->assertDynamicPropertyTarget($target);
 
-        return $this->emitDynamicPropertyWrite($target->getDynamicObjectExpr(), $target->getDynamicPropertyExpr(), $value);
+        return $this->emitDynamicPropertyWrite(
+            $target->getDynamicObjectExpr(),
+            $target->getDynamicPropertyExpr(),
+            $value,
+            $cache,
+        );
     }
 
     protected function emitDynamicPropertyTargetUnset(PropertyWriteTarget $target): string
@@ -74,18 +175,28 @@ trait PropertyAccessTrait
         return $target->getDynamicObjectExpr() . '.attrRef(' . $target->getDynamicPropertyExpr() . ')';
     }
 
-    protected function emitDynamicPropertyTargetAppendArray(PropertyWriteTarget $target, string $value): string
+    protected function emitDynamicPropertyTargetAppendArray(
+        PropertyWriteTarget $target,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         $this->assertDynamicPropertyTarget($target);
 
         return $this->emitDynamicPropertyAppendArray(
             $target->getDynamicObjectExpr(),
             $target->getDynamicPropertyExpr(),
-            $value
+            $value,
+            $cache,
         );
     }
 
-    protected function emitDynamicPropertyTargetUpdateArray(PropertyWriteTarget $target, string $dim, string $value): string
+    protected function emitDynamicPropertyTargetUpdateArray(
+        PropertyWriteTarget $target,
+        string $dim,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         $this->assertDynamicPropertyTarget($target);
 
@@ -93,7 +204,8 @@ trait PropertyAccessTrait
             $target->getDynamicObjectExpr(),
             $target->getDynamicPropertyExpr(),
             $dim,
-            $value
+            $value,
+            $cache,
         );
     }
 
@@ -104,26 +216,50 @@ trait PropertyAccessTrait
 
     protected function emitDynamicPropertyFetchRead(Expr\PropertyFetch $expr, ?PropertyWriteTarget $target = null): string
     {
+        $cache = $this->isIdExpr($expr->name) && !$this->isNativePropertyAccess($expr)
+            ? $this->getPropertyAccessCache()
+            : null;
         if ($this->canEmitDynamicPropertyTarget($target)) {
-            return $this->emitDynamicPropertyTargetRead($target);
+            return $this->emitDynamicPropertyTargetRead($target, $cache);
         }
 
         return $this->emitDynamicPropertyRead(
             $this->parseIdentifier($expr->var),
-            $this->propertyNameToStr($expr->name, literal: true)
+            $this->propertyNameToStr($expr->name, literal: true),
+            $cache,
         );
     }
 
     protected function emitDynamicPropertyFetchWrite(Expr\PropertyFetch $expr, string $value, ?PropertyWriteTarget $target = null): string
     {
+        $cache = $this->isIdExpr($expr->name) && !$this->isNativePropertyAccess($expr)
+            ? $this->getPropertyAccessCache()
+            : null;
+        $object = $this->canEmitDynamicPropertyTarget($target)
+            ? $target->getDynamicObjectExpr()
+            : $this->parseIdentifier($expr->var);
+        $direct = $cache !== null && $this->hasVar($value) && $this->getVarType($value) === Type::VAR
+            ? $this->resolveDirectMagicPropertyAccess($expr, $object, '__set')
+            : null;
+        if ($direct !== null) {
+            $property = $this->propertyNameToStr($expr->name, literal: true);
+            $scope = $this->class
+                ? $this->getLocalClassEntryPtr($this->getFullClassName())
+                : 'nullptr';
+            return 'typephp_write_magic_property_direct('
+                . $object . ', ' . $property . ', ' . $value . ', ' . $scope . ', '
+                . $direct['classEntry'] . ', ' . $cache . ', [&]() {'
+                . $direct['function'] . '(' . $object . ', ' . $property . ', ' . $value . '); })';
+        }
         if ($this->canEmitDynamicPropertyTarget($target)) {
-            return $this->emitDynamicPropertyTargetWrite($target, $value);
+            return $this->emitDynamicPropertyTargetWrite($target, $value, $cache);
         }
 
         return $this->emitDynamicPropertyWrite(
-            $this->parseIdentifier($expr->var),
+            $object,
             $this->propertyNameToStr($expr->name, literal: true),
-            $value
+            $value,
+            $cache,
         );
     }
 
@@ -151,13 +287,18 @@ trait PropertyAccessTrait
             return $this->parseWritableIdentifier($expr) . ".newItem() = {$value}";
         }
         if ($this->canEmitDynamicPropertyTarget($target)) {
-            return $this->emitDynamicPropertyTargetAppendArray($target, $value);
+            return $this->emitDynamicPropertyTargetAppendArray(
+                $target,
+                $value,
+                $this->isIdExpr($expr->name) ? $this->getPropertyAccessCache() : null,
+            );
         }
 
         return $this->emitDynamicPropertyAppendArray(
             $this->parseIdentifier($expr->var),
             $this->propertyNameToStr($expr->name, literal: true),
-            $value
+            $value,
+            $this->isIdExpr($expr->name) ? $this->getPropertyAccessCache() : null,
         );
     }
 
@@ -167,32 +308,59 @@ trait PropertyAccessTrait
             return $this->parseWritableIdentifier($expr) . ".item({$dim}, true) = {$value}";
         }
         if ($this->canEmitDynamicPropertyTarget($target)) {
-            return $this->emitDynamicPropertyTargetUpdateArray($target, $dim, $value);
+            return $this->emitDynamicPropertyTargetUpdateArray(
+                $target,
+                $dim,
+                $value,
+                $this->isIdExpr($expr->name) ? $this->getPropertyAccessCache() : null,
+            );
         }
 
         return $this->emitDynamicPropertyUpdateArray(
             $this->parseIdentifier($expr->var),
             $this->propertyNameToStr($expr->name, literal: true),
             $dim,
-            $value
+            $value,
+            $this->isIdExpr($expr->name) ? $this->getPropertyAccessCache() : null,
         );
     }
 
-    protected function emitDynamicPropertyAppendArray(string $object, string $property, string $value): string
+    protected function emitDynamicPropertyAppendArray(
+        string $object,
+        string $property,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         if ($this->usesTraitPropertyScope($object)) {
             return 'typephp_read_property_scoped('
                 . $object . ', ' . $property . ', php::FakeScopeGuard::current(), php::AttrMode::Update)'
                 . ".newItem() = {$value}";
         }
+        if ($cache !== null) {
+            return 'typephp_read_property_cached('
+                . $object . ', ' . $property . ', php::AttrMode::Update, ' . $cache . ')'
+                . ".newItem() = {$value}";
+        }
         return "{$object}.attr({$property}, php::AttrMode::Update).newItem() = {$value}";
     }
 
-    protected function emitDynamicPropertyUpdateArray(string $object, string $property, string $dim, string $value): string
+    protected function emitDynamicPropertyUpdateArray(
+        string $object,
+        string $property,
+        string $dim,
+        string $value,
+        ?string $cache = null,
+    ): string
     {
         if ($this->usesTraitPropertyScope($object)) {
             return 'typephp_read_property_scoped('
                 . $object . ', ' . $property . ', php::FakeScopeGuard::current(), php::AttrMode::Update)'
+                . ".item({$dim}, true) = {$value}";
+        }
+        if ($cache !== null) {
+            return 'typephp_read_property_cached('
+                . $object . ', ' . $property . ', php::AttrMode::Update, ' . $cache . ')'
                 . ".item({$dim}, true) = {$value}";
         }
         return "{$object}.attr({$property}, php::AttrMode::Update).item({$dim}, true) = {$value}";
@@ -595,13 +763,13 @@ trait PropertyAccessTrait
         }
 
         if ($def->class === '' or $this->isAbstractClass($def->class) or $this->isInterface($def->class) or !$this->hasClass($def->class)) {
-            // 属性 declared class 若是接口、抽象类或动态类，当前属性布局优化无法静态确认最终对象类型。
-            // 不在这里 fatal；后续 wrapObjectPropertyAssignTypeCheck() 会在需要时插入运行时检查。
+            // If the property's declared class is an interface, abstract class, or dynamic class, the current property layout optimization cannot statically determine the final object type.
+            // Do not report a fatal error here; wrapObjectPropertyAssignTypeCheck() inserts a runtime check later when needed.
             return;
         }
 
         $rightClass = $this->detectClassOfExpr($right);
-        // TODO 静态编译阶段无法获得准确的类型，需要在运行时检查
+        // TODO: the exact type cannot be determined at the static compilation stage; a runtime check is required
         if ($rightClass === '') {
             return;
         }
@@ -1002,10 +1170,22 @@ trait PropertyAccessTrait
             return $this->getNativeObjectMemberReceiver($objectName)
                 . $this->getNativeObjectPropertyCppName($resolution->propertyDef, $resolution->classDef);
         }
-        $objectVar = $objectName;
-        if ($this->usesTraitPropertyScope($objectVar)) {
+        $objectVar = $this->parenthesizeOpenOperand($objectName);
+        $directMagic = !$update && !$this->isNativePropertyAccess($expr)
+            ? $this->resolveDirectMagicPropertyAccess($expr, $objectVar, '__get')
+            : null;
+        if ($directMagic !== null) {
+            $getProperty = 'typephp_read_magic_property_direct('
+                . $objectVar . ', ' . $id . ', ' . $directMagic['classEntry'] . ', '
+                . $this->getPropertyAccessCache() . ', [&]() {'
+                . ' return ' . $directMagic['function'] . '(' . $objectVar . ', ' . $id . '); })';
+        } elseif ($this->usesTraitPropertyScope($objectVar)) {
             $getProperty = 'typephp_read_property_scoped('
                 . $objectVar . ', ' . $id . ', php::FakeScopeGuard::current(), ' . $this->escapeAttrMode($update) . ')';
+        } elseif ($this->isIdExpr($property) && !$this->isNativePropertyAccess($expr)) {
+            $getProperty = 'typephp_read_property_cached('
+                . $objectVar . ', ' . $id . ', ' . $this->escapeAttrMode($update) . ', '
+                . $this->getPropertyAccessCache() . ')';
         } else {
             $getProperty = $objectVar . '.attr(' . $id . ', ' . $this->escapeAttrMode($update) . ')';
         }
@@ -1155,4 +1335,39 @@ trait PropertyAccessTrait
         return $result;
     }
 
+
+    /**
+     * A folded constant value can be a full C++ expression (e.g. the ternary
+     * of `const VALUE = cond ? E::A : E::B;`). Appending `.attr(...)` to it
+     * unparenthesized would bind the member access to the last operand only,
+     * so any operand with top-level operators is wrapped first. Simple
+     * identifiers and closed call chains stay untouched.
+     */
+    private function parenthesizeOpenOperand(string $code): string
+    {
+        $depth = 0;
+        $inString = false;
+        $length = strlen($code);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $code[$i];
+            if ($inString) {
+                if ($char === '\\') {
+                    $i++;
+                } elseif ($char === '"') {
+                    $inString = false;
+                }
+                continue;
+            }
+            if ($char === '"') {
+                $inString = true;
+            } elseif ($char === '(' || $char === '{' || $char === '[') {
+                $depth++;
+            } elseif ($char === ')' || $char === '}' || $char === ']') {
+                $depth--;
+            } elseif ($depth === 0 && ($char === ' ' || $char === '?')) {
+                return '(' . $code . ')';
+            }
+        }
+        return $code;
+    }
 }

@@ -45,7 +45,7 @@ trait CompilationStateTrait
             $this->fatalError($var, 'Duplicate variable `$' . $var->name . '`');
         }
         $this->context->staticVars[$name] = $type;
-        // 静态变量实际上是一个全局变量的引用
+        // A static variable is actually a reference to a global variable.
         $globalVar = $this->escapeStaticVar($name);
         $this->addGlobalVar($globalVar, $type);
         return $globalVar;
@@ -165,7 +165,7 @@ trait CompilationStateTrait
     }
 
     /**
-     * @param string $name 必须传入带有完整命名空间的类名，将会自动转义为 native name
+     * @param string $name Must be a fully qualified class name including the namespace; it will be automatically escaped to a native name.
      */
     protected function hasFunction(string $name): bool
     {
@@ -192,6 +192,14 @@ trait CompilationStateTrait
         return $this->symbols->findClass($this->escapeClass($name));
     }
 
+    public function isDeclaredEnumCase(string $class, string $case): bool
+    {
+        $classDef = $this->getClassDef(ltrim($class, '\\'));
+        return $classDef !== null
+            && $classDef->enum
+            && array_key_exists($case, $classDef->enumCases);
+    }
+
     public function getParentClass(string $class): string
     {
         return $this->symbols->parent(strtolower(ltrim($class, '\\')));
@@ -214,8 +222,8 @@ trait CompilationStateTrait
 
     protected function checkFunction(string $name): void
     {
-        // 在预处理阶段检测到函数声明，但是未定义，说明在当前文件，但是顺序错误
-        // 跳过，稍后再处理
+        // The function declaration was detected during the preprocessing stage but is not yet defined,
+        // meaning it is in the current file but appears in the wrong order. Skip it and handle it later.
         if (isset($this->symbolDeclInFile[$name])
             and $this->symbolDeclInFile[$name] === $this->file
             and !$this->hasFunction($name)) {

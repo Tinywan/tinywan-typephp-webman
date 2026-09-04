@@ -69,12 +69,12 @@ trait NameResolutionTrait
     }
 
     /**
-     * 将 trait 方法参数中的类名 Name 节点升级为 Name\FullyQualified。
-     * 对于已由 parseTypeDecl() 解析的限定名（含 \），直接升级节点类型；
-     * 对于尚未解析的非限定名（如 NullableType 内层，parseTypeDecl 返回 TYPE_VAR 跳过了解析），
-     * 先通过 useAliases/useNamespaces 解析再升级。
-     * gen_stub.php 的 SimpleType::fromNode() 依赖 isFullyQualified() 判断是否需要再次解析，
-     * 若不升级为 FullyQualified，在上下文丢失后会被错误地追加当前 namespace 前缀。
+     * Upgrade the class-name Name node in a trait method parameter to Name\FullyQualified.
+     * For qualified names (containing \) already resolved by parseTypeDecl(), upgrade the node type directly;
+     * for unresolved unqualified names (such as the inner type of a NullableType, which parseTypeDecl skips by returning TYPE_VAR),
+     * resolve them via useAliases/useNamespaces first and then upgrade.
+     * gen_stub.php's SimpleType::fromNode() relies on isFullyQualified() to decide whether to re-resolve;
+     * if the name is not upgraded to FullyQualified, the current namespace prefix is wrongly appended once the context is lost.
      */
     protected function upgradeToFullyQualifiedName(?NodeAbstract $type): ?NodeAbstract
     {
@@ -104,6 +104,15 @@ trait NameResolutionTrait
             if (isset($this->zendTypeMap[strtolower($typeName)]) || in_array(strtolower($typeName), ['self', 'static', 'parent'], true)) {
                 return $type;
             }
+            // NameResolver has already applied the declaring file's namespace
+            // imports. Keep that canonical identity when a trait signature is
+            // copied into its consuming class. In particular, after
+            // `use X\X; use X\Y;`, resolving Y produces X\Y; feeding that string
+            // through the import table again would incorrectly produce X\X\Y.
+            $resolvedName = $type->getAttribute('resolvedName');
+            if ($resolvedName instanceof Node\Name\FullyQualified) {
+                return new Node\Name\FullyQualified($resolvedName->toString(), $type->getAttributes());
+            }
             $resolved = $typeName;
             $firstSegment = explode('\\', $typeName, 2)[0];
             $hasImportedPrefix = $this->getClassImportAlias($firstSegment) !== null;
@@ -130,7 +139,7 @@ trait NameResolutionTrait
     }
 
     /**
-     * 函数名称处理，补齐 namespace
+     * Process the function name and prepend the namespace when required.
      */
     public function getNamespacedFuncName(string $funcName): string
     {
@@ -144,7 +153,7 @@ trait NameResolutionTrait
     }
 
     /**
-     * @param string $class 一定是带有命名空间的完整类名
+     * @param string $class must be a fully qualified class name including the namespace
      */
     protected function resolveTypeDecl(?NodeAbstract $type, int $what): array
     {
@@ -155,17 +164,18 @@ trait NameResolutionTrait
 
     protected function parseTypeDecl(?NodeAbstract $type, int $what, string &$class): string
     {
-        // 未定义类型视为 var (mixed, any)
+        // An undefined type is treated as var (mixed, any)
         if ($type === null) {
             return Type::VAR;
         }
+        $this->validateCompoundTypeDeclaration($type);
         if ($type instanceof UnionType || $type instanceof NullableType || $type instanceof IntersectionType) {
-            // 复杂类型静态阶段统一按 mixed/var 处理，运行时再由 typeCheck 兜底。
+            // Complex types are uniformly treated as mixed/var at the static stage; the runtime typeCheck provides the fallback.
             return Type::VAR;
         } else {
             $typeName = $this->parseIdentifier($type);
             $typeNameLower = strtolower($typeName);
-            // 属性和类常量的类型不能声明为 void/never ，只有返回值可以
+            // Property and class-constant types cannot be declared void/never; only return types can
             if ($what !== self::DECL_TYPE_OF_RETURN and ($typeNameLower === 'void' or $typeNameLower === 'never')) {
                 $this->fatalError($type, 'The type `void`/`never` is allowed only for return type');
             } elseif (isset($this->zendTypeMap[$typeNameLower])) {
@@ -179,12 +189,12 @@ trait NameResolutionTrait
                     }
                     $class = $this->classDef->extends;
                 } elseif ($typeName === 'static') {
-                    // static 类无法在编译期获取
+                    // The static class cannot be determined at compile time
                     $class = '';
                 } else {
                     $class = $this->getNamespacedClassName($typeName);
                 }
-                // Trait 在注入 class 需要使用完整类名
+                // When a trait is injected into a class, the fully qualified class name is required
                 if ($class and $this->classDef and $this->classDef->trait) {
                     $type->name = $class;
                 }
@@ -192,4 +202,5 @@ trait NameResolutionTrait
             }
         }
     }
+
 }

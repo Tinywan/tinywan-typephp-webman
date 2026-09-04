@@ -61,7 +61,35 @@ trait SsaPropOptimizer
             }
 
             $this->context->stableObjects[$objName] = $className;
+            if ($this->isExactNewObjectDefinition($ssa, $objName)) {
+                $this->context->exactObjects[$objName] = $className;
+            }
         }
+    }
+
+    /**
+     * A declared return type is only an upper bound and may contain a subclass.
+     * Only a sole, concrete `new` definition proves the runtime class exactly.
+     */
+    protected function isExactNewObjectDefinition(SsaBuilder $ssa, string $objName): bool
+    {
+        foreach ($ssa->ssaVars as $ssaVar) {
+            if ($ssaVar->origName !== $objName || $ssaVar->flags & SsaFlags::PHI) {
+                continue;
+            }
+
+            $definition = $ssaVar->definition;
+            if (!$definition instanceof Node\Stmt\Expression
+                || !$definition->expr instanceof Expr\Assign
+                || !$definition->expr->expr instanceof Expr\New_
+                || !$definition->expr->expr->class instanceof Node\Name) {
+                return false;
+            }
+
+            return strtolower($definition->expr->expr->class->toString()) !== 'static';
+        }
+
+        return false;
     }
 
     /**

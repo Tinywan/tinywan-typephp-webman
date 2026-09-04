@@ -2,14 +2,6 @@
 
 #include <optional>
 
-// Some Windows dependency headers expose `mod` as a macro.  It collides with
-// the BigInt::mod member name and makes MSVC parse the following definitions as
-// invalid declarations.  Keep the public API name while removing the macro
-// after all dependency headers have been included.
-#ifdef mod
-#undef mod
-#endif
-
 namespace php {
 
 class BigIntOperand {

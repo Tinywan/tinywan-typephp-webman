@@ -236,13 +236,7 @@ trait ConstantExpressionTrait
             return $this->genIntegerLiteral($value);
         }
         if (is_float($value)) {
-            if (is_nan($value)) {
-                return self::VALUE_NAN;
-            }
-            if (is_infinite($value)) {
-                return $value > 0 ? self::VALUE_INF : '-' . self::VALUE_INF;
-            }
-            return $this->genCValue($value);
+            return $this->genFloatLiteral($value);
         }
         if (is_bool($value)) {
             return $value ? 'true' : 'false';

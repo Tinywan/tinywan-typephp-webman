@@ -18,6 +18,15 @@ class FunctionContext
     /** Map of SSA-stable object variable name => class name (SsaPropOptimizer). */
     public array $stableObjects = [];
 
+    /**
+     * SSA-stable variables whose sole definition is a concrete `new ClassName()`.
+     * Unlike a declared/returned object type, these entries prove the exact
+     * runtime class and may be used for conservative method devirtualization.
+     *
+     * @var array<string, string>
+     */
+    public array $exactObjects = [];
+
     /** Map of hoisted property refs: objName => [propName => true] (SsaPropOptimizer). */
     public array $hoistedProps = [];
 
@@ -59,6 +68,8 @@ class FunctionContext
      */
     public array $stdContainers = [];
     public array $localVars = [];
+    /** @var array<string, true> Locals explicitly created through std::int/float/bool. */
+    public array $explicitNativeTypeVars = [];
     /** @var array<string, string> C++ initializers folded into function-scope local declarations. */
     public array $localVarInitializers = [];
     public array $staticVars = [];
@@ -84,6 +95,10 @@ class FunctionContext
     public bool $inLoop = false;
     /** True while parsing a for/foreach/while/do-while body. */
     public bool $inContinuableLoop = false;
+    /** Number of breakable constructs (loops and switches) enclosing the statement being parsed. */
+    public int $breakableDepth = 0;
+    /** True when the innermost enclosing breakable construct is a switch, not a loop. */
+    public bool $breakableIsSwitch = false;
     public bool $inClosure = false;
     public ?array $closureReturnTypeCheck = null;
     public string $closureReturnTypeStr = '';
@@ -108,6 +123,7 @@ class FunctionContext
     public function __construct()
     {
         $this->localVars = [];
+        $this->explicitNativeTypeVars = [];
         $this->localVarInitializers = [];
         $this->staticVars = [];
         $this->arguments = [];
@@ -122,6 +138,7 @@ class FunctionContext
         $this->objectProps = [];
         $this->ssaBuilder = null;
         $this->stableObjects = [];
+        $this->exactObjects = [];
         $this->hoistedProps = [];
         $this->unsafeObjectProps = [];
         $this->staticPropRefs = [];

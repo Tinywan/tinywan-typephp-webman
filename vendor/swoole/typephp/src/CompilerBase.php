@@ -82,6 +82,7 @@ use TypePhp\Resolver\PropertyAccessResolver;
 use TypePhp\Resolver\Reflection;
 use TypePhp\Symbol\SymbolRepository;
 use TypePhp\TypeSystem\CompositeTypeCheckerTrait;
+use TypePhp\TypeSystem\CompoundTypeDeclarationValidationTrait;
 use TypePhp\TypeSystem\NativeTypeCompatibilityTrait;
 use TypePhp\NativeClass\NativeClassSupportTrait;
 use TypePhp\NativeClass\NativeGlobalTypeResolver;
@@ -103,6 +104,7 @@ use PhpParser\PrettyPrinter;
 class CompilerBase implements PropertyAccessContext
 {
     use CompositeTypeCheckerTrait;
+    use CompoundTypeDeclarationValidationTrait;
     use CompilerDiagnosticTrait;
     use CompilationStateTrait;
     use NativeTypeCompatibilityTrait;
@@ -160,6 +162,7 @@ class CompilerBase implements PropertyAccessContext
     protected const string ATTR_STATEMENT_EXPRESSION = 'aotStatementExpression';
     protected const string ATTR_MULTI_RETURN_IMPL = 'aotMultiReturnImpl';
     protected const string ATTR_SCOPED_CALLBACK = 'aotScopedCallback';
+    protected const string ATTR_FORCE_FLOAT_LITERAL = 'aotForceFloatLiteral';
 
     /**
      * Keyword methods (to* builtins) with mandated return types.
@@ -239,6 +242,11 @@ class CompilerBase implements PropertyAccessContext
     public const string VALUE_ZERO = 'php::zero';
     public const string VALUE_FALSE = 'php::false_';
     public const string VALUE_TRUE = 'php::true_';
+
+    protected function getBoolValue(Expr\ConstFetch $expr): string
+    {
+        return strcasecmp($expr->name->toString(), 'true') === 0 ? self::VALUE_TRUE : self::VALUE_FALSE;
+    }
     public const string LITERAL_STRINGS = '_literal_strings';
     public const string LITERAL_STRING_GETTER = 'get_str';
     public const string ANON_CLASS = '_anon_class_';
@@ -267,9 +275,11 @@ class CompilerBase implements PropertyAccessContext
     public const string ENTRY_FUNCTION = 'main';
     protected const string PHASE_IDLE = 'idle';
     protected const string PHASE_PREPARE = 'prepare';
+    protected const string PHASE_COMPOSE = 'compose';
     protected const string PHASE_CONVERT = 'convert';
 
     protected string $lang = 'PHP';
+    protected bool $verbose = false;
     protected int $indentLevel = 0;
     protected string $indentStr = "\t";
     public string $mode = 'cli';
@@ -282,12 +292,14 @@ class CompilerBase implements PropertyAccessContext
     protected int $classIndex = 0;
 
     /**
-     * 用户定义（请求生命周期）类名 → ID，运行期为 THREAD_LOCAL 缓存，RSHUTDOWN 清理
+     * User-defined (request-lifetime) class name → ID. Backed by a THREAD_LOCAL
+     * cache at runtime and cleared on RSHUTDOWN.
      * @var array<string, int>
      */
     protected array $classMap = [];
     /**
-     * 内置/编译产物（模块生命周期）类名 → ID，PHP 启动完成后惰性填充，RSHUTDOWN 不清理
+     * Built-in / compiled-output (module-lifetime) class name → ID. Lazily
+     * populated after PHP startup and NOT cleared on RSHUTDOWN.
      * @var array<string, int>
      */
     protected array $persistentClassMap = [];
@@ -299,27 +311,42 @@ class CompilerBase implements PropertyAccessContext
     protected int $funcIndex = 0;
 
     /**
-     * 用户定义（请求生命周期）函数/方法 → ID，运行期为 THREAD_LOCAL 缓存，RSHUTDOWN 清理
-     * key 为函数名或 `Class::method`
+     * User-defined (request-lifetime) function/method → ID. Backed by a
+     * THREAD_LOCAL cache at runtime and cleared on RSHUTDOWN.
+     * Key is a function name or `Class::method`.
      * @var array<string, int>
      */
     protected array $funcMap = [];
     /**
-     * 内置/编译产物（模块生命周期）函数/方法 → ID，PHP 启动完成后惰性填充，RSHUTDOWN 不清理
-     * key 为函数名或 `Class::method`
+     * Built-in / compiled-output (module-lifetime) function/method → ID. Lazily
+     * populated after PHP startup and NOT cleared on RSHUTDOWN.
+     * Key is a function name or `Class::method`.
      * @var array<string, int>
      */
     protected array $persistentFuncMap = [];
     protected int $persistentFuncIndex = 0;
     /**
-     * 内置/编译产物类的声明属性 offset 缓存，key 为 `Class::prop`，惰性填充，RSHUTDOWN 不清理。
-     * 属性解析仅覆盖编译类与内置类的声明属性（进程级稳定），用户类属性走字符串路径，不进缓存。
+     * Declared-property offset cache for built-in / compiled-output classes.
+     * Key is `Class::prop`; lazily populated and NOT cleared on RSHUTDOWN.
+     * Property resolution only covers declared properties of compiled classes
+     * and built-in classes (process-stable). User-class properties go through
+     * the string path and never enter this cache.
      */
     protected array $persistentPropMap = [];
     protected int $persistentPropIndex = 0;
+    /**
+     * Per-generated-access-site Zend object-handler cache slots. Unlike the
+     * declared-property offset cache above, these are request-local and may
+     * cache a runtime class together with a dynamic/hooked-property sentinel.
+     */
+    protected int $propertyAccessCacheIndex = 0;
+    protected int $methodCallCacheIndex = 0;
+    protected int $functionCallCacheIndex = 0;
     /** @var array<string, array<Node\Stmt>> Prepared declaration ASTs keyed by real path. */
     protected array $preparedFileAsts = [];
+    protected bool $traitDeclarationsComposed = false;
     protected bool $declarationExpressionsFinalized = false;
+    protected bool $methodOverrideFlagsFinalized = false;
     protected const array PHP_RUNTIME_TYPE_MAP = [
         'integer' => Type::INT,
         'double' => Type::FLOAT,
@@ -339,10 +366,11 @@ class CompilerBase implements PropertyAccessContext
         'mixed' => Type::VAR,
         'null' => Type::VAR,
         'any' => Type::VAR,
-        // callable 类型，可以是字符串、数组、对象
-        // 1) 'foo' 函数名称字符串, 2) [ $obj, 'bar' ] 对象方法数组, 3) Closure 对象， 4) [ 'class', 'staticMethod'] 类名+静态方法数组
+        // The callable type can be a string, array, or object:
+        // 1) 'foo' function-name string, 2) [ $obj, 'bar' ] object-method array,
+        // 3) a Closure object, 4) [ 'class', 'staticMethod' ] class + static-method array.
         'callable' => Type::VAR,
-        // iterable 类型，可以是数组或者对象
+        // The iterable type can be an array or an object.
         'iterable' => Type::VAR,
         'stream' => Type::STREAM,
         'bigint' => Type::BIGINT,
@@ -355,13 +383,15 @@ class CompilerBase implements PropertyAccessContext
     protected array $internalConstants = [];
 
     /**
-     * 存储所有函数、类方法的声明，key 是 符号名称，Value 是函数、类方法所在的文件名称
+     * Stores the declaration of every function and class method. Key is the
+     * symbol name; value is the file in which the function or method is declared.
      * @var array<string, string>
      */
     protected array $symbolDeclInFile = [];
 
     /**
-     * 存储所有函数、类方法的调用，key 是 文件名称，Value 是函数、类方法调用的列表数组
+     * Stores every function / class-method call. Key is the file name; value is
+     * a list of the functions / class methods called within that file.
      * @var array<string, array<string>>
      */
     protected array $symbolCallInFile = [];
@@ -379,7 +409,6 @@ class CompilerBase implements PropertyAccessContext
     protected array $linkPaths = [];   // --link-path / -L: user-specified library search paths
     /** @var list<string> Required PHP modules recorded in zend_module_entry.deps. */
     protected array $extensionDependencies = [];
-    protected int $floatPrecision = 17;
     protected bool $debug = false;
     protected bool $formatCode = false;   // --format: enable clang-format (disabled by default)
     protected bool $printBacktraceOnError = true;
@@ -390,11 +419,12 @@ class CompilerBase implements PropertyAccessContext
     protected array $userIncludePaths = [];  // --include-path / -I: user-provided C++ include dirs
     protected array $userDefines = [];       // --define / -D: user-provided preprocessor macros
     protected bool $enableLto = false;       // --lto: enable Link Time Optimization (-flto)
+    protected bool $fullStatic = false;      // --full-static: link against the bundled fully-static SDK
     protected string $file;
     protected string $dir;
 
     /**
-     * 原始值，可能包含 `\\` 多层空间.
+     * The raw namespace value, which may contain `\\` multi-level separators.
      */
     protected string $namespace = '';
     protected string $method = '';
@@ -403,9 +433,11 @@ class CompilerBase implements PropertyAccessContext
     protected array $useAliases = [];
     protected array $useFunctions = [];
     protected array $useConstants = [];
+    /** @var array<int, array<string, string>> Import aliases separated by class/function/constant domain. */
+    protected array $useImportAliases = [];
 
     /**
-     * 原始类名，不包含命名空间.
+     * The raw class name, without the namespace.
      */
     protected string $class = '';
     protected string $parentClass = '';
@@ -461,7 +493,7 @@ class CompilerBase implements PropertyAccessContext
     protected bool $bigintTypes = false;
     protected string $rootPath;
     protected string $buildDir;
-    protected string $outputDir = '';    // -o 参数指定的输出目录
+    protected string $outputDir = '';    // Output directory specified by the -o option
     protected int $debugLine = 0;
     protected CLImate $climate;
     protected bool $stubFile = false;
@@ -475,26 +507,28 @@ class CompilerBase implements PropertyAccessContext
     protected Parser $parser;
     protected string $phpVersion = self::DEFAULT_PHP_VERSION;
     protected PrettyPrinter $printer;
-    protected bool $isPhpZts = false;  // PHP 是否为线程安全版本
+    protected bool $isPhpZts = false;  // Whether the PHP build is thread-safe (ZTS)
 
-    // Windows 平台：保存检测到的 PHP lib 文件路径
-    protected string $windowsPhpEmbedLib = '';  // php8embed.lib 路径
-    protected string $windowsPhpCoreLib = '';   // php8ts.lib 或 php8.lib 路径
+    // Windows platform: store the detected PHP lib file paths.
+    protected string $windowsPhpEmbedLib = '';  // Path to php8embed.lib
+    protected string $windowsPhpCoreLib = '';   // Path to php8ts.lib or php8.lib
     
-    // 新的平台和编译器抽象层（可选使用）
+    // New platform and compiler abstraction layers (optional to use).
     protected ?PlatformBase $platform = null;
     protected ?CompilerBackend $compilerBackend = null;
 
     /**
-     * 在预处理阶段获取所有类的方法名称，检测子类和父类中存在的同名方法，解决动态绑定方法调用的问题
-     * `static::methodCall()`
-     * `$this->methodCall()` 子类和父类中存在同名方法
+     * Records all class method names collected during the preprocessing phase.
+     * Used to detect methods with the same name declared in both a child class
+     * and its parent class, resolving dynamic method-binding calls such as
+     * `static::methodCall()` and `$this->methodCall()` where a parent and a
+     * child class both define the method.
      * @var array<string, bool>
      */
     protected array $classMethodOverride = [];
 
     /**
-     * 存储所有类继承关系，类名必须全部为小写
+     * Stores all class inheritance relationships. Class names must be all lowercase.
      * @var array<string, string>
      */
     protected SymbolRepository $symbols;
@@ -576,7 +610,7 @@ class CompilerBase implements PropertyAccessContext
         return $this->lang;
     }
 
-    protected function unsupportedSyntax(NodeAbstract $node): never
+    protected function unsupportedSyntax(Node $node): never
     {
         $message = 'Error: Unsupported ' . $this->getLang() . ' Syntax,';
         $message .= ' Line: ' . $this->getLine($node) . ', Type: ' . $this->getType($node) . PHP_EOL;
@@ -592,9 +626,13 @@ class CompilerBase implements PropertyAccessContext
         throw new Unsupported($message);
     }
 
-    protected function getIndent(): string
+    /**
+     * Return indentation relative to the current code-generation level.
+     * Level 1 is the current level, level 2 is one nested level, and so on.
+     */
+    protected function getIndent(int $level = 1): string
     {
-        return str_repeat($this->indentStr, $this->indentLevel);
+        return str_repeat($this->indentStr, $this->indentLevel + $level - 1);
     }
 
     protected function getPhpxDir(): string
@@ -731,7 +769,7 @@ class CompilerBase implements PropertyAccessContext
         return '';
     }
 
-    public function parseExpr(NodeAbstract $expr): string
+    public function parseExpr(Node $expr): string
     {
         if ($expr->hasAttribute('replace')) {
             return $expr->getAttribute('replace');
@@ -744,217 +782,114 @@ class CompilerBase implements PropertyAccessContext
         if ($expr instanceof Node\Expr\BinaryOp) {
             $this->assertNativeObjectBinaryOperatorSupported($expr);
         }
-        switch ($type) {
-            case 'Expr_Isset':
-                return $this->parseIsset($expr);
-            case 'Expr_Empty':
-                return $this->parseEmpty($expr);
-            case 'Expr_Assign':
-                return $this->parseAssign($expr);
-            case 'Expr_AssignRef':
-                return $this->parseAssignRef($expr);
-            case 'Expr_Print':
-                return $this->parsePrint($expr);
-            case 'Expr_BinaryOp_Equal':
-                return $this->parseBinaryOpEqual($expr);
-            case 'Expr_BinaryOp_NotEqual':
-                return $this->parseBinaryOpNotEqual($expr);
-            case 'Expr_BinaryOp_Identical':
-                return $this->parseBinaryOpIdentical($expr);
-            case 'Expr_BinaryOp_NotIdentical':
-                return $this->parseBinaryOpNotIdentical($expr);
-            case 'Expr_BooleanNot':
-                return $this->parseBooleanNot($expr);
-            case 'Expr_BinaryOp_Plus':
-                return $this->parseBinaryOpPlus($expr);
-            case 'Expr_BinaryOp_Div':
-                return $this->parseBinaryOpDiv($expr);
-            case 'Expr_BinaryOp_Smaller':
-                return $this->parseBinaryOpSmaller($expr);
-            case 'Expr_BinaryOp_SmallerOrEqual':
-                return $this->parseBinaryOpSmallerOrEqual($expr);
-            case 'Expr_BinaryOp_GreaterOrEqual':
-                return $this->parseBinaryOpGreaterOrEqual($expr);
-            case 'Expr_BinaryOp_Spaceship':
-                return $this->parseBinaryOpSpaceship($expr);
-            case 'Expr_BinaryOp_Coalesce':
-                return $this->parseBinaryOpCoalesce($expr);
-            case 'Expr_PreInc':
-                return $this->parsePreInc($expr);
-            case 'Expr_PostInc':
-                return $this->parsePostInc($expr);
-            case 'Expr_PreDec':
-                return $this->parsePreDec($expr);
-            case 'Expr_PostDec':
-                return $this->parsePostDec($expr);
-            case 'Expr_AssignOp_Plus':
-                return $this->parseAssignOpPlus($expr);
-            case 'Expr_AssignOp_Minus':
-                return $this->parseAssignOpMinus($expr);
-            case 'Expr_AssignOp_Mul':
-                return $this->parseAssignOpMul($expr);
-            case 'Expr_AssignOp_Div':
-                return $this->parseAssignOpDiv($expr);
-            case 'Expr_AssignOp_Mod':
-                return $this->parseAssignOpMod($expr);
-            case 'Expr_AssignOp_Concat':
-                return $this->parseAssignOpConcat($expr);
-            case 'Expr_AssignOp_ShiftLeft':
-                return $this->parseAssignOpShiftLeft($expr);
-            case 'Expr_AssignOp_ShiftRight':
-                return $this->parseAssignOpShiftRight($expr);
-            case 'Expr_AssignOp_BitwiseAnd':
-                return $this->parseAssignOpBitwiseAnd($expr);
-            case 'Expr_AssignOp_BitwiseOr':
-                return $this->parseAssignOpBitwiseOr($expr);
-            case 'Expr_AssignOp_BitwiseXor':
-                return $this->parseAssignOpBitwiseXor($expr);
-            case 'Expr_AssignOp_Pow':
-                return $this->parseAssignOpPow($expr);
-            case 'Expr_AssignOp_Coalesce':
-                return $this->parseAssignOpCoalesce($expr);
-            case 'Expr_BinaryOp_Mul':
-                return $this->parseBinaryOpMul($expr);
-            case 'Expr_BinaryOp_Concat':
-                return $this->parseBinaryOpConcat($expr);
-            case 'Expr_BinaryOp_Greater':
-                return $this->parseBinaryOpGreater($expr);
-            case 'Expr_BinaryOp_LogicalAnd':
-            case 'Expr_BinaryOp_BooleanAnd':
-                return $this->parseBinaryOpLogicalAnd($expr);
-            case 'Expr_BinaryOp_LogicalOr':
-            case 'Expr_BinaryOp_BooleanOr':
-                return $this->parseBinaryOpLogicalOr($expr);
-            case 'Expr_BinaryOp_LogicalXor':
-                return $this->parseBinaryOpLogicalXor($expr);
-            case 'Expr_BinaryOp_Minus':
-                return $this->parseBinaryOpMinus($expr);
-            case 'Expr_Array':
-                return $this->parseArray($expr);
-            case 'Expr_ArrayDimFetch':
-                return $this->parseArrayDimFetch($expr);
-            case 'Expr_PropertyFetch':
-                return $this->parsePropertyFetch($expr);
-            case 'Expr_NullsafePropertyFetch':
-                return $this->parseNullsafePropertyFetch($expr);
-            case 'Expr_NullsafeMethodCall':
-                return $this->parseNullsafeMethodCall($expr);
-            case 'Expr_BinaryOp_ShiftLeft':
-                return $this->parseBinaryOpShiftLeft($expr);
-            case 'Expr_BinaryOp_ShiftRight':
-                return $this->parseBinaryOpShiftRight($expr);
-            case 'Expr_BinaryOp_BitwiseAnd':
-                return $this->parseBinaryOpBitwiseAnd($expr);
-            case 'Expr_BinaryOp_BitwiseOr':
-                return $this->parseBinaryOpBitwiseOr($expr);
-            case 'Expr_BinaryOp_BitwiseXor':
-                return $this->parseBinaryOpBitwiseXor($expr);
-            case 'Expr_BinaryOp_Pipe':
-                return $this->parsePipeOperator($expr);
-            case 'Expr_BitwiseNot':
-                return $this->parseBitwiseNot($expr);
-            case 'Expr_BinaryOp_Mod':
-                return $this->parseBinaryOpMod($expr);
-            case 'Expr_BinaryOp_Pow':
-                return $this->parseBinaryOpPow($expr);
-            case 'Expr_Ternary':
-                return $this->parseTernary($expr);
-            case 'Expr_Match':
-                return $this->parseMatch($expr);
-            case 'Expr_FuncCall':
-                return $this->parseFuncCall($expr);
-            case 'Expr_MethodCall':
-                return $this->parseMethodCall($expr);
-            case 'Expr_StaticCall':
-                return $this->parseStaticCall($expr);
-            case 'Expr_StaticPropertyFetch':
-                return $this->parseStaticPropertyFetch($expr);
-            case 'Expr_ClassConstFetch':
-                return $this->parseClassConstFetch($expr);
-            case 'Expr_Include':
-                return $this->parseInclude($expr);
-            case 'Expr_Eval':
-                return $this->parseEval($expr);
-            case 'Expr_New':
-                return $this->parseNew($expr);
-            case 'Expr_Clone':
-                return $this->parseClone($expr);
-            case 'Expr_Instanceof':
-                return $this->parseInstanceof($expr);
-            case 'Expr_Throw':
-                return $this->parseThrow($expr);
-            case 'Expr_ShellExec':
-                return $this->parseShellExec($expr);
-            case 'Expr_Closure':
-                return $this->parseClosure($expr);
-            case 'Expr_ArrowFunction':
-                return $this->parseArrowFunction($expr);
-            case 'Name_FullyQualified':
-                return $this->parseFullyQualifiedName($expr);
-            case 'Scalar_Int':
-            case 'Scalar_Float':
-            case 'Scalar_String':
-                return $this->parseIdentifier($expr);
-            case 'Expr_Variable':
-                $varName = $this->parseIdentifier($expr);
-                $this->requireVar($expr, $varName);
-                if ($this->isStdContainer($varName)) {
-                    return $varName . '_ref';
-                }
-                // $GLOBALS is an INDIRECT to &EG(symbol_table),
-                // whose refcount MUST NOT be directly manipulated.
-                // Use php::globalsArray() to create a separated copy.
-                if ($varName === 'GLOBALS') {
-                    return 'php::globalsArray()';
-                }
-                return $varName;
-            case 'Scalar_MagicConst_File':
-            case 'Scalar_MagicConst_Dir':
-            case 'Scalar_MagicConst_Line':
-            case 'Scalar_MagicConst_Function':
-            case 'Scalar_MagicConst_Method':
-            case 'Scalar_MagicConst_Class':
-            case 'Scalar_MagicConst_Trait':
-            case 'Scalar_MagicConst_Namespace':
-            case 'Scalar_MagicConst_Property':
-                return $this->parseMagicConst($expr);
-            case 'Scalar_InterpolatedString':
-                return $this->parseInterpolatedString($expr);
-            case 'Expr_Cast_Int':
-                return $this->parseCastInt($expr);
-            case 'Expr_Cast_Double':
-                return $this->parseCastDouble($expr);
-            case 'Expr_Cast_Bool':
-                return $this->parseCastBool($expr);
-            case 'Expr_Cast_String':
-                return $this->parseCastString($expr);
-            case 'Expr_Cast_Array':
-                return $this->parseCastArray($expr);
-            case 'Expr_Cast_Object':
-                return $this->parseCastObject($expr);
-            case 'Expr_Cast_Void':
-                return $this->parseCastVoid($expr);
-            case 'Expr_ConstFetch':
-                return $this->parseConstFetch($expr);
-            case 'Expr_UnaryMinus':
-                return $this->parseUnaryMinus($expr);
-            case 'Expr_UnaryPlus':
-                return $this->parseUnaryPlus($expr);
-            case 'InterpolatedStringPart':
-                return $this->parseInterpolatedStringPart($expr);
-            case 'Expr_ErrorSuppress':
-                return $this->parseErrorSuppress($expr);
-            case 'Expr_Exit':
-                return $this->parseExit($expr);
-            case 'Expr_Yield':
-                return $this->parseYieldExpr($expr);
-            case 'Expr_YieldFrom':
-                return $this->parseYieldFromExpr($expr);
-            default:
-                $this->unsupportedSyntax($expr);
-                break;
+        if ($expr instanceof Expr\Variable) {
+            $varName = $this->parseIdentifier($expr);
+            $this->requireVar($expr, $varName);
+            if ($this->isStdContainer($varName)) {
+                return $varName . '_ref';
+            }
+            // $GLOBALS is an INDIRECT to &EG(symbol_table), whose refcount
+            // MUST NOT be directly manipulated. Create a separated copy.
+            return $varName === 'GLOBALS' ? 'php::globalsArray()' : $varName;
         }
-        return '';
+
+        return match (true) {
+            $expr instanceof Expr\Isset_ => $this->parseIsset($expr),
+            $expr instanceof Expr\Empty_ => $this->parseEmpty($expr),
+            $expr instanceof Expr\Assign => $this->parseAssign($expr),
+            $expr instanceof Expr\AssignRef => $this->parseAssignRef($expr),
+            $expr instanceof Expr\Print_ => $this->parsePrint($expr),
+            $expr instanceof Expr\BinaryOp\Equal => $this->parseBinaryOpEqual($expr),
+            $expr instanceof Expr\BinaryOp\NotEqual => $this->parseBinaryOpNotEqual($expr),
+            $expr instanceof Expr\BinaryOp\Identical => $this->parseBinaryOpIdentical($expr),
+            $expr instanceof Expr\BinaryOp\NotIdentical => $this->parseBinaryOpNotIdentical($expr),
+            $expr instanceof Expr\BooleanNot => $this->parseBooleanNot($expr),
+            $expr instanceof Expr\BinaryOp\Plus => $this->parseBinaryOpPlus($expr),
+            $expr instanceof Expr\BinaryOp\Div => $this->parseBinaryOpDiv($expr),
+            $expr instanceof Expr\BinaryOp\Smaller => $this->parseBinaryOpSmaller($expr),
+            $expr instanceof Expr\BinaryOp\SmallerOrEqual => $this->parseBinaryOpSmallerOrEqual($expr),
+            $expr instanceof Expr\BinaryOp\GreaterOrEqual => $this->parseBinaryOpGreaterOrEqual($expr),
+            $expr instanceof Expr\BinaryOp\Spaceship => $this->parseBinaryOpSpaceship($expr),
+            $expr instanceof Expr\BinaryOp\Coalesce => $this->parseBinaryOpCoalesce($expr),
+            $expr instanceof Expr\PreInc => $this->parsePreInc($expr),
+            $expr instanceof Expr\PostInc => $this->parsePostInc($expr),
+            $expr instanceof Expr\PreDec => $this->parsePreDec($expr),
+            $expr instanceof Expr\PostDec => $this->parsePostDec($expr),
+            $expr instanceof Expr\AssignOp\Plus => $this->parseAssignOpPlus($expr),
+            $expr instanceof Expr\AssignOp\Minus => $this->parseAssignOpMinus($expr),
+            $expr instanceof Expr\AssignOp\Mul => $this->parseAssignOpMul($expr),
+            $expr instanceof Expr\AssignOp\Div => $this->parseAssignOpDiv($expr),
+            $expr instanceof Expr\AssignOp\Mod => $this->parseAssignOpMod($expr),
+            $expr instanceof Expr\AssignOp\Concat => $this->parseAssignOpConcat($expr),
+            $expr instanceof Expr\AssignOp\ShiftLeft => $this->parseAssignOpShiftLeft($expr),
+            $expr instanceof Expr\AssignOp\ShiftRight => $this->parseAssignOpShiftRight($expr),
+            $expr instanceof Expr\AssignOp\BitwiseAnd => $this->parseAssignOpBitwiseAnd($expr),
+            $expr instanceof Expr\AssignOp\BitwiseOr => $this->parseAssignOpBitwiseOr($expr),
+            $expr instanceof Expr\AssignOp\BitwiseXor => $this->parseAssignOpBitwiseXor($expr),
+            $expr instanceof Expr\AssignOp\Pow => $this->parseAssignOpPow($expr),
+            $expr instanceof Expr\AssignOp\Coalesce => $this->parseAssignOpCoalesce($expr),
+            $expr instanceof Expr\BinaryOp\Mul => $this->parseBinaryOpMul($expr),
+            $expr instanceof Expr\BinaryOp\Concat => $this->parseBinaryOpConcat($expr),
+            $expr instanceof Expr\BinaryOp\Greater => $this->parseBinaryOpGreater($expr),
+            $expr instanceof Expr\BinaryOp\LogicalAnd,
+            $expr instanceof Expr\BinaryOp\BooleanAnd => $this->parseBinaryOpLogicalAnd($expr),
+            $expr instanceof Expr\BinaryOp\LogicalOr,
+            $expr instanceof Expr\BinaryOp\BooleanOr => $this->parseBinaryOpLogicalOr($expr),
+            $expr instanceof Expr\BinaryOp\LogicalXor => $this->parseBinaryOpLogicalXor($expr),
+            $expr instanceof Expr\BinaryOp\Minus => $this->parseBinaryOpMinus($expr),
+            $expr instanceof Expr\Array_ => $this->parseArray($expr),
+            $expr instanceof Expr\ArrayDimFetch => $this->parseArrayDimFetch($expr),
+            $expr instanceof Expr\PropertyFetch => $this->parsePropertyFetch($expr),
+            $expr instanceof Expr\NullsafePropertyFetch => $this->parseNullsafePropertyFetch($expr),
+            $expr instanceof Expr\NullsafeMethodCall => $this->parseNullsafeMethodCall($expr),
+            $expr instanceof Expr\BinaryOp\ShiftLeft => $this->parseBinaryOpShiftLeft($expr),
+            $expr instanceof Expr\BinaryOp\ShiftRight => $this->parseBinaryOpShiftRight($expr),
+            $expr instanceof Expr\BinaryOp\BitwiseAnd => $this->parseBinaryOpBitwiseAnd($expr),
+            $expr instanceof Expr\BinaryOp\BitwiseOr => $this->parseBinaryOpBitwiseOr($expr),
+            $expr instanceof Expr\BinaryOp\BitwiseXor => $this->parseBinaryOpBitwiseXor($expr),
+            $expr instanceof Expr\BinaryOp\Pipe => $this->parsePipeOperator($expr),
+            $expr instanceof Expr\BitwiseNot => $this->parseBitwiseNot($expr),
+            $expr instanceof Expr\BinaryOp\Mod => $this->parseBinaryOpMod($expr),
+            $expr instanceof Expr\BinaryOp\Pow => $this->parseBinaryOpPow($expr),
+            $expr instanceof Expr\Ternary => $this->parseTernary($expr),
+            $expr instanceof Expr\Match_ => $this->parseMatch($expr),
+            $expr instanceof Expr\FuncCall => $this->parseFuncCall($expr),
+            $expr instanceof Expr\MethodCall => $this->parseMethodCall($expr),
+            $expr instanceof Expr\StaticCall => $this->parseStaticCall($expr),
+            $expr instanceof Expr\StaticPropertyFetch => $this->parseStaticPropertyFetch($expr),
+            $expr instanceof Expr\ClassConstFetch => $this->parseClassConstFetch($expr),
+            $expr instanceof Expr\Include_ => $this->parseInclude($expr),
+            $expr instanceof Expr\Eval_ => $this->parseEval($expr),
+            $expr instanceof Expr\New_ => $this->parseNew($expr),
+            $expr instanceof Expr\Clone_ => $this->parseClone($expr),
+            $expr instanceof Expr\Instanceof_ => $this->parseInstanceof($expr),
+            $expr instanceof Expr\Throw_ => $this->parseThrow($expr),
+            $expr instanceof Expr\ShellExec => $this->parseShellExec($expr),
+            $expr instanceof Expr\Closure => $this->parseClosure($expr),
+            $expr instanceof Expr\ArrowFunction => $this->parseArrowFunction($expr),
+            $expr instanceof Node\Name\FullyQualified => $this->parseFullyQualifiedName($expr),
+            $expr instanceof Node\Scalar\Int_,
+            $expr instanceof Node\Scalar\Float_,
+            $expr instanceof Node\Scalar\String_ => $this->parseIdentifier($expr),
+            $expr instanceof Node\Scalar\MagicConst => $this->parseMagicConst($expr),
+            $expr instanceof Node\Scalar\InterpolatedString => $this->parseInterpolatedString($expr),
+            $expr instanceof Expr\Cast\Int_ => $this->parseCastInt($expr),
+            $expr instanceof Expr\Cast\Double => $this->parseCastDouble($expr),
+            $expr instanceof Expr\Cast\Bool_ => $this->parseCastBool($expr),
+            $expr instanceof Expr\Cast\String_ => $this->parseCastString($expr),
+            $expr instanceof Expr\Cast\Array_ => $this->parseCastArray($expr),
+            $expr instanceof Expr\Cast\Object_ => $this->parseCastObject($expr),
+            $expr instanceof Expr\Cast\Void_ => $this->parseCastVoid($expr),
+            $expr instanceof Expr\ConstFetch => $this->parseConstFetch($expr),
+            $expr instanceof Expr\UnaryMinus => $this->parseUnaryMinus($expr),
+            $expr instanceof Expr\UnaryPlus => $this->parseUnaryPlus($expr),
+            $expr instanceof Node\InterpolatedStringPart => $this->parseInterpolatedStringPart($expr),
+            $expr instanceof Expr\ErrorSuppress => $this->parseErrorSuppress($expr),
+            $expr instanceof Expr\Exit_ => $this->parseExit($expr),
+            $expr instanceof Expr\Yield_ => $this->parseYieldExpr($expr),
+            $expr instanceof Expr\YieldFrom => $this->parseYieldFromExpr($expr),
+            default => $this->unsupportedSyntax($expr),
+        };
     }
 
     public function stop(string $string): never
@@ -1130,6 +1065,7 @@ class CompilerBase implements PropertyAccessContext
         $this->useAliases = [];
         $this->useFunctions = [];
         $this->useConstants = [];
+        $this->useImportAliases = [];
         $this->namespace = '';
     }
 
@@ -1195,12 +1131,12 @@ class CompilerBase implements PropertyAccessContext
         // evaluated for side effects and then coerced from null.
     }
 
-    protected function isVoidValueExpr(NodeAbstract $expr): bool
+    protected function isVoidValueExpr(Node $expr): bool
     {
         return $this->detectTypeOfExpr($expr) === Type::VOID;
     }
 
-    protected function wrapVoidExprAsNull(NodeAbstract $expr, string $exprCode): string
+    protected function wrapVoidExprAsNull(Node $expr, string $exprCode): string
     {
         if (!$this->isVoidValueExpr($expr)) {
             return $exprCode;
@@ -1209,7 +1145,7 @@ class CompilerBase implements PropertyAccessContext
         return '((void) (' . $exprCode . '), ' . self::VALUE_NULL . ')';
     }
 
-    protected function parseExprAsValue(NodeAbstract $expr): string
+    protected function parseExprAsValue(Node $expr): string
     {
         if ($expr instanceof Expr\Cast\Void_) {
             return $this->parseExpr($expr);
@@ -1277,8 +1213,10 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * 判断类的符号指针是否在 PHP 模块生命周期内稳定（MINIT 注册，跨请求缓存安全）。
-     * 编译产物（本单元编译的类/接口）与 PHP 内置类/接口均满足条件。
+     * Determine whether a class's symbol pointer is stable across the PHP
+     * module lifetime (registered at MINIT, safe to cache across requests).
+     * Compiled output (classes/interfaces compiled in this unit) and PHP
+     * built-in classes/interfaces both satisfy this condition.
      */
     protected function isProcessStableClass(string $className): bool
     {
@@ -1290,8 +1228,9 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * 判断函数/方法符号指针是否在 PHP 模块生命周期内稳定。
-     * `Class::method` 形式的 key 以其所属类的稳定性为准。
+     * Determine whether a function/method symbol pointer is stable across the
+     * PHP module lifetime. For a `Class::method` key, stability is determined
+     * by the class it belongs to.
      */
     protected function isProcessStableFunction(string $funcName): bool
     {
@@ -1345,13 +1284,15 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * @param string $className 必须是带有命名空间的完整类名
+     * @param string $className Must be a fully-qualified class name (with namespace).
      *
-     * 注意：不存在与用户定义类对应的动态 propMap（区别于 classMap/funcMap）。
-     * 属性 offset 缓存的前提是编译期能解析出声明属性（PropertyAccessResolver
-     * 只接受编译类的 ClassDef 或内置类的反射声明属性），用户类在编译期不可见，
-     * 其属性访问一律走 `.attr(name)` 字符串路径，因此所有条目必然进程级稳定，
-     * 全部进入 persistentPropMap。
+     * Note: there is no dynamic propMap for user-defined classes (unlike
+     * classMap/funcMap). The property-offset cache assumes declared properties
+     * can be resolved at compile time (PropertyAccessResolver only accepts a
+     * compiled ClassDef or the reflected declared properties of a built-in
+     * class). User classes are not visible at compile time, so their property
+     * accesses always go through the `.attr(name)` string path. As a result,
+     * every entry is necessarily process-stable and goes into persistentPropMap.
      */
     protected function getPropertyId(string $className, string $propName): int
     {
@@ -1363,6 +1304,27 @@ class CompilerBase implements PropertyAccessContext
         $id = $this->persistentPropIndex++;
         $this->persistentPropMap[$key] = $id;
         return $id;
+    }
+
+    protected function getPropertyAccessCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'property access cache ID allocation');
+        $id = $this->propertyAccessCacheIndex++;
+        return 'get_property_cache(PropertyCacheId{' . $id . '})';
+    }
+
+    protected function getMethodCallCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'method call cache ID allocation');
+        $id = $this->methodCallCacheIndex++;
+        return 'typephp_get_method_call_cache(MethodCallCacheId{' . $id . '})';
+    }
+
+    protected function getFunctionCallCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'function call cache ID allocation');
+        $id = $this->functionCallCacheIndex++;
+        return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
     }
 
     protected function getClassEntryPtr(string $className): string
@@ -1563,11 +1525,22 @@ class CompilerBase implements PropertyAccessContext
     protected function parseImplements(array $implements): array
     {
         $list = [];
+        $seen = [];
         foreach ($implements as $implement) {
             $interfaceName = $this->getNamespacedClassName($this->parseIdentifier($implement));
+            $interfaceNameLower = strtolower($interfaceName);
+            if (isset($seen[$interfaceNameLower])) {
+                $kind = $this->classDef?->enum ? 'Enum' : 'Class';
+                $className = $this->classDef?->getNamespacedName(false) ?? $this->class;
+                $this->fatalError(
+                    $implement,
+                    "{$kind} {$className} cannot implement previously implemented interface {$interfaceName}",
+                );
+            }
+            $seen[$interfaceNameLower] = true;
             $list[] = $interfaceName;
             if (!$this->isInternalInterface($interfaceName)) {
-                $this->symbolCallInFile[$this->file][] = strtolower($interfaceName);
+                $this->symbolCallInFile[$this->file][] = $interfaceNameLower;
             }
         }
         return $list;
@@ -1614,33 +1587,32 @@ class CompilerBase implements PropertyAccessContext
         return false;
     }
 
-    protected function parseIdentifier(NodeAbstract $expr): string
+    protected function parseIdentifier(Node $expr): string
     {
-        $type = $expr->getType();
-        switch ($type) {
-            case 'Expr_Variable':
-                return $this->parseVariable($expr);
-            case 'Name_FullyQualified':
-                return '\\' . $expr->name;
-            case 'Name':
-            case 'VarLikeIdentifier':
-            case 'Identifier':
-                return $expr->name;
-            case 'Scalar_Int':
-            case 'Scalar_Float':
-            case 'Scalar_String':
-                return $this->parseScalar($expr);
-            case 'Expr_ConstFetch':
-                return $this->parseConstFetch($expr);
-            case 'Expr_Assign':
-            case 'Expr_AssignRef':
-                if (!$this->isVarExpr($expr->var) && !$this->isPropertyFetch($expr->var) && !$this->isArrayDimFetch($expr->var)) {
-                    $this->fatalError($expr, 'When an assignment expression serves as an rvalue, it must be an assignment of a variable, property, or array element');
-                }
-                return $this->parseExprAsValue($expr);
-            default:
-                return $this->parseExprAsValue($expr);
+        if ($expr instanceof Variable) {
+            return $this->parseVariable($expr);
         }
+        if ($expr instanceof Node\Name\FullyQualified) {
+            return '\\' . $expr->toString();
+        }
+        if ($expr instanceof Node\Name || $expr instanceof Node\VarLikeIdentifier || $expr instanceof Node\Identifier) {
+            return $expr->toString();
+        }
+        if ($expr instanceof Node\Scalar\Int_
+            || $expr instanceof Node\Scalar\Float_
+            || $expr instanceof Node\Scalar\String_
+        ) {
+            return $this->parseScalar($expr);
+        }
+        if ($expr instanceof Expr\ConstFetch) {
+            return $this->parseConstFetch($expr);
+        }
+        if ($expr instanceof Expr\Assign || $expr instanceof Expr\AssignRef) {
+            if (!$this->isVarExpr($expr->var) && !$this->isPropertyFetch($expr->var) && !$this->isArrayDimFetch($expr->var)) {
+                $this->fatalError($expr, 'When an assignment expression serves as an rvalue, it must be an assignment of a variable, property, or array element');
+            }
+        }
+        return $this->parseExprAsValue($expr);
     }
 
     protected function parseParamDefaultValue(?NodeAbstract $default): ?string
@@ -1650,10 +1622,12 @@ class CompilerBase implements PropertyAccessContext
         }
         return $this->withoutLocalClassEntryHoisting(function () use ($default): string {
             /*
-             * 函数参数默认值只能为字面量，无法使用表达式获取值。
-             * 但 PHP 自 5.6 起支持在默认参数值中使用常量表达式，包括
-             * 类常量（self::FOO、ClassName::BAR、\Full\Class::BAZ），
-             * 编译器需要在编译期将其折叠为对应的字面量。
+             * Function parameter default values may only be literals; they
+             * cannot be obtained through an expression. Since PHP 5.6, however,
+             * constant expressions are allowed in default parameter values,
+             * including class constants (self::FOO, ClassName::BAR,
+             * \Full\Class::BAZ). The compiler must fold these into the
+             * corresponding literal at compile time.
              *
              * PHP 8.1 also permits `new` in selected default-value contexts.
              * These expressions are emitted into standalone helper functions,
@@ -1680,8 +1654,9 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * 在 for/foreach 等包含子语句的语句，之前检查当前待添加的代码是否为空，
-     * 如果不为空，需要将语句追加到 {} 作用域符号之前.
+     * For statements containing sub-statements (for/foreach, etc.), check
+     * whether the currently pending code is empty. If not, the pending
+     * statements must be emitted before the opening `{` scope brace.
      */
     protected function parseBeforeStmtLines(): string
     {
@@ -1782,6 +1757,8 @@ class CompilerBase implements PropertyAccessContext
         $lines     = [];
         $inLoopTop = $this->context->inLoop;
         $inContinuableLoopTop = $this->context->inContinuableLoop;
+        $breakableIsSwitchTop = $this->context->breakableIsSwitch;
+        $breakableDepthTop = $this->context->breakableDepth;
         $last = array_key_last($stmts);
         foreach ($stmts as $i => $v) {
             $class                 = $v->getType();
@@ -1813,37 +1790,37 @@ class CompilerBase implements PropertyAccessContext
                     $result = $this->parseReturn($v);
                     break;
                 case 'Stmt_For':
-                    $this->context->inLoop = true;
-                    $this->context->inContinuableLoop = true;
-                    $result       = $this->parseFor($v);
-                    $this->context->inLoop = $inLoopTop;
-                    $this->context->inContinuableLoop = $inContinuableLoopTop;
-                    break;
                 case 'Stmt_Foreach':
-                    $this->context->inLoop = true;
-                    $this->context->inContinuableLoop = true;
-                    $result       = $this->parseForeach($v);
-                    $this->context->inLoop = $inLoopTop;
-                    $this->context->inContinuableLoop = $inContinuableLoopTop;
-                    break;
                 case 'Stmt_Switch':
-                    $this->context->inLoop = true;
-                    $result       = $this->parseSwitch($v);
-                    $this->context->inLoop = $inLoopTop;
-                    break;
                 case 'Stmt_While':
-                    $this->context->inLoop = true;
-                    $this->context->inContinuableLoop = true;
-                    $result       = $this->parseWhile($v);
-                    $this->context->inLoop = $inLoopTop;
-                    $this->context->inContinuableLoop = $inContinuableLoopTop;
-                    break;
                 case 'Stmt_Do':
+                    $isSwitch = $class === 'Stmt_Switch';
                     $this->context->inLoop = true;
-                    $this->context->inContinuableLoop = true;
-                    $result       = $this->parseDo($v);
+                    if (!$isSwitch) {
+                        $this->context->inContinuableLoop = true;
+                    }
+                    $this->context->breakableIsSwitch = $isSwitch;
+                    $this->context->breakableDepth = $breakableDepthTop + 1;
+                    $result = match ($class) {
+                        'Stmt_For' => $this->parseFor($v),
+                        'Stmt_Foreach' => $this->parseForeach($v),
+                        'Stmt_Switch' => $this->parseSwitch($v),
+                        'Stmt_While' => $this->parseWhile($v),
+                        default => $this->parseDo($v),
+                    };
                     $this->context->inLoop = $inLoopTop;
                     $this->context->inContinuableLoop = $inContinuableLoopTop;
+                    $this->context->breakableIsSwitch = $breakableIsSwitchTop;
+                    $this->context->breakableDepth = $breakableDepthTop;
+                    // A multi-level break/continue exits the nested construct
+                    // with its countdown flag still set. The propagation check
+                    // must run before any trailing statement of this body.
+                    if ($inLoopTop) {
+                        $flagCheck = $this->genMultiLevelJumpCheck($breakableIsSwitchTop);
+                        if ($flagCheck !== '') {
+                            $result = rtrim($result, "\r\n") . PHP_EOL . $flagCheck;
+                        }
+                    }
                     break;
                 case 'Stmt_If':
                     $result = $this->parseIf($v);
@@ -2007,7 +1984,7 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * 尽可能转为数字，优先级 浮点 > 整数 > 字符串.
+     * Convert to a number whenever possible, with priority float > integer > string.
      */
     protected function parseNumericIdentifier(NodeAbstract $expr): string
     {
@@ -2095,7 +2072,7 @@ class CompilerBase implements PropertyAccessContext
                 if ($this->classDef?->nativeObject) {
                     $this->fatalError($expr, 'Native classes do not support `new static()`');
                 }
-                // 无法在编译期获得 static 类的准确类名
+                // The exact class name of a `static` class cannot be obtained at compile time.
                 return '';
             } else {
                 return $this->getNamespacedClassName($class);
@@ -2197,10 +2174,10 @@ class CompilerBase implements PropertyAccessContext
 
     protected function detectDeclaredClassOfExpr(NodeAbstract $expr): string
     {
-        // 对象表达式有两类类型信息：
-        // 1. detectClassOfExpr() 返回“实际可推断的类”，例如 new Foo()、typed object 变量；
-        // 2. getDeclaredObjectType() 返回变量声明/首次赋值记录的 declared type，可能是接口或抽象类。
-        // 参数和属性赋值检查需要先使用实际类；实际类不可知时才退回 declared type。
+        // Object expressions carry two kinds of type information:
+        // 1. detectClassOfExpr() returns the "actually inferable class", e.g. new Foo() or a typed object variable;
+        // 2. getDeclaredObjectType() returns the declared type recorded at declaration/first assignment, which may be an interface or abstract class.
+        // Parameter and property-assignment checks prefer the actual class, falling back to the declared type only when the actual class is unknown.
         $class = $this->detectClassOfExpr($expr);
         if ($class !== '') {
             return $class;
@@ -2213,13 +2190,22 @@ class CompilerBase implements PropertyAccessContext
 
     protected function isObjectClassStaticallyAssignableTo(string $class, string $expected): bool
     {
-        // 这个函数只回答“编译器在静态阶段能否证明 $class is-a $expected”。
-        // 这里禁止使用 class_exists()/interface_exists()/is_a() 去查询当前运行编译器的 PHP 进程：
-        // - 编译器进程已加载的 Composer/工具类，不等价于被编译项目运行时可用的类；
-        // - 自举编译时还会把编译器自身依赖的外部库误判为项目静态类；
-        // - AOT 的静态判断必须只依赖 hasClass()/hasInterface() 记录的项目类图，或明确的内置类/接口。
-        // 如果类不属于这些集合，说明它是动态类/外部库类，不能在这里静态判定，应返回 false，
-        // 由调用处决定是延迟到运行时 php::toObject()/TypeCheck，还是因为确定 concrete mismatch 而 fatal。
+        // This function only answers "can the compiler prove at the static
+        // stage that $class is-a $expected". It must not use
+        // class_exists()/interface_exists()/is_a() to query the PHP process
+        // currently running the compiler:
+        // - Composer/tool classes already loaded in the compiler process are not
+        //   equivalent to classes available at runtime for the compiled project;
+        // - during bootstrapping, the compiler's own external dependencies would
+        //   be mistaken for the project's static classes;
+        // - AOT static analysis must rely only on the project class graph
+        //   recorded by hasClass()/hasInterface(), or on explicitly built-in
+        //   classes/interfaces.
+        // If a class is not in one of these sets, it is a dynamic / external
+        // library class and cannot be statically determined here. Return false
+        // and let the caller decide whether to defer to runtime
+        // php::toObject()/TypeCheck, or to fail fatally because of a
+        // determined concrete mismatch.
         $class = ltrim($class, '\\');
         $expected = ltrim($expected, '\\');
         if (strcasecmp($class, $expected) === 0) {
@@ -2239,10 +2225,13 @@ class CompilerBase implements PropertyAccessContext
 
     protected function isKnownConcreteObjectExpr(NodeAbstract $expr, string $class): bool
     {
-        // “已知 concrete object” 的要求比“表达式写着 new SomeClass”更严格：
-        // 只有 AOT 项目类图中的类或内置类，编译器才能在静态阶段确认其继承关系。
-        // 外部库类即使出现在 new 表达式中，也不能用当前编译器进程的反射信息判定，
-        // 否则会把编译器/Composer 运行环境泄漏进被编译项目的类型系统。
+        // "Known concrete object" is stricter than "the expression literally
+        // says new SomeClass": only classes in the AOT project class graph or
+        // built-in classes allow the compiler to confirm inheritance at the
+        // static stage. Even if an external library class appears in a new
+        // expression, it cannot be determined using the reflection info of the
+        // current compiler process; doing so would leak the compiler/Composer
+        // runtime environment into the type system of the compiled project.
         if ($class === '' || $this->isInterface($class) || $this->isAbstractClass($class)) {
             return false;
         }
@@ -2483,8 +2472,17 @@ class CompilerBase implements PropertyAccessContext
             $lines[] = 'return ' . $tuple . ';';
             return implode(PHP_EOL . $this->getIndent(), $lines);
         }
-        // 实际函数的返回值
+        // The return value of the actual function.
         $type = $this->detectTypeOfExpr($v->expr);
+        // In ordinary PHP mode, int +/−/* int is only conditionally an int:
+        // runtime overflow promotes the result to float. Keep the Variant
+        // representation through the return boundary so a declared scalar
+        // return type observes and rejects that float exactly as PHP does.
+        // `use native_types` intentionally opts into native C++ arithmetic
+        // semantics and is therefore excluded from this check.
+        if (!$this->nativeTypes && $type === Type::INT && $this->exprCanOverflowInt($v->expr)) {
+            $type = Type::VAR;
+        }
         $nativeExpressionClass = $this->detectClassOfExpr($v->expr);
         if ($this->context->inClosure && $this->isNativeObjectClass($nativeExpressionClass)) {
             $this->fatalError($v, 'Zend closures cannot return native objects');
@@ -2572,7 +2570,7 @@ class CompilerBase implements PropertyAccessContext
         $expr = $this->parseExprAsValue($v->expr);
         $returnType = $this->getReturnType();
 
-        // 匿名函数的返回值一定是 var
+        // The return value of an anonymous function is always var.
         if (!$this->context->inClosure) {
             if ($returnType === Type::VOID) {
                 $this->fatalError($v, 'The return type is void, cannot return any value');
@@ -2595,7 +2593,7 @@ class CompilerBase implements PropertyAccessContext
         }
 
         $returnObjectCheckClass = '';
-        // 返回值的表达式是一个类的对象
+        // The return-value expression is an instance of a class.
         $objectClass = $this->detectDeclaredClassOfExpr($v->expr);
         $returnClass = $this->context->inClosure ? '' : $this->getReturnClass();
         if ($returnClass) {
@@ -2621,13 +2619,17 @@ class CompilerBase implements PropertyAccessContext
             [$code, $tmpVar] = $this->genUnionCheckedReturnAssignment($exprCode);
             $this->context->afterStmtLines[] = $this->getIndent() . 'return ' . $tmpVar . ';';
         } elseif (!$this->isVarExpr($v->expr) and !$this->isScalar($v->expr)) {
-            // return 如果使用了 Indirect 语句，可能会导致变量提前析构，出现悬空指针
-            // 将 Indirect 赋值给临时变量后，使用 Ctor::Copy 解除了 Indirect，保证内存安全
+            // If return uses an Indirect statement, the variable may be
+            // destructed early, producing a dangling pointer. Assign the
+            // Indirect to a temporary variable; Ctor::Copy releases the
+            // Indirect, guaranteeing memory safety.
             $tmpVar = $this->genTmpVarName();
-            // 必须提前声明变量，否则在末尾声明并 return 可能会被 gcc 优化掉
+            // The variable must be declared up front; otherwise declaring it at
+            // the end and returning it could be optimized away by gcc.
             $this->addLocalVar($tmpVar, $returnType);
             $code = $tmpVar . ' = (' . $exprCode . ');' . PHP_EOL;
-            // 解析表达式后可能会插入语句，因此需要在末尾添加 return 语句，而不是直接返回
+            // Parsing the expression may insert statements, so the return
+            // statement must be appended at the end rather than returned directly.
             $this->context->afterStmtLines[] = $this->getIndent() . 'return ' . $tmpVar . ';';
         } else {
             $code = 'return ' . $exprCode . ';';
@@ -2799,7 +2801,8 @@ class CompilerBase implements PropertyAccessContext
 
         $classDef = $this->getClass($class);
         $methodDef = null;
-        // 递归查找，若子类中未定义方法，则尝试查找父类是否存在此方法
+        // Search recursively: if the method is not defined in the child class,
+        // try to find it in the parent class.
         while (true) {
             if (!$classDef->hasMethod($method)) {
                 if (!$classDef->extends) {
@@ -2827,7 +2830,7 @@ class CompilerBase implements PropertyAccessContext
         if (!$this->checkAccessible($classDef, $methodDef->flags)) {
             $this->fatalError($expr, 'Method `' . $classDef->getNamespacedName() . '::' . $method . '()` is not accessible');
         }
-        // 函数调用占位符，不是真实的函数调用
+        // A function-call placeholder, not a real function call.
         if (count($expr->args) === 1 and $this->isPlaceholderExpr($expr->args[0])) {
             return false;
         }
@@ -2851,7 +2854,8 @@ class CompilerBase implements PropertyAccessContext
         $classDef = $this->getClass($class);
         $originClassDef = $classDef;
         $constDef = null;
-        // 递归查找，若子类中未定义方法，则尝试查找父类是否存在此方法
+        // Search recursively: if the constant is not defined in the child class,
+        // try to find it in the parent class.
         while (true) {
             if (!$classDef->hasConstant($const)) {
                 if (!$classDef->extends) {
@@ -3091,6 +3095,13 @@ class CompilerBase implements PropertyAccessContext
                         $evaluation = $this->evaluateConstantIntArithmetic($expr->left, $expr->right, $op);
                         if ($evaluation !== null && is_float($evaluation['result'])) {
                             return Type::FLOAT;
+                        }
+                        // Runtime integer division has a value-dependent PHP
+                        // result: exact quotients are int, fractional quotients
+                        // and PHP_INT_MIN / -1 are float. Keep it boxed when the
+                        // operands are not compile-time constants.
+                        if ($exprType === 'Expr_BinaryOp_Div' && $evaluation === null) {
+                            return Type::VAR;
                         }
                     }
                 }
@@ -3355,17 +3366,23 @@ class CompilerBase implements PropertyAccessContext
         if ($type === Type::BIGINT || $type === Type::DECIMAL || $type === Type::BIGFLOAT) {
             $this->fatalError($expr, 'Cannot use ++ on ' . $type . '. Use += 1 instead (Big* types are immutable).');
         }
-        $result = '++' . $this->parseWritableIdentifier($expr->var);
-        return $result;
+        $var = $this->parseWritableIdentifier($expr->var);
+        if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
+            $this->errorUndefinedVariable($expr->var);
+        }
+        return '++' . $var;
     }
 
     /**
-     * $GLOBALS['var'] 等价于 global $var; $var ，将字符串常量转为变量名称即可
-     * 仅限于字面量字符串可以转为变量名称，其他则使用 php::global() 函数获取
+     * Resolve a PHP function name to its native (compiled) name by trying
+     * every candidate form: absolute names, qualified names resolved through
+     * the class/namespace import table, unqualified names in the current
+     * namespace, and `use function` imports. Returns false when no compiled
+     * function matches.
      */
     protected function findNativeFunction(string $funcName): string|false
     {
-        // 绝对命名空间的函数
+        // Absolutely-qualified function name.
         if ($funcName[0] == '\\') {
             $funcName = ltrim($funcName, '\\');
             $possibleFunctionNames = [$this->escapeName($funcName)];
@@ -3791,8 +3808,11 @@ class CompilerBase implements PropertyAccessContext
         if ($type === Type::BIGINT || $type === Type::DECIMAL || $type === Type::BIGFLOAT) {
             $this->fatalError($expr, 'Cannot use -- on ' . $type . '. Use -= 1 instead (Big* types are immutable).');
         }
-        $result = '--' . $this->parseWritableIdentifier($expr->var);
-        return $result;
+        $var = $this->parseWritableIdentifier($expr->var);
+        if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
+            $this->errorUndefinedVariable($expr->var);
+        }
+        return '--' . $var;
     }
 
     protected function parsePrint(Expr\Print_ $expr): string
@@ -3843,13 +3863,14 @@ class CompilerBase implements PropertyAccessContext
             $this->assertNotNativeObjectDynamicClassTarget($expr->class, $expr);
         }
         $ctorClassName = '';
-        // 匿名类
+        // Anonymous class.
         if ($expr->class instanceof Node\Stmt\Class_) {
             if ($expr->class->name === null) {
                 $classDef = $expr->class;
                 $className = $this->genAnonClassName();
                 $classDef->name = new Node\Identifier($className);
-                // 继承父类和接口可能是 use 的名称，需要转换成全限定名称
+                // The inherited parent class and interfaces may be `use` names
+                // and need to be converted to fully-qualified names.
                 if ($classDef->extends !== null) {
                     $parentClass = $this->getNamespacedClassName($this->parseIdentifier($classDef->extends));
                     $classDef->extends = new Node\Name\FullyQualified($parentClass);
@@ -3861,7 +3882,9 @@ class CompilerBase implements PropertyAccessContext
                     }
                 }
                 $this->flattenEmbeddedClassTraits($classDef);
-                // 匿名类由根命名空间中的 eval 定义，内部导入的符号必须转为全限定名称。
+                // Anonymous classes are defined by eval in the root namespace,
+                // so symbols imported inside them must be converted to
+                // fully-qualified names.
                 $this->resolveAnonClassNames($classDef);
                 $this->context->beforeStmtLines[] = 'static THREAD_LOCAL bool ' . $className . '_defined = false;';
                 $classCode = $this->genEmbeddedCode($classDef);
@@ -4228,7 +4251,7 @@ class CompilerBase implements PropertyAccessContext
     protected function parseEval(Expr\Eval_ $expr): string
     {
         $this->assertExprCanBeUsedAsValue($expr->expr, 'eval operand');
-        // 对 eval() 指令的 PHP 代码段禁止字面量优化
+        // Disable literal-string optimization for the PHP code passed to eval().
         $expr->expr->setAttribute('noLiteralString', true);
         $source = $this->isNativeObjectClass($this->detectClassOfExpr($expr->expr))
             ? $this->parseExprToString($expr->expr)
@@ -4286,18 +4309,7 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parseScalarFloat(Node\Scalar\Float_ $expr): string
     {
-        $value = $expr->value;
-
-        if (is_nan($value)) {
-            return self::VALUE_NAN;
-        }
-        if (is_infinite($value)) {
-            return $value > 0 ? self::VALUE_INF : '-' . self::VALUE_INF;
-        }
-        if (floor($value) == $value && abs($value) < 1e15) {
-            return number_format($value, 1, '.', '');
-        }
-        return sprintf('%.' . $this->floatPrecision . 'g', $value);
+        return $this->genFloatLiteral($expr->value);
     }
 
     protected function parseIsset(Expr\Isset_ $expr): string
@@ -4323,7 +4335,8 @@ class CompilerBase implements PropertyAccessContext
     }
 
     /**
-     * 左值只能为变量、数组、对象属性、对象静态属性
+     * The left value may only be a variable, array element, object property,
+     * or class static property.
      */
     protected function checkLeftValue(NodeAbstract $expr): void
     {
@@ -4366,7 +4379,8 @@ class CompilerBase implements PropertyAccessContext
                 return $nativePresence;
             }
         }
-        // TypePHP 编译器不允许操作未定义的变量，PHP 的 isset($var) 可能 $var 未定义
+        // The TypePHP compiler disallows operating on undefined variables;
+        // in PHP, isset($var) may be used with an undefined $var.
         $this->checkVarMustExist($node, $this->parseIdentifier($node));
         $fn = $this->getChainedFunc($op);
         $expr = $node;
@@ -4385,7 +4399,7 @@ class CompilerBase implements PropertyAccessContext
             // $getValue is true: fall through to use the chain+result mechanism,
             // which ensures the result type is TYPE_VAR (compatible with ternaries).
         }
-        // 单属性读取（非链式）
+        // Single property read (non-chained).
         if ($this->isPropertyFetch($expr) and $this->isVarExpr($expr->var) and $this->isIdExpr($expr->name)) {
             $prop = $this->parsePropertyFetch($expr);
             if ($this->isNativePropertyAccess($expr)) {
@@ -4455,7 +4469,8 @@ class CompilerBase implements PropertyAccessContext
             $node->setAttribute('chainOpResult', $result);
             return $fn . '(' . $var . ', {' . implode(', ', $list) . '}, ' . $result . ')';
         } else {
-            // toReference(var, {}) 返回空引用，空链时改用成员函数形式
+            // toReference(var, {}) returns an empty reference; use the member
+            // function form instead when the chain is empty.
             if ($op === self::OP_REFVAL && empty($list)) {
                 return $var . '.toReference()';
             }
@@ -4634,7 +4649,7 @@ class CompilerBase implements PropertyAccessContext
         return array_key_exists($name, $this->context->staticVars);
     }
 
-    protected function parseCastDouble(mixed $expr): string
+    protected function parseCastDouble(Expr\Cast\Double $expr): string
     {
         $this->assertExprCanBeUsedAsValue($expr->expr, 'cast operand');
         $native = $this->parseNativeObjectExplicitConversion($expr->expr, 'toFloat');
@@ -4687,7 +4702,7 @@ class CompilerBase implements PropertyAccessContext
             return $id;
         }
         if ($id === 'self') {
-            $id = $this->getNamespacedClassName($this->class);
+            $id = $this->getFullClassName();
         } elseif ($id === 'static') {
             return Symbol::getCalledClass();
         }
@@ -4938,19 +4953,20 @@ class CompilerBase implements PropertyAccessContext
         if ($toType === Type::VAR or $fromType === Type::VAR) {
             return true;
         }
-        // 引用当前没有类型信息，按照 var 处理
+        // References currently carry no type information, so treat them as var.
         if ($toType === Type::REF or $fromType === Type::REF) {
             return true;
         }
-        // 类型一致，可以互相赋值
+        // Types are identical, so they can be assigned to each other.
         if ($toType === $fromType) {
             return true;
         }
-        // 原生类型可以互相转换，由 C++ 底层完成
+        // Native types can be converted between each other, handled by the C++ layer.
         if ($this->isNativeType($toType) and $this->isNativeType($fromType)) {
             return true;
         }
-        // BigInt/BigFloat/Decimal 与原生类型之间可能发生隐式转换，允许重新赋值
+        // Implicit conversions between BigInt/BigFloat/Decimal and native types
+        // are possible, so re-assignment is allowed.
         $bigTypes = [Type::BIGINT, Type::DECIMAL, Type::BIGFLOAT];
         if (in_array($toType, $bigTypes, true) or in_array($fromType, $bigTypes, true)) {
             return true;
@@ -4995,12 +5011,12 @@ class CompilerBase implements PropertyAccessContext
                 $scopeClassDef = $this->getClass($this->functionDef->attributeFactoryScope);
             }
         }
-        // 私有方法，只能当前的类使用
+        // Private methods can only be used by the current class.
         if ($flags & Modifiers::PRIVATE) {
             return $scopeClassDef !== null
                 && $this->isSameClassName($declaringClass, $scopeClassDef->getNamespacedName(false));
         }
-        // 保护方法，只能当前类和子类使用
+        // Protected methods can only be used by the current class and its subclasses.
         if ($flags & Modifiers::PROTECTED) {
             if (!$scopeClassDef) {
                 return false;
@@ -5010,12 +5026,14 @@ class CompilerBase implements PropertyAccessContext
                 $declaringClass
             );
         }
-        // 类外部调用，只允许调用 public 方法
+        // Calls from outside the class are only allowed for public methods.
         return true;
     }
 
     /**
-     * 沿继承链查找实际调用的构造函数，包括项目类继承的内部类构造函数。
+     * Walk the inheritance chain to find the constructor that is actually
+     * invoked, including constructors of internal classes inherited by project
+     * classes.
      *
      * @return array{className: string, flags: int}|null
      */

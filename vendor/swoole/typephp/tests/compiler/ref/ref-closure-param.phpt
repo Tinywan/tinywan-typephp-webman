@@ -1,21 +1,10 @@
 --TEST--
 closure function with ref parameter
---SKIPIF--
-<?php die('skip'); ?>
 --FILE--
 <?php
-//function main()
-//{
-//    $s = "foo";
-//    $testFn = function (&$data) {
-//        $data .= " bar";
-//    };
-//    $testFn($s);
-//    var_dump($s);
-//}
 function main()
 {
-    $testFn = function (&$data) {
+    $testFn = function (&$data, $key) {
         $data .= " (_)";
     };
     $sweet = array('a' => 'apple', 'b' => 'banana');
@@ -26,4 +15,14 @@ function main()
 }
 ?>
 --EXPECT--
-string(7) "foo bar"
+array(2) {
+  ["sweet"]=>
+  array(2) {
+    ["a"]=>
+    string(9) "apple (_)"
+    ["b"]=>
+    string(10) "banana (_)"
+  }
+  ["sour"]=>
+  string(9) "lemon (_)"
+}

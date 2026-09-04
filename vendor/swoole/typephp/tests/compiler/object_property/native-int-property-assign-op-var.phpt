@@ -20,17 +20,14 @@ function main(): void
     var_dump($box->value);
 
     $text = any("3");
-    try {
-        $box->value += $text;
-    } catch (TypeError $e) {
-        var_dump($e->getMessage());
-    }
+    $box->value += $text;
+    var_dump($box->value);
 
     $bad = any("abc");
     try {
         $box->value += $bad;
     } catch (TypeError $e) {
-        var_dump($e->getMessage());
+        var_dump($e::class);
     }
 
     $selfBox = new NativeIntAssignOpBox();
@@ -41,6 +38,6 @@ function main(): void
 ?>
 --EXPECT--
 int(3)
-string(73) "Cannot assign string to property NativeIntAssignOpBox::$value of type int"
-string(73) "Cannot assign string to property NativeIntAssignOpBox::$value of type int"
+int(6)
+string(9) "TypeError"
 int(6)

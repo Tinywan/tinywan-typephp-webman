@@ -47,6 +47,95 @@ use PhpParser\NodeVisitor\NameResolver;
 class Preprocessor extends CompilerBase
 {
     /**
+     * Magic methods forbidden on PHP enums. Enum cases are runtime-managed
+     * singletons, so construction, cloning, destruction, serialization and
+     * magic property/string/debug handlers cannot be supplied by user code.
+     * __call, __callStatic and __invoke remain valid enum methods.
+     */
+    private const array ENUM_FORBIDDEN_MAGIC_METHODS = [
+        '__construct' => true,
+        '__destruct' => true,
+        '__clone' => true,
+        '__get' => true,
+        '__set' => true,
+        '__unset' => true,
+        '__isset' => true,
+        '__sleep' => true,
+        '__wakeup' => true,
+        '__set_state' => true,
+        '__serialize' => true,
+        '__unserialize' => true,
+        '__tostring' => true,
+        '__debuginfo' => true,
+    ];
+
+    protected string $targetName = 'app';
+
+    /**
+     * Validate every method that will become part of an enum. This is shared
+     * with the Trait-composition phase so a Trait method or alias cannot defer
+     * the error to Zend class registration at runtime.
+     */
+    protected function assertEnumMayIncludeMethod(Node $node, string $name): void
+    {
+        if (!$this->classDef->enum) {
+            return;
+        }
+
+        $lowerName = strtolower($name);
+        $reserved = $lowerName === 'cases'
+            || ($this->classDef->enumBackingType !== null
+                && ($lowerName === 'from' || $lowerName === 'tryfrom'));
+        if ($reserved) {
+            $this->fatalError(
+                $node,
+                "Cannot redeclare {$this->classDef->getNamespacedName(false)}::{$name}()",
+            );
+        }
+
+        if (!isset(self::ENUM_FORBIDDEN_MAGIC_METHODS[$lowerName])) {
+            return;
+        }
+
+        $this->fatalError(
+            $node,
+            "Enum `{$this->classDef->getNamespacedName(false)}` cannot include magic method `{$name}`",
+        );
+    }
+
+    /**
+     * UnitEnum and BackedEnum are attached by Zend itself. User declarations
+     * must not attach them a second time. Serializable is likewise forbidden
+     * for enums, including through an intermediate user interface.
+     */
+    private function assertEnumAndUnitEnumInterfaceRules(Node\Stmt\Class_|Node\Stmt\Enum_ $class): void
+    {
+        $className = $this->classDef->getNamespacedName(false);
+        if ($this->classDef->enum) {
+            foreach ($this->classDef->implements as $interface) {
+                if (strcasecmp($interface, 'UnitEnum') === 0
+                    || ($this->classDef->enumBackingType !== null
+                        && strcasecmp($interface, 'BackedEnum') === 0)
+                ) {
+                    $this->fatalError(
+                        $class,
+                        "Enum {$className} cannot implement previously implemented interface {$interface}",
+                    );
+                }
+                if ($this->classDef->enumBackingType === null
+                    && strcasecmp($interface, 'BackedEnum') === 0
+                ) {
+                    $this->fatalError($class, "Non-backed enum {$className} cannot implement interface BackedEnum");
+                }
+            }
+            if ($this->isInheritedFrom($className, 'Serializable')) {
+                $this->fatalError($class, "Enum {$className} cannot implement interface Serializable");
+            }
+            return;
+        }
+    }
+
+    /**
      * Discover Native class names before parsing any signatures or fields.
      *
      * PHP permits forward class references across both declaration and file
@@ -72,15 +161,15 @@ class Preprocessor extends CompilerBase
             }
             try {
                 $ast = $this->parser->parse($source);
+                $traverser = new NodeTraverser();
+                $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+                $ast = $this->requireStatementList($traverser->traverse($ast));
             } catch (\PhpParser\Error) {
                 // prepareFile() owns the normal source diagnostic, including
                 // the filename and compiler formatting. Avoid reporting a
                 // syntax error twice from this declaration-only pass.
                 continue;
             }
-            $traverser = new NodeTraverser();
-            $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
-            $ast = $traverser->traverse($ast);
             $this->discoverNativeClassDeclarationsInAst($ast);
         }
     }
@@ -90,7 +179,7 @@ class Preprocessor extends CompilerBase
         return str_ends_with(strtolower($file), '.php');
     }
 
-    /** @param array<Node\Stmt> $ast */
+    /** @param list<Node> $ast */
     private function discoverNativeClassDeclarationsInAst(array $ast): void
     {
         $finder = new NodeFinder();
@@ -159,14 +248,14 @@ class Preprocessor extends CompilerBase
         foreach ($candidateSources as $source) {
             try {
                 $ast = $this->parser->parse($source);
+                $traverser = new NodeTraverser();
+                $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+                $ast = $this->requireStatementList($traverser->traverse($ast));
             } catch (\PhpParser\Error) {
                 // prepareFile() has already emitted the authoritative syntax
                 // diagnostic. This pass must not report it a second time.
                 continue;
             }
-            $traverser = new NodeTraverser();
-            $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
-            $ast = $traverser->traverse($ast);
             foreach ($discovery->discover($ast) as $slot) {
                 $this->registerNativeGlobalObject($slot['name'], $slot['class'], $slot['node']);
             }
@@ -178,7 +267,7 @@ class Preprocessor extends CompilerBase
         $sorter = new StringSort();
         $fileDeps = [];
 
-        // 构建依赖关系图
+        // Build the dependency graph
         foreach ($this->symbolCallInFile as $file => $symbols) {
             $deps = [];
             foreach ($symbols as $symbol) {
@@ -196,7 +285,7 @@ class Preprocessor extends CompilerBase
 
         $sortedFiles = $sorter->sort();
 
-        // 添加未参与依赖管理的文件（非 stub 文件且不在已排序列表中）
+        // Append files that do not participate in dependency management (non-stub files not present in the sorted list)
         foreach ($list as $file) {
             if (!$this->isStubFile($file) and !in_array($file, $sortedFiles)) {
                 $sortedFiles[] = $file;
@@ -235,7 +324,7 @@ class Preprocessor extends CompilerBase
         $info = pathinfo($cppFile);
         $ext = $this->getPlatform()->getObjectExtension();
 
-        // 保持与 cppFile 相同的路径分隔符
+        // Keep the same path separator as cppFile
         $normalizedFile = str_replace('\\', '/', $cppFile);
         $normalizedMiscDir = str_replace('\\', '/', $this->getPhpxDir() . '/src/misc/');
         if (str_starts_with($normalizedFile, $normalizedMiscDir)) {
@@ -301,58 +390,162 @@ class Preprocessor extends CompilerBase
                 $this->file,
             ));
             $traverser->addVisitor(new ConstantExpressionValidationVisitor($this->phpVersion));
-            $traverser->addVisitor(new RuntimeAttributeFactoryLowering($this->file));
-            $stmts = $traverser->traverse($ast);
+            $traverser->addVisitor(new RuntimeAttributeFactoryLowering(
+                $this->file,
+                fn (string $class, string $case): bool => $this->isDeclaredEnumCase($class, $case),
+            ));
+            try {
+                $stmts = $this->requireStatementList($traverser->traverse($ast));
+            } catch (\PhpParser\Error $error) {
+                $this->fatalPhpParserError($error);
+            }
             // Keep the resolved declaration AST until convert. Defaults and
             // constants are validated here, but their C++ expressions are not
             // generated until the complete symbol table is available.
             $this->preparedFileAsts[$this->file] = $stmts;
+            $this->traitDeclarationsComposed = false;
             $this->declarationExpressionsFinalized = false;
+            // The prepared class graph changed; override flags must be
+            // re-finalized before the next conversion.
+            $this->methodOverrideFlagsFinalized = false;
             // CompilerTest and embedding users may invoke prepareFile()
             // directly instead of the project pipeline. Preserve same-file
             // forward Native references for that public entry path as well.
             $this->discoverNativeClassDeclarationsInAst($stmts);
 
             foreach ($stmts as $v) {
-                $type = $v->getType();
-                switch ($type) {
-                    case 'Stmt_Namespace':
-                        $this->prepareNamespace($v);
-                        break;
-                    case 'Stmt_Enum':
-                    case 'Stmt_Class':
-                    case 'Stmt_Trait':
-                        $this->prepareClass($v);
-                        break;
-                    case 'Stmt_Interface':
-                        $this->parseInterface($v);
-                        break;
-                    case 'Stmt_Function':
-                        $this->prepareFunction($v);
-                        break;
-                    case 'Stmt_Use':
-                        $this->parseUse($v);
-                        break;
-                    case 'Stmt_GroupUse':
-                        $this->parseGroupUse($v);
-                        break;
-                    case 'Stmt_Declare':
-                    case 'Stmt_Nop':
-                        break;
-                    case 'Stmt_Const':
-                        $this->parseConstDef($v);
-                        break;
-                    case 'Stmt_Expression':
-                        $this->foundStrayCode($v);
-                        break;
-                    default:
-                        $this->fatalError($v, 'Unsupported statement: ' . $type);
-                        break;
+                if ($v instanceof Node\Stmt\Namespace_) {
+                    $this->prepareNamespace($v);
+                } elseif ($v instanceof Node\Stmt\Class_ || $v instanceof Node\Stmt\Enum_ || $v instanceof Node\Stmt\Trait_) {
+                    $this->prepareClass($v);
+                } elseif ($v instanceof Node\Stmt\Interface_) {
+                    $this->parseInterface($v);
+                } elseif ($v instanceof Node\Stmt\Function_) {
+                    $this->prepareFunction($v);
+                } elseif ($v instanceof Node\Stmt\Use_) {
+                    $this->parseUse($v);
+                } elseif ($v instanceof Node\Stmt\GroupUse) {
+                    $this->parseGroupUse($v);
+                } elseif ($v instanceof Node\Stmt\Const_) {
+                    $this->parseConstDef($v);
+                } elseif ($v instanceof Node\Stmt\Expression) {
+                    $this->foundStrayCode($v);
+                } elseif (!$v instanceof Node\Stmt\Declare_ && !$v instanceof Node\Stmt\Nop) {
+                    $this->fatalError($v, 'Unsupported statement: ' . $v->getType());
                 }
             }
         } finally {
             $this->restoreCompilerPhase($previousPhase);
         }
+    }
+
+    /**
+     * Compose Trait declarations after every source file has been prepared.
+     *
+     * A Trait may be declared after the class that uses it, so composition
+     * cannot be performed safely by prepareFile(). This intermediate phase
+     * runs against the complete declaration graph and makes the composed
+     * method/property/constant signatures visible before any function body is
+     * converted. Expression lowering remains a convert-phase responsibility.
+     *
+     * @param list<string> $files
+     */
+    public function composeTraitDeclarations(array $files): void
+    {
+        if ($this->traitDeclarationsComposed) {
+            return;
+        }
+
+        $previousPhase = $this->enterCompilerPhase(self::PHASE_COMPOSE);
+        try {
+            foreach ($files as $file) {
+                $path = realpath($file);
+                if ($path === false || !isset($this->preparedFileAsts[$path])) {
+                    continue;
+                }
+                $this->loadFile($path);
+                $this->resetFile();
+                $this->resetFunction();
+                $this->resetMethod();
+                $this->resetClass();
+                $this->resetNamespace();
+                $this->composeTraitDeclarationStatementList($this->preparedFileAsts[$path]);
+            }
+            $this->traitDeclarationsComposed = true;
+            // Trait methods are real methods of their consuming classes and
+            // therefore change virtual-dispatch analysis.
+            $this->methodOverrideFlagsFinalized = false;
+        } finally {
+            $this->restoreCompilerPhase($previousPhase);
+        }
+    }
+
+    /** @param array<Node\Stmt> $statements */
+    private function composeTraitDeclarationStatementList(array $statements): void
+    {
+        foreach ($statements as $statement) {
+            if ($statement instanceof Node\Stmt\Namespace_) {
+                $this->resetClass();
+                $this->resetMethod();
+                $this->resetFunction();
+                $this->resetNamespace();
+                $this->namespace = $statement->name ? $this->parseIdentifier($statement->name) : '';
+                $this->composeTraitDeclarationStatementList($statement->stmts);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\Use_) {
+                $this->parseUse($statement);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\GroupUse) {
+                $this->parseGroupUse($statement);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\Class_
+                || $statement instanceof Node\Stmt\Trait_
+                || $statement instanceof Node\Stmt\Enum_
+            ) {
+                $this->resetClass();
+                $this->class = $this->parseIdentifier($statement->name);
+                $this->classDef = $this->getClass($this->getFullClassName());
+                $this->composePreparedTraitDeclarations($statement);
+            }
+        }
+    }
+
+    /**
+     * Translator supplies Trait AST composition; the declaration collector
+     * owns the phase and source/namespace traversal.
+     */
+    protected function composePreparedTraitDeclarations(
+        Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
+    ): void {
+    }
+
+    protected function fatalPhpParserError(\PhpParser\Error $error): never
+    {
+        $location = $this->file;
+        if ($error->getStartLine() > 0) {
+            $location .= ':' . $error->getStartLine();
+        }
+        $this->error($error->getRawMessage() . ' in ' . $location);
+    }
+
+    /**
+     * Root parser output must remain a statement list after declaration
+     * visitors have run. Validate that invariant before storing the AST.
+     *
+     * @param list<Node> $nodes
+     * @return list<Node\Stmt>
+     */
+    private function requireStatementList(array $nodes): array
+    {
+        foreach ($nodes as $node) {
+            if (!$node instanceof Node\Stmt) {
+                throw new \LogicException('Root AST traversal produced a non-statement node: ' . $node->getType());
+            }
+        }
+        return $nodes;
     }
 
     /**
@@ -429,7 +622,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizeClassDeclarationExpressions(
+    protected function finalizeClassDeclarationExpressions(
         Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
     ): void {
         $this->resetClass();
@@ -458,6 +651,10 @@ class Preprocessor extends CompilerBase
                 }
                 continue;
             }
+            if ($statement instanceof Node\Stmt\EnumCase) {
+                $this->finalizePreparedEnumCase($statement);
+                continue;
+            }
             if (!$statement instanceof Node\Stmt\ClassMethod) {
                 continue;
             }
@@ -473,6 +670,105 @@ class Preprocessor extends CompilerBase
                 $this->finalizePreparedFunctionDefaults($statement, $this->methodDef->functionDef);
             }
         }
+        if ($class instanceof Node\Stmt\Enum_) {
+            $this->assertUniqueEnumBackingValues($class);
+        }
+    }
+
+    /**
+     * Reject duplicate backed values once every case expression has been
+     * folded. Scanning the declaration AST preserves source order even when a
+     * forward reference caused a later case to be evaluated recursively.
+     */
+    private function assertUniqueEnumBackingValues(Node\Stmt\Enum_ $enum): void
+    {
+        if ($this->classDef->enumBackingType === null) {
+            return;
+        }
+
+        /** @var array<string, string> $firstCaseByValue */
+        $firstCaseByValue = [];
+        foreach ($enum->stmts as $statement) {
+            if (!$statement instanceof Node\Stmt\EnumCase) {
+                continue;
+            }
+            $caseName = $this->parseIdentifier($statement->name);
+            $value = $this->classDef->enumCases[$caseName] ?? null;
+            if (!is_int($value) && !is_string($value)) {
+                throw new \LogicException(
+                    "Enum case `{$this->classDef->getNamespacedName(false)}::{$caseName}` was not finalized",
+                );
+            }
+
+            // Prefix the scalar type so numeric strings can never become
+            // integer array keys or collide with integer backing values.
+            $key = is_int($value) ? 'i:' . $value : 's:' . $value;
+            if (array_key_exists($key, $firstCaseByValue)) {
+                $enumName = $this->classDef->getNamespacedName(false);
+                $firstCase = $firstCaseByValue[$key];
+                $this->fatalError(
+                    $statement,
+                    "Duplicate value in enum {$enumName} for cases {$firstCase} and {$caseName}",
+                );
+            }
+            $firstCaseByValue[$key] = $caseName;
+        }
+    }
+
+    /**
+     * Resolve a backed enum case to its final scalar after every declaration
+     * and composed Trait member is known. The source expression is retained
+     * only until this point; no unresolved expression may reach codegen.
+     */
+    private function finalizePreparedEnumCase(Node\Stmt\EnumCase $case): void
+    {
+        $name = $this->parseIdentifier($case->name);
+        $enumName = $this->classDef->getNamespacedName(false);
+        $backingType = $this->classDef->enumBackingType;
+
+        if ($backingType === null) {
+            if ($case->expr !== null) {
+                $this->fatalError(
+                    $case,
+                    "Case `{$name}` of non-backed enum `{$enumName}` must not have a value",
+                );
+            }
+            $this->classDef->enumCases[$name] = null;
+            unset($this->classDef->enumCaseExpressions[$name]);
+            return;
+        }
+
+        if ($case->expr === null) {
+            $this->fatalError(
+                $case,
+                "Case `{$name}` of backed enum `{$enumName}` must have a value",
+            );
+        }
+
+        // A recursive dependency may already have finalized this case while
+        // another case expression was being evaluated.
+        if (!isset($this->classDef->enumCaseExpressions[$name])) {
+            return;
+        }
+
+        $this->classDef->enumCases[$name] = $this->evaluatePreparedEnumCaseBackingValue(
+            $case,
+            $this->classDef,
+            $name,
+        );
+        unset($this->classDef->enumCaseExpressions[$name]);
+    }
+
+    /**
+     * Translator supplies the constant-expression evaluator. Keeping the hook
+     * here makes the prepare/compose/finalize phase boundary explicit.
+     */
+    protected function evaluatePreparedEnumCaseBackingValue(
+        Node\Stmt\EnumCase $case,
+        ClassDef $classDef,
+        string $caseName,
+    ): int|string {
+        throw new \LogicException('Enum case constant-expression evaluator is not available');
     }
 
     private function finalizeInterfaceDeclarationExpressions(Node\Stmt\Interface_ $interface): void
@@ -506,7 +802,7 @@ class Preprocessor extends CompilerBase
         $this->interfaceDef = null;
     }
 
-    private function finalizePreparedFunctionDefaults(
+    protected function finalizePreparedFunctionDefaults(
         Node\Stmt\Function_|Node\Stmt\ClassMethod $function,
         FunctionDef $functionDef,
     ): void {
@@ -524,7 +820,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizePreparedProperty(PropertyDef $property, Node\Expr $expression): void
+    protected function finalizePreparedProperty(PropertyDef $property, Node\Expr $expression): void
     {
         $this->resetFunction();
         $property->arrayInitPlan = null;
@@ -536,7 +832,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizePreparedConstant(ConstantDef $constant, Node\Expr $expression): void
+    protected function finalizePreparedConstant(ConstantDef $constant, Node\Expr $expression): void
     {
         $this->resetFunction();
         $constant->arrayExpr = '';
@@ -700,7 +996,7 @@ class Preprocessor extends CompilerBase
 
         foreach ($functionCalls as $call) {
             if ($call->name instanceof Node\Name) {
-                // 内置函数不参与依赖管理
+                // Internal functions do not participate in dependency management
                 $funcName = strtolower($call->name->toString());
                 if (!$this->isInternalFunction($funcName)) {
                     $this->symbolCallInFile[$this->file][] = $funcName;
@@ -722,7 +1018,7 @@ class Preprocessor extends CompilerBase
                 }
             }
         }
-        // 依赖去重
+        // Deduplicate dependencies
         $this->symbolCallInFile[$this->file] = array_unique($this->symbolCallInFile[$this->file]);
     }
 
@@ -735,39 +1031,27 @@ class Preprocessor extends CompilerBase
 
         $this->namespace = $node->name ? $this->parseIdentifier($node->name) : '';
         foreach ($node->stmts as $v2) {
-            $type2 = $v2->getType();
-            switch ($type2) {
-                case 'Stmt_Class':
-                case 'Stmt_Enum':
-                case 'Stmt_Trait':
-                    $this->prepareClass($v2);
-                    break;
-                case 'Stmt_Function':
-                    $this->prepareFunction($v2);
-                    break;
-                case 'Stmt_Use':
-                    $this->parseUse($v2);
-                    break;
-                case 'Stmt_GroupUse':
-                    $this->parseGroupUse($v2);
-                    break;
-                case 'Stmt_Const':
-                    $this->parseConstDef($v2);
-                    break;
-                case 'Stmt_Interface':
-                    $this->parseInterface($v2);
-                    break;
-                case 'Stmt_Nop':
-                    break;
-                default:
-                    $this->foundStrayCode($v2);
-                    break;
+            if ($v2 instanceof Node\Stmt\Class_ || $v2 instanceof Node\Stmt\Enum_ || $v2 instanceof Node\Stmt\Trait_) {
+                $this->prepareClass($v2);
+            } elseif ($v2 instanceof Node\Stmt\Function_) {
+                $this->prepareFunction($v2);
+            } elseif ($v2 instanceof Node\Stmt\Use_) {
+                $this->parseUse($v2);
+            } elseif ($v2 instanceof Node\Stmt\GroupUse) {
+                $this->parseGroupUse($v2);
+            } elseif ($v2 instanceof Node\Stmt\Const_) {
+                $this->parseConstDef($v2);
+            } elseif ($v2 instanceof Node\Stmt\Interface_) {
+                $this->parseInterface($v2);
+            } elseif (!$v2 instanceof Node\Stmt\Nop) {
+                $this->foundStrayCode($v2);
             }
         }
     }
 
     protected function parseParameterType(Node\Param $param, ArgInfo $argInfo, string $var): string
     {
+        $this->markLateBoundTypeNodes($param->type);
         // Capture the late-bound parameter type keyword *before* resolveTypeDecl
         // runs, because resolveTypeDecl mutates the `self`/`static`/`parent` node
         // name to the declaring class when the method belongs to a trait.
@@ -840,10 +1124,15 @@ class Preprocessor extends CompilerBase
             if ($this->stubFile && $this->stubImportLibrary === '' && !$param->type) {
                 throw new \RuntimeException('No type for ' . $phpName);
             }
-            // 构造方法属性定义语法（Constructor Property Promotion）
+            // Constructor property promotion syntax
             if ($param->isPromoted()) {
                 if (!$this->classDef or !$this->methodDef or $this->methodDef->name !== '__construct') {
                     $this->fatalError($param, 'Promoted properties are not supported');
+                }
+                // A variadic parameter collects arguments into an array, so no
+                // single value exists to promote into the property.
+                if ($param->variadic) {
+                    $this->fatalError($param, 'Cannot declare variadic promoted property');
                 }
                 $nullable = $param->type instanceof NullableType;
                 // Promoted property defaults belong to the constructor parameter,
@@ -855,8 +1144,6 @@ class Preprocessor extends CompilerBase
             if ($param->variadic) {
                 if ($i !== $last) {
                     $this->fatalError($param, 'Variadic parameters must be the last parameter');
-                } elseif ($param->byRef) {
-                    $this->fatalError($param, 'Variadic parameters cannot be passed by reference');
                 }
             }
             if ($param->default && $i < $lastRequiredIndex) {
@@ -882,8 +1169,12 @@ class Preprocessor extends CompilerBase
             if ($param->type === null || $param->type instanceof NullableType) {
                 $argInfo->nullable = true;
             }
-            if ($param->type instanceof NullableType || $param->type instanceof UnionType || $param->type instanceof IntersectionType) {
-                $typeInfo = $this->buildTypeCheckFromNode($param->type);
+            if (($param->byRef && $param->type !== null)
+                || $param->type instanceof NullableType
+                || $param->type instanceof UnionType
+                || $param->type instanceof IntersectionType
+            ) {
+                $typeInfo = $this->buildTypeCheckFromNode($param->type, $param->byRef);
                 if (!empty($typeInfo['check']) && !$this->isNativeObjectClass($argInfo->declaredClass)) {
                     $argInfo->typeCheck = $typeInfo['check'];
                     $argInfo->typeStr = $typeInfo['typeStr'];
@@ -902,7 +1193,7 @@ class Preprocessor extends CompilerBase
                     $this->lowerArgumentDefault($param, $argInfo);
                 }
             } elseif ($param->variadic) {
-                // 变长参数可以视为空数组默认值
+                // A variadic parameter can be treated as an empty-array default value
                 $argInfo->default = '{}';
                 $argInfo->defaultValue = new Node\Expr\Array_();
             }
@@ -947,12 +1238,56 @@ class Preprocessor extends CompilerBase
         return $functionDef->getNamespacedName();
     }
 
+    /**
+     * self/parent/static in named declarations are resolved against the
+     * lexical class-like scope. Closures are intentionally excluded: PHP lets
+     * an otherwise global closure acquire such a scope through bindTo().
+     */
+    private function validateClassScopeTypeKeywords(?NodeAbstract $type, bool $classScope, bool $hasParent): void
+    {
+        if ($type === null) {
+            return;
+        }
+        if ($type instanceof NullableType) {
+            $this->validateClassScopeTypeKeywords($type->type, $classScope, $hasParent);
+            return;
+        }
+        if ($type instanceof UnionType || $type instanceof IntersectionType) {
+            foreach ($type->types as $member) {
+                $this->validateClassScopeTypeKeywords($member, $classScope, $hasParent);
+            }
+            return;
+        }
+        if (!$type instanceof Node\Name) {
+            return;
+        }
+
+        $name = strtolower($type->toString());
+        if (!in_array($name, ['self', 'parent', 'static'], true)) {
+            return;
+        }
+        if (!$classScope) {
+            $this->fatalError($type, "Cannot use \"{$name}\" when no class scope is active");
+        }
+        if ($name === 'parent' && !$hasParent) {
+            $this->fatalError($type, 'Cannot use "parent" when current class scope has no parent');
+        }
+    }
+
+    private function currentClassScopeHasParent(): bool
+    {
+        // A trait does not know its eventual parent during preprocessing; PHP
+        // therefore permits parent in the trait and validates it when used.
+        return $this->classDef !== null
+            && ($this->classDef->extends !== '' || $this->classDef->trait !== null);
+    }
+
     protected function parseFunctionDecl(Node\Stmt\Function_|Node\Stmt\ClassMethod $v): FunctionDef
     {
         // Local stubs define C++ native functions and require an explicit ABI return type.
         // Generated external stubs may preserve an untyped PHP declaration as php::Var.
         if ($this->stubFile && $this->stubImportLibrary === '' && !$v->returnType) {
-            // 以下魔术方法都不能声明返回值类型 __construct()/__destruct()/__clone()
+            // The following magic methods must not declare a return type: __construct()/__destruct()/__clone()
             if (($this->method and !in_array($this->method, ['__construct', '__destruct', '__clone'])) or !$this->method) {
                 $name = $this->class ? $this->class . '::' . $v->name : $v->name;
                 $this->fatalError($v, 'The return type of the function `' . $name . '` must be specified');
@@ -969,7 +1304,15 @@ class Preprocessor extends CompilerBase
             }
         }
 
+        $classScope = $v instanceof Node\Stmt\ClassMethod;
+        $hasParent = $classScope && $this->currentClassScopeHasParent();
+        $this->validateClassScopeTypeKeywords($v->returnType, $classScope, $hasParent);
+        foreach ($v->params as $param) {
+            $this->validateClassScopeTypeKeywords($param->type, $classScope, $hasParent);
+        }
+
         $fnName = $this->parseIdentifier($v->name);
+        $this->markLateBoundTypeNodes($v->returnType);
         // Capture the late-bound return type keyword *before* resolveTypeDecl runs,
         // because resolveTypeDecl mutates the `self`/`static`/`parent` node name to
         // the declaring class when the method belongs to a trait.
@@ -989,7 +1332,7 @@ class Preprocessor extends CompilerBase
         if ($nullableNativeReturn !== null) {
             [$returnType, $class] = $nullableNativeReturn;
         }
-        // 构造、析构、克隆方法不能有返回值
+        // Constructor, destructor, and clone methods cannot have a return value
         if ($this->method and in_array($this->method, ['__construct', '__destruct', '__clone'])) {
             $returnType = Type::VOID;
         }
@@ -1069,7 +1412,7 @@ class Preprocessor extends CompilerBase
             $this->fatalError($v, 'Zend-backed constructors cannot accept or return native objects');
         }
 
-        // main 函数，返回值必须为 void 类型，参数必须为空或者 argc, argv 两个参数
+        // The main function must return void and take either no parameters or the two parameters argc and argv
         if (!$this->class and !$this->namespace and $fnName === self::ENTRY_FUNCTION) {
             if (count($v->params) > 0) {
                 if (count($v->params) != 2) {
@@ -1150,7 +1493,7 @@ class Preprocessor extends CompilerBase
             }
             $this->fatalError($v, "Duplicate function `{$name}`");
         }
-        // 禁止重定义内置函数
+        // Forbid redefining built-in functions
         if (!$this->methodDef and $this->isInternalFunction($name)) {
             $this->fatalError($v, "The function `{$name}` is a built-in function and cannot be redefined");
         }
@@ -1190,14 +1533,39 @@ class Preprocessor extends CompilerBase
 
         if ($class instanceof Node\Stmt\Class_) {
             $flags = $class->flags;
+        } elseif ($class instanceof Node\Stmt\Enum_) {
+            // PHP lowers every enum declaration as ZEND_ACC_ENUM | ZEND_ACC_FINAL.
+            // Keep the compiler model equally final for inheritance checks and
+            // only-safe-when-final static dispatch decisions.
+            $flags = Modifiers::PUBLIC | Modifiers::FINAL;
         } else {
             $flags = Modifiers::PUBLIC;
         }
         if (isset($this->symbolDeclInFile[$fullClassNameLower])) {
             $this->fatalError($class, "Duplicate class `{$fullClassName}`");
         }
+        // Dynamic properties are forbidden on readonly classes and enums.
+        // every property of a readonly class is readonly and declared, so
+        // Zend rejects the attribute at compile time.
+        if (($class instanceof Node\Stmt\Class_ && ($flags & Modifiers::READONLY))
+            || $class instanceof Node\Stmt\Enum_
+        ) {
+            foreach ($class->attrGroups as $group) {
+                foreach ($group->attrs as $attribute) {
+                    if (strcasecmp($this->getResolvedPhpName($attribute->name), 'AllowDynamicProperties') === 0) {
+                        $this->fatalError(
+                            $attribute,
+                            $class instanceof Node\Stmt\Enum_
+                                ? "Cannot apply #[AllowDynamicProperties] to enum `{$fullClassName}`"
+                                : "Cannot apply #[AllowDynamicProperties] to readonly class `{$fullClassName}`",
+                        );
+                    }
+                }
+            }
+        }
 
         $this->classDef = new ClassDef($this->class, $flags, $this->namespace);
+        $this->classDef->sourceFile = $this->file;
         $this->classDef->nativeObject = NativeClassAttributeLowering::isNative($class);
         $this->classDef->exported = !$this->hasNoExportAttribute($class);
         if ($this->classDef->nativeObject && $this->stubFile) {
@@ -1233,18 +1601,26 @@ class Preprocessor extends CompilerBase
                 $this->symbolCallInFile[$this->file][] = $parentClassLower;
             }
             $this->classDef->extends = $this->parentClass;
-            // 是否继承了内置类
+            // Whether it inherits from an internal class
             $this->classDef->inheritedFromInternalClass = $this->isInternalClass($parentClassLower);
         }
 
         if ($class instanceof Node\Stmt\Enum_) {
             $this->classDef->enum = true;
             if ($class->scalarType !== null) {
-                $this->classDef->enumBackingType = $class->scalarType->name;
+                $backingType = strtolower($class->scalarType->name);
+                if ($backingType !== 'int' && $backingType !== 'string') {
+                    $this->fatalError(
+                        $class->scalarType,
+                        "Enum backing type must be int or string, {$class->scalarType->name} given",
+                    );
+                }
+                $this->classDef->enumBackingType = $backingType;
             }
         }
         if (!$class instanceof Node\Stmt\Trait_) {
             $this->classDef->implements = $this->parseImplements($class->implements);
+            $this->assertEnumAndUnitEnumInterfaceRules($class);
         } else {
             $this->classDef->trait = $class;
             // Trait members are compiled later in the consuming class, but
@@ -1309,6 +1685,9 @@ class Preprocessor extends CompilerBase
                 case 'Stmt_ClassConst':
                     break;
                 case 'Stmt_Property':
+                    if ($this->classDef->enum) {
+                        $this->fatalError($v, "Enum {$fullClassName} cannot include properties");
+                    }
                     $this->parseClassPropertyDef($v);
                     break;
                 case 'Stmt_TraitUse':
@@ -1318,7 +1697,23 @@ class Preprocessor extends CompilerBase
                     break;
                 case 'Stmt_EnumCase':
                     $caseName = $this->parseIdentifier($v->name);
-                    $this->classDef->enumCases[$caseName] = $v->expr?->value;
+                    if (array_key_exists($caseName, $this->classDef->enumCases)
+                        || $this->classDef->hasConstant($caseName)
+                    ) {
+                        $enumName = $this->classDef->getNamespacedName(false);
+                        $this->fatalError($v, "Cannot redefine class constant {$enumName}::{$caseName}");
+                    }
+                    // Keep every backing expression until declaration
+                    // finalization. Literal values also seed enumCases for
+                    // declaration consumers, but code generation only accepts
+                    // values finalized after the complete symbol graph exists.
+                    $this->classDef->enumCases[$caseName] =
+                        $v->expr instanceof Node\Scalar\Int_ || $v->expr instanceof Node\Scalar\String_
+                            ? $v->expr->value
+                            : null;
+                    if ($v->expr !== null) {
+                        $this->classDef->enumCaseExpressions[$caseName] = $v->expr;
+                    }
                     break;
                 case 'Stmt_ClassMethod':
                     $this->prepareClassMethod($v, $class);
@@ -1534,9 +1929,17 @@ class Preprocessor extends CompilerBase
     {
         $this->resetFunction();
         $flags = $this->parseModifiers($v->flags);
+        $this->validateClassScopeTypeKeywords($v->type, true, $this->currentClassScopeHasParent());
         [$declaredType, $class] = $v->type
             ? $this->resolveTypeDecl($v->type, self::DECL_TYPE_OF_CONST)
             : [null, ''];
+        if ($v->type !== null && $this->typeDeclContainsCallable($v->type)) {
+            $constName = $v->consts !== [] ? $this->parseIdentifier($v->consts[0]->name) : '';
+            $this->fatalError(
+                $v,
+                "Class constant `{$this->classDef->getNamespacedName(false)}::{$constName}` cannot have type `{$this->typeCheckNodeToString($v->type)}`",
+            );
+        }
 
         foreach ($v->consts as $const) {
             $type = $declaredType;
@@ -1660,9 +2063,37 @@ class Preprocessor extends CompilerBase
                 'Final promoted property must explicitly declare public, protected, or private visibility',
             );
         }
+        $this->validateClassScopeTypeKeywords($typeNode, true, $this->currentClassScopeHasParent());
         $flags = $this->parseModifiers($flags);
+        // A `readonly class` marks every property readonly, so the class-level
+        // flag participates in the same Zend declaration rules as an explicit
+        // per-property `readonly` modifier.
+        if (($flags | $this->classDef->flags) & Modifiers::READONLY) {
+            $className = $this->classDef->getNamespacedName(false);
+            if ($flags & Modifiers::STATIC) {
+                $this->fatalError($errorNode, "Static property `{$className}::\${$name}` cannot be readonly");
+            }
+            if ($typeNode === null) {
+                $this->fatalError($errorNode, "Readonly property `{$className}::\${$name}` must have type");
+            }
+            if ($defaultNode !== null) {
+                $this->fatalError($errorNode, "Readonly property `{$className}::\${$name}` cannot have default value");
+            }
+        }
         $this->validateAsymmetricPropertyDeclaration($name, $flags, $typeNode, $errorNode);
+        // Resolving the declaration also runs the common compound-type
+        // validation (callable as an intersection/DNF member is rejected
+        // there, ahead of the property-specific rule, matching Zend).
         [$type, $class] = $this->resolveTypeDecl($typeNode, self::DECL_TYPE_OF_PROPERTY);
+        // `callable` is a runtime-context type (a string or array may or may
+        // not be callable depending on scope), so Zend forbids it in property
+        // types entirely - bare, nullable, or as a union member.
+        if ($typeNode !== null && $this->typeDeclContainsCallable($typeNode)) {
+            $this->fatalError(
+                $errorNode,
+                "Property `{$this->classDef->getNamespacedName(false)}::\${$name}` cannot have type `{$this->typeCheckNodeToString($typeNode)}`",
+            );
+        }
         $this->assertSupportedNativeObjectTypeNode($typeNode, self::DECL_TYPE_OF_PROPERTY, $errorNode);
         $nullableNative = $this->resolveNullableNativeObjectType(
             $typeNode,
@@ -1733,6 +2164,31 @@ class Preprocessor extends CompilerBase
         return $propDef;
     }
 
+    /**
+     * Whether a declared type mentions `callable` outside an intersection.
+     * Zend forbids callable in property and class-constant types; callable
+     * inside an intersection is rejected first, with its own diagnostic, by
+     * the common declaration validation in parseTypeDecl().
+     */
+    private function typeDeclContainsCallable(NodeAbstract $typeNode): bool
+    {
+        if ($typeNode instanceof NullableType) {
+            return $this->typeDeclContainsCallable($typeNode->type);
+        }
+        if ($typeNode instanceof UnionType) {
+            foreach ($typeNode->types as $member) {
+                if ($this->typeDeclContainsCallable($member)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if ($typeNode instanceof IntersectionType) {
+            return false;
+        }
+        return strtolower($this->parseIdentifier($typeNode)) === 'callable';
+    }
+
     private function validateAsymmetricPropertyDeclaration(
         string $name,
         int $flags,
@@ -1784,7 +2240,7 @@ class Preprocessor extends CompilerBase
         // must not be removed merely because their source syntax resembles a
         // scalar constant expression.
         $type = $this->detectDefaultValueType($default);
-        return $type === null || $type === 'array';
+        return $type === null || $type === 'array' || str_starts_with($type, 'enum:');
     }
 
     /**
@@ -1809,6 +2265,19 @@ class Preprocessor extends CompilerBase
             return;
         }
 
+        if (str_starts_with($valueType, 'enum:')) {
+            $enumClass = substr($valueType, strlen('enum:'));
+            if ($this->propertyTypeAcceptsEnumCase($typeNode, $enumClass)) {
+                return;
+            }
+            $className = $this->getFullClassName();
+            $typeStr = $this->propertyTypeDeclToString($typeNode);
+            $this->fatalError(
+                $errorNode,
+                "Cannot use {$enumClass} as default value for property {$className}::\${$name} of type {$typeStr}",
+            );
+        }
+
         $allowed = $this->collectAllowedDefaultTypes($typeNode);
         if ($allowed === null) {
             // mixed / callable / otherwise unconstrained type declaration.
@@ -1829,8 +2298,9 @@ class Preprocessor extends CompilerBase
 
     /**
      * Determine the PHP value type of a constant expression used as a default
-     * value. Returns one of int/float/string/true/false/array/null, or null when
-     * the type cannot be decided statically.
+     * value. Returns one of int/float/string/true/false/array/null, an
+     * `enum:ClassName` marker, or null when the type cannot be decided
+     * statically.
      */
     protected function detectDefaultValueType(NodeAbstract $node, ?string $scopeClass = null, int $depth = 0): ?string
     {
@@ -1880,6 +2350,9 @@ class Preprocessor extends CompilerBase
                     return null;
                 }
                 $targetDef = $this->getClass($targetClass);
+                if ($targetDef->enum && array_key_exists($constName, $targetDef->enumCases)) {
+                    return 'enum:' . $targetDef->getNamespacedName(false);
+                }
                 if (!$targetDef->hasConstant($constName)) {
                     return null;
                 }
@@ -1909,6 +2382,46 @@ class Preprocessor extends CompilerBase
                     default => null,
                 };
         }
+    }
+
+    private function propertyTypeAcceptsEnumCase(NodeAbstract $typeNode, string $enumClass): bool
+    {
+        if ($typeNode instanceof NullableType) {
+            return $this->propertyTypeAcceptsEnumCase($typeNode->type, $enumClass);
+        }
+        if ($typeNode instanceof UnionType) {
+            foreach ($typeNode->types as $member) {
+                if ($this->propertyTypeAcceptsEnumCase($member, $enumClass)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if ($typeNode instanceof IntersectionType) {
+            foreach ($typeNode->types as $member) {
+                if (!$this->propertyTypeAcceptsEnumCase($member, $enumClass)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        $typeName = $this->parseIdentifier($typeNode);
+        $lower = strtolower($typeName);
+        if ($lower === 'mixed' || $lower === 'any' || $lower === 'object') {
+            return true;
+        }
+        if (isset($this->zendTypeMap[$lower])) {
+            return false;
+        }
+        if ($lower === 'self') {
+            $expected = $this->getFullClassName();
+        } elseif ($lower === 'parent') {
+            $expected = $this->classDef->extends;
+        } else {
+            $expected = $this->getNamespacedClassName($typeName);
+        }
+        return $expected !== '' && $this->isInheritedFrom($enumClass, $expected);
     }
 
     /**
@@ -1988,6 +2501,7 @@ class Preprocessor extends CompilerBase
 
     protected function parseClassPropertyDef(Node\Stmt\Property $v): void
     {
+        $this->validateClassPropertyHookPlacement($v);
         $arrayDef = $this->parseArrayDefinition($v);
         if ($this->classDef->nativeObject) {
             if ($v->type === null) {
@@ -2038,6 +2552,103 @@ class Preprocessor extends CompilerBase
         $this->context = $oriCtx;
     }
 
+    /**
+     * Mirror Zend's compile-time placement rules for property hooks on class
+     * (and trait) properties; the interface path enforces its own subset in
+     * prepareInterfaceProperty(). Check order follows Zend 8.4 precedence:
+     * static, readonly, then the abstract-property rules.
+     */
+    private function validateClassPropertyHookPlacement(Node\Stmt\Property $v): void
+    {
+        $abstract = (bool) ($v->flags & Modifiers::ABSTRACT);
+        if ($v->hooks === [] && !$abstract) {
+            return;
+        }
+
+        $className = $this->classDef->getNamespacedName(false);
+        $propName = $v->props !== [] ? $this->parseIdentifier($v->props[0]->name) : '';
+        if ($v->hooks !== []) {
+            if ($v->flags & Modifiers::STATIC) {
+                $this->fatalError($v, 'Cannot declare hooks for static property');
+            }
+            // A readonly class marks every property readonly, exactly like an
+            // explicit per-property modifier.
+            if (($v->flags | $this->classDef->flags) & Modifiers::READONLY) {
+                $this->fatalError($v, 'Hooked properties cannot be readonly');
+            }
+            // Zend checks hook-level modifier conflicts right after the
+            // property-level placement rules, before any abstract-property
+            // rule: a final hook on a private property is rejected first even
+            // when the hook is also bodiless (probed:
+            // `abstract private int $x { final get; }` reports final+private).
+            // A private property cannot be overridden, so a final hook on it
+            // is meaningless; the rule applies in traits as well.
+            foreach ($v->hooks as $hook) {
+                if (($hook->flags & Modifiers::FINAL) && ($v->flags & Modifiers::PRIVATE)) {
+                    $this->fatalError($hook, 'Property hook cannot be both final and private');
+                }
+            }
+        }
+
+        if ($abstract) {
+            if ($v->hooks === []) {
+                $this->fatalError($v, 'Only hooked properties may be declared abstract');
+            }
+            // A bodiless hook of an abstract property is itself abstract. An
+            // abstract hook must be implementable by a subclass, which a
+            // private property forbids, and must be overridable, which final
+            // forbids. Zend reports these per hook, before the default-value
+            // and abstract-hook-presence rules (probed on 8.4.13), and —
+            // unlike abstract private trait METHODS — does not exempt traits.
+            foreach ($v->hooks as $hook) {
+                if ($hook->body !== null) {
+                    continue;
+                }
+                if ($v->flags & Modifiers::PRIVATE) {
+                    $this->fatalError($hook, 'Property hook cannot be both abstract and private');
+                }
+                if ($hook->flags & Modifiers::FINAL) {
+                    $this->fatalError($hook, 'Property hook cannot be both abstract and final');
+                }
+            }
+            foreach ($v->props as $prop) {
+                if ($prop->default !== null) {
+                    $this->fatalError(
+                        $v,
+                        "Cannot specify default value for virtual hooked property {$className}::\${$propName}",
+                    );
+                }
+            }
+            $hasAbstractHook = false;
+            foreach ($v->hooks as $hook) {
+                if ($hook->body === null) {
+                    $hasAbstractHook = true;
+                    break;
+                }
+            }
+            if (!$hasAbstractHook) {
+                $this->fatalError(
+                    $v,
+                    "Abstract property `{$className}::\${$propName}` must specify at least one abstract hook",
+                );
+            }
+            if (!$this->classDef->trait && !($this->classDef->flags & Modifiers::ABSTRACT)) {
+                $this->fatalError(
+                    $v,
+                    "Non-abstract class `{$className}` contains abstract hooked property `\${$propName}`",
+                );
+            }
+            return;
+        }
+
+        // Without the abstract modifier every declared hook needs a body.
+        foreach ($v->hooks as $hook) {
+            if ($hook->body === null) {
+                $this->fatalError($hook, 'Non-abstract property hook must have a body');
+            }
+        }
+    }
+
     protected function prepareClassMethod(Node\Stmt\ClassMethod $v, Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class): void
     {
         $this->resetMethod();
@@ -2045,8 +2656,13 @@ class Preprocessor extends CompilerBase
         $this->method = $name;
         $this->assertKeywordMethodMayBeDeclared($v, $name, $this->classDef->nativeObject);
         $this->assertNativeMagicMethodSupported($v, $name);
+        $this->assertEnumMayIncludeMethod($v, $name);
         $flags = $this->parseModifiers($v->flags);
         $abstract = $flags & Modifiers::ABSTRACT;
+        if ($class instanceof Node\Stmt\Enum_ && $abstract) {
+            $enumName = $this->classDef->getNamespacedName(false);
+            $this->fatalError($v, "Enum method {$enumName}::{$name}() must not be abstract");
+        }
         if ($this->classDef->nativeObject && ($flags & Modifiers::STATIC)) {
             $this->fatalError($v, 'Native class static methods are not supported');
         }
@@ -2085,6 +2701,17 @@ class Preprocessor extends CompilerBase
         } else {
             if ($this->classDef->hasMethod($name) || $this->classDef->hasAbstractMethod($name)) {
                 $this->fatalError($v, "Duplicate method `{$this->method}`");
+            }
+            // A private method cannot be overridden, so an abstract private
+            // method could never be implemented. Traits are exempt since PHP
+            // 8.0: the consuming class provides the private implementation.
+            if (!$class instanceof Node\Stmt\Trait_ && ($flags & Modifiers::PRIVATE)) {
+                $this->fatalError($v, "Abstract function `{$this->class}::{$name}()` cannot be declared private");
+            }
+            // An abstract method declares a signature only; Zend rejects a body
+            // instead of silently discarding it.
+            if ($v->stmts !== null) {
+                $this->fatalError($v, "Abstract function `{$this->class}::{$name}()` cannot contain body");
             }
             if (!$class instanceof Node\Stmt\Trait_ && isset($class->flags) && !($class->flags & Modifiers::ABSTRACT)) {
                 $this->fatalError($v, "Non-abstract class {$this->class} contains abstract method {$v->name}");
@@ -2138,11 +2765,11 @@ class Preprocessor extends CompilerBase
         $fullMethodNameLower = strtolower($fullMethodName);
         $fullClassNameLower = strtolower($fullClassName);
 
-        // 检查子类是否已覆盖此方法（子类先于父类被预处理的情况）
+        // Check whether a subclass already overrides this method (when the subclass is preprocessed before the parent)
         $isOverridden = $this->isMethodOverriddenInSubClasses($fullClassNameLower, $this->method);
         $this->classMethodOverride[$fullMethodNameLower] = $isOverridden;
 
-        // 查找父类是否有同名方法，递归向上标记父类方法已被覆盖
+        // Find whether a parent class has a method with the same name, and recursively mark the parent method as overridden
         while (($parentClass = $this->symbols->parent($fullClassNameLower)) !== '') {
             $parentMethodLower = strtolower($parentClass . '::' . $this->method);
             if (isset($this->classMethodOverride[$parentMethodLower])) {
@@ -2152,6 +2779,104 @@ class Preprocessor extends CompilerBase
         }
 
         $this->resetMethod();
+    }
+
+    /**
+     * Finalize the classMethodOverride flags once the complete class graph is
+     * known.
+     *
+     * The incremental registration in prepareClassMethod() depends on file
+     * preprocessing order: with a "sandwich" order (ancestor first, leaf
+     * second, intermediate class last), the ancestor method's override flag is
+     * missed, causing MethodCallTrait::findNativeMethod() to devirtualize a
+     * call that should be dynamically dispatched.
+     *
+     * Runs once per class-graph change, before conversion starts. For every
+     * declared method it walks the complete parent chain and marks each
+     * ancestor method of the same name as overridden, following the existing
+     * upward-marking semantics. This is order-independent and costs roughly
+     * method count x inheritance depth.
+     */
+    protected function finalizeMethodOverrideFlags(): void
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'method override flag finalization');
+        if ($this->methodOverrideFlagsFinalized) {
+            return;
+        }
+        $this->methodOverrideFlagsFinalized = true;
+
+        // Trait composition introduces real methods into the consuming class.
+        // They participate in virtual dispatch exactly like methods declared
+        // in the class body, so mark them before any method body is lowered.
+        // This is deliberately conservative: an extra mark only disables a
+        // native direct-call optimization, while a missing mark bypasses the
+        // trait override at runtime.
+        foreach ($this->symbols->classes() as $classDef) {
+            if ($classDef->trait !== null || $classDef->usedTraits === []) {
+                continue;
+            }
+            $traitMethods = [];
+            $visitedTraits = [];
+            $this->collectComposedTraitMethodNames($classDef, $traitMethods, $visitedTraits);
+            $className = strtolower($classDef->getNamespacedName(false));
+            foreach (array_keys($traitMethods) as $method) {
+                $this->classMethodOverride[$className . '::' . $method] ??= false;
+            }
+        }
+
+        foreach (array_keys($this->classMethodOverride) as $fullMethodNameLower) {
+            $pos = strrpos($fullMethodNameLower, '::');
+            if ($pos === false) {
+                continue;
+            }
+            $methodLower = substr($fullMethodNameLower, $pos + 2);
+            $classLower = substr($fullMethodNameLower, 0, $pos);
+            while (($parentClass = $this->symbols->parent($classLower)) !== '') {
+                $parentMethodLower = strtolower($parentClass) . '::' . $methodLower;
+                if (isset($this->classMethodOverride[$parentMethodLower])) {
+                    $this->classMethodOverride[$parentMethodLower] = true;
+                }
+                $classLower = strtolower($parentClass);
+            }
+        }
+    }
+
+    /**
+     * Collect every concrete method a class may receive through direct or
+     * nested trait composition. Conflict suppression may make this set larger
+     * than the final method table; those false positives safely retain Zend
+     * dynamic dispatch.
+     *
+     * @param array<string, true> $methods
+     * @param array<string, true> $visitedTraits
+     */
+    private function collectComposedTraitMethodNames(
+        ClassDef $owner,
+        array &$methods,
+        array &$visitedTraits,
+    ): void {
+        foreach ($owner->usedTraits as $traitName) {
+            $traitKey = strtolower($traitName);
+            if (isset($visitedTraits[$traitKey]) || !$this->hasClass($traitName)) {
+                continue;
+            }
+            $visitedTraits[$traitKey] = true;
+            $traitDef = $this->getClass($traitName);
+            if ($traitDef->trait === null) {
+                continue;
+            }
+            foreach ($traitDef->methods as $method) {
+                if (!($method->flags & Modifiers::ABSTRACT)) {
+                    $methods[strtolower($method->name)] = true;
+                }
+            }
+            foreach ($owner->traitAliases as $aliases) {
+                foreach ($aliases as $alias) {
+                    $methods[strtolower($alias['newName'])] = true;
+                }
+            }
+            $this->collectComposedTraitMethodNames($traitDef, $methods, $visitedTraits);
+        }
     }
 
     private function assertKeywordMethodMayBeDeclared(
@@ -2174,7 +2899,7 @@ class Preprocessor extends CompilerBase
     }
 
     /**
-     * 递归检查所有子类（及子类的子类）是否已定义了同名方法，用于处理子类先于父类被预处理的情况。
+     * Recursively check whether any subclass (and its subclasses) has defined a method with the same name; handles the case where a subclass is preprocessed before its parent.
      */
     private function isMethodOverriddenInSubClasses(string $classNameLower, string $method): bool
     {
@@ -2205,11 +2930,27 @@ class Preprocessor extends CompilerBase
         $name = $this->parseIdentifier($v->name);
         $this->interface = $name;
         $this->interfaceDef = new InterfaceDef($name, $this->namespace);
+        $this->interfaceDef->sourceFile = $this->file;
         $interfaceName = $this->interfaceDef->getNamespacedName(false);
         $interfaceNameLower = strtolower($interfaceName);
 
+        $extendedInterfaces = [];
         foreach ($v->extends as $parent) {
             $parentName = $this->getNamespacedClassName($this->parseIdentifier($parent));
+            // An interface may only extend interfaces. The parent's kind is
+            // only known once its declaration has been prepared; a parent
+            // declared later is validated by the Translator instead.
+            if ($this->hasClass($parentName) || $this->isInternalClass($parentName)) {
+                $this->fatalError($parent, "`{$interfaceName}` cannot implement `{$parentName}` - it is not an interface");
+            }
+            $parentNameLower = strtolower($parentName);
+            if (isset($extendedInterfaces[$parentNameLower])) {
+                $this->fatalError(
+                    $parent,
+                    "Interface `{$interfaceName}` cannot implement previously implemented interface `{$parentName}`",
+                );
+            }
+            $extendedInterfaces[$parentNameLower] = true;
             $this->interfaceDef->extendsList[] = $parentName;
             if ($this->interfaceDef->extends === '') {
                 $this->interfaceDef->extends = $parentName;
@@ -2231,11 +2972,21 @@ class Preprocessor extends CompilerBase
             if ($stmt instanceof Node\Stmt\ClassConst) {
                 foreach ($stmt->consts as $const) {
                     $constName = $this->parseIdentifier($const->name);
-                    if ($this->interfaceDef->hasConstant($constName)) {
-                        $this->fatalError($stmt, "Duplicate constant `{$constName}`");
+                    if ($stmt->flags & (Modifiers::PRIVATE | Modifiers::PROTECTED)) {
+                        $this->fatalError(
+                            $stmt,
+                            "Access type for interface constant `{$interfaceName}::{$constName}` must be public",
+                        );
                     }
                     if ($stmt->type) {
+                        $this->validateClassScopeTypeKeywords($stmt->type, true, false);
                         [$type, $class] = $this->resolveTypeDecl($stmt->type, self::DECL_TYPE_OF_CONST);
+                        if ($this->typeDeclContainsCallable($stmt->type)) {
+                            $this->fatalError(
+                                $stmt,
+                                "Class constant `{$interfaceName}::{$constName}` cannot have type `{$this->typeCheckNodeToString($stmt->type)}`",
+                            );
+                        }
                     } else {
                         $class = '';
                         $type = match ($const->value->getType()) {
@@ -2243,6 +2994,9 @@ class Preprocessor extends CompilerBase
                             'Scalar_String' => Type::STR,
                             default => Type::VAR,
                         };
+                    }
+                    if ($this->interfaceDef->hasConstant($constName)) {
+                        $this->fatalError($stmt, "Duplicate constant `{$constName}`");
                     }
                     $constInfo = $this->parseClassLikeConstant($const, $this->parseModifiers($stmt->flags), $type, $class, $stmt->type ? $type : null);
                     $this->interfaceDef->constants[$constName] = $constInfo;
@@ -2253,6 +3007,20 @@ class Preprocessor extends CompilerBase
             if ($stmt instanceof Node\Stmt\ClassMethod) {
                 $methodName = $this->getMethodName($stmt);
                 $this->assertKeywordMethodMayBeDeclared($stmt, $methodName, false);
+                // Interface methods are implicitly public and abstract; Zend
+                // rejects the modifiers below in this exact precedence order.
+                if ($stmt->flags & (Modifiers::PRIVATE | Modifiers::PROTECTED)) {
+                    $this->fatalError($stmt, "Access type for interface method `{$interfaceName}::{$methodName}()` must be public");
+                }
+                if ($stmt->flags & Modifiers::ABSTRACT) {
+                    $this->fatalError($stmt, "Interface method `{$interfaceName}::{$methodName}()` must not be abstract");
+                }
+                if ($stmt->flags & Modifiers::FINAL) {
+                    $this->fatalError($stmt, "Interface method `{$interfaceName}::{$methodName}()` must not be final");
+                }
+                if ($stmt->stmts !== null) {
+                    $this->fatalError($stmt, "Interface function `{$interfaceName}::{$methodName}()` cannot contain body");
+                }
                 if ($this->interfaceDef->hasMethod($methodName)) {
                     $this->fatalError($stmt, "Duplicate method `{$methodName}`");
                 }
@@ -2298,6 +3066,12 @@ class Preprocessor extends CompilerBase
         if ($property->hooks === []) {
             $this->fatalError($property, 'Interfaces may only include hooked properties');
         }
+        if ($property->flags & Modifiers::ABSTRACT) {
+            $this->fatalError(
+                $property,
+                'Property in interface cannot be explicitly abstract. All interface members are implicitly abstract',
+            );
+        }
         if ($property->flags & (Modifiers::PRIVATE | Modifiers::PROTECTED)) {
             $this->fatalError($property, 'Property in interface cannot be protected or private');
         }
@@ -2342,10 +3116,17 @@ class Preprocessor extends CompilerBase
             }
         }
 
+        $this->validateClassScopeTypeKeywords($property->type, true, false);
         [$type, $class] = $this->resolveTypeDecl($property->type, self::DECL_TYPE_OF_PROPERTY);
         $nullable = $property->type instanceof NullableType;
         foreach ($property->props as $prop) {
             $name = $this->parseIdentifier($prop->name);
+            if ($property->type !== null && $this->typeDeclContainsCallable($property->type)) {
+                $this->fatalError(
+                    $property,
+                    "Property `{$this->interfaceDef->getNamespacedName(false)}::\${$name}` cannot have type `{$this->typeCheckNodeToString($property->type)}`",
+                );
+            }
             if ($property->getAttribute(FunctionAttributeLowering::OVERRIDE_ATTRIBUTE, false)) {
                 $this->fatalCompileTimeAttribute(
                     $property,
@@ -2385,27 +3166,33 @@ class Preprocessor extends CompilerBase
 
     protected function parseTraitUseOptions(Node\Stmt\TraitUse $traitUse, array &$aliases, array &$ignored): void
     {
-        foreach ($traitUse->adaptations as $adaptation) {
+        foreach ($traitUse->adaptations as $index => $adaptation) {
             if ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Alias) {
                 $traits = [];
+                $requestedTrait = null;
                 if (!$adaptation->trait) {
                     // use THello1, THello2 {
                     //    hello as hello3;
                     // }
-                    // 未指定 trait，将添加所有 trait 的别名映射，在预处理阶段无法获取 trait 的方法列表
+                    // No trait specified: add alias mappings for all traits, since the trait's method list is unavailable during preprocessing
                     $traits = $traitUse->traits;
                 } else {
                     $traits[] = $adaptation->trait;
+                    $requestedTrait = $this->getNamespacedClassName($this->parseIdentifier($adaptation->trait));
                 }
+                $methodName = $adaptation->method->toString();
+                $group = $traitUse->getStartFilePos() . ':' . $index;
                 foreach ($traits as $trait) {
                     $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait));
-                    $methodName = $adaptation->method->toString();
                     /*
-                     * 例如：
+                     * For example:
                      * use TraitA { TraitA::method as newMethod}
-                     * 这表示 TraitA::method() 会被重命名为 TraitA::newMethod()
+                     * This means TraitA::method() is renamed to TraitA::newMethod()
                      */
                     $aliases[$this->getFullMethodName($traitName, $methodName)][] = [
+                        'group' => $group,
+                        'trait' => $requestedTrait,
+                        'method' => $methodName,
                         'newName' => $adaptation->newName ? $adaptation->newName->toString() : $methodName,
                         'newModifier' => $adaptation->newModifier ?: 0,
                     ];
@@ -2416,14 +3203,19 @@ class Preprocessor extends CompilerBase
                     $this->fatalError($traitUse, 'Trait precedence cannot be used without a trait');
                 }
                 $methodName = $adaptation->method->toString();
+                $winnerTrait = $this->getNamespacedClassName($this->parseIdentifier($adaptation->trait));
                 /*
-                 * 例如：
+                 * For example:
                  * use TraitA { TraitA::method insteadof TraitB}
-                 * 这表示 TraitB::method() 将会被忽略，真正执行的是 TraitA::method()
+                 * This means TraitB::method() is ignored, and TraitA::method() is actually executed
                  */
                 foreach ($adaptation->insteadof as $trait2) {
-                    $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait2));
-                    $ignored[$this->getFullMethodName($traitName, $methodName)] = true;
+                    $loserTrait = $this->getNamespacedClassName($this->parseIdentifier($trait2));
+                    $ignored[$this->getFullMethodName($loserTrait, $methodName)][] = [
+                        'winnerTrait' => $winnerTrait,
+                        'loserTrait' => $loserTrait,
+                        'method' => $methodName,
+                    ];
                 }
             }
         }
@@ -2438,6 +3230,7 @@ class Preprocessor extends CompilerBase
         }
         foreach ($v->traits as $trait) {
             $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait));
+            $this->classDef->usedTraits[] = $traitName;
             if (!$this->isInternalClass($traitName)) {
                 $this->symbolCallInFile[$this->file][] = strtolower($traitName);
             }
@@ -2447,6 +3240,10 @@ class Preprocessor extends CompilerBase
                 $this->classDef->traitAliases[$fullMethodName][] = $alias;
             }
         }
-        $this->classDef->traitIgnored = array_merge($this->classDef->traitIgnored, $ignored);
+        foreach ($ignored as $fullMethodName => $rules) {
+            foreach ($rules as $rule) {
+                $this->classDef->traitIgnored[$fullMethodName][] = $rule;
+            }
+        }
     }
 }

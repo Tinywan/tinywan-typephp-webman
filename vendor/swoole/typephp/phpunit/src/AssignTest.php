@@ -173,4 +173,18 @@ class AssignTest extends \BaseTest
     {
         $this->exec("declare(strict_types=0) is not allowed, only strict_types=1 is supported", 'declare-strict-types-zero.php');
     }
+
+    /** @dataProvider nativeScalarArrayDimWriteProvider */
+    public function testNativeScalarArrayDimWriteFailsInTypePhp(string $file): void
+    {
+        $this->exec('Cannot use [] for numbers', $file);
+    }
+
+    public static function nativeScalarArrayDimWriteProvider(): iterable
+    {
+        yield 'native int append' => ['native-int-array-dim-write.php'];
+        yield 'native float keyed write' => ['native-float-array-dim-write.php'];
+        yield 'native bool append' => ['native-bool-array-dim-write.php'];
+        yield 'explicit std::int keyed write' => ['explicit-native-int-array-dim-write.php'];
+    }
 }

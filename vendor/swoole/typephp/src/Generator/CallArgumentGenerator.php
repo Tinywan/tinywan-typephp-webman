@@ -35,7 +35,7 @@ trait CallArgumentGenerator
         $hasNamedArg = false;
         $argNameIndex = $this->getFunctionArgNameIndex($functionDef);
         $variadicArgIndex = $this->getVariadicArgIndex($functionDef);
-        // 对命名参数进行重排
+        // Reorder the named arguments into their declared positions
         foreach ($callArgs as $i => $arg) {
             if ($this->isPlaceholderExpr($arg)) {
                 throw new PlaceHolder();
@@ -76,7 +76,7 @@ trait CallArgumentGenerator
             if ($deferTrailingDefaults && $variadicArgCount > 0) {
                 $lastProvidedIndex = $variadicArgIndex;
             }
-            // 命名参数中间存在空洞，需要使用默认参数填充
+            // Holes left between named arguments must be filled with default arguments
             foreach ($functionDef->argInfoList as $k => $argInfo) {
                 if ($k < $parameterOffset) {
                     continue;
@@ -118,7 +118,8 @@ trait CallArgumentGenerator
             }
         }
 
-        // 函数只接受一个变长参数，且调用参数为空，直接传入空数组
+        // If the function only accepts a single variadic parameter and the call
+        // supplies no arguments, pass an empty array directly
         if (count($sourceArgs) === 0
             and count($functionDef->argInfoList) === $parameterOffset + 1
             and $functionDef->argInfoList[$parameterOffset]->variadic) {
@@ -129,10 +130,37 @@ trait CallArgumentGenerator
         $variadicVar = null;
         $callableName = $functionDef->displayName ?: $functionDef->getNamespacedName();
 
+        // PHP evaluates arguments left to right. A later argument that hoists
+        // captured statements while being lowered (an assignment, a call)
+        // would execute those side effects before an earlier plain-variable
+        // argument is read: `two($j, $j = 5)` must pass the old value of $j.
+        // Record the last such argument so every earlier by-value variable
+        // read can be snapshotted at its own argument position.
+        $lastHoistingSourceIndex = -1;
+        foreach ($sourceArgs as $sourceIndex => [, , $arg]) {
+            if ($arg instanceof Node\Arg && $this->shouldMaterializeOrderedOperand($arg->value)) {
+                $lastHoistingSourceIndex = $sourceIndex;
+            }
+        }
+
         // Evaluate every supplied argument in PHP source order. The resulting
         // expressions/temporaries may then be rearranged safely for the native
         // C++ ABI without changing observable call order.
-        foreach ($sourceArgs as [$argIndex, $variadicName, $arg]) {
+        foreach ($sourceArgs as $sourceIndex => [$argIndex, $variadicName, $arg]) {
+            if ($sourceIndex < $lastHoistingSourceIndex
+                && $arg instanceof Node\Arg
+                && !$arg->unpack
+                && $this->isSnapshotableVariableRead($arg->value)
+            ) {
+                $paramInfo = $argIndex === $variadicArgIndex
+                    ? $functionDef->argInfoList[$variadicArgIndex]
+                    : $this->getArgInfo($arg, $nativeFunc, $argIndex);
+                if ($paramInfo !== null && !$paramInfo->byRef) {
+                    $snapshot = $this->parseOrderedOperand($arg->value, false, true);
+                    $arg = clone $arg;
+                    $arg->value = new Expr\Variable($snapshot, $arg->value->getAttributes());
+                }
+            }
             if ($argIndex !== $variadicArgIndex) {
                 $argInfo = $this->getArgInfo($arg, $nativeFunc, $argIndex);
                 $resolvedArgs[$argIndex] = $this->getTypeConvertedArg(
@@ -144,9 +172,12 @@ trait CallArgumentGenerator
                 continue;
             }
 
-            // A single unpacked native array is already the ABI value. Reuse
-            // it directly instead of allocating and merging a temporary array.
-            if ($variadicArgCount === 1 && $arg->unpack && $this->isVarExpr($arg->value)) {
+            $argInfo = $functionDef->argInfoList[$variadicArgIndex];
+            // A single unpacked by-value native array is already the ABI
+            // value. A by-reference variadic must still separate the source
+            // and turn every element into a reference before entering the
+            // callee, matching Zend's argument-unpacking semantics.
+            if (!$argInfo->byRef && $variadicArgCount === 1 && $arg->unpack && $this->isVarExpr($arg->value)) {
                 $var = $this->parseIdentifier($arg->value);
                 if ($this->getVarType($var) === Type::ARRAY) {
                     $resolvedArgs[$variadicArgIndex] = $var;
@@ -155,16 +186,19 @@ trait CallArgumentGenerator
             }
 
             $variadicVar ??= $this->addTmpVar(Type::ARRAY);
-            $argInfo = $functionDef->argInfoList[$variadicArgIndex];
             if ($arg->unpack) {
-                $this->context->beforeStmtLines[] = $variadicVar . '.merge(' . $this->parseArrayArg($arg) . ');';
+                $method = $argInfo->byRef ? 'mergeReferences' : 'merge';
+                $this->context->beforeStmtLines[] = $variadicVar . '.' . $method
+                    . '(' . $this->parseArrayArg($arg) . ');';
             } elseif ($variadicName !== null) {
                 $value = $this->getTypeConvertedArg($arg, $argInfo, $callableName, $variadicArgIndex);
-                $this->context->beforeStmtLines[] = $variadicVar . '.setValue('
+                $method = $argInfo->byRef ? 'set' : 'setValue';
+                $this->context->beforeStmtLines[] = $variadicVar . '.' . $method . '('
                     . $this->getLiteralString($variadicName) . ', ' . $value . ');';
             } else {
                 $value = $this->getTypeConvertedArg($arg, $argInfo, $callableName, $variadicArgIndex);
-                $this->context->beforeStmtLines[] = $variadicVar . '.appendValue(' . $value . ');';
+                $method = $argInfo->byRef ? 'append' : 'appendValue';
+                $this->context->beforeStmtLines[] = $variadicVar . '.' . $method . '(' . $value . ');';
             }
         }
 
@@ -175,6 +209,15 @@ trait CallArgumentGenerator
         }
         if ($variadicVar !== null) {
             $resolvedArgs[$variadicArgIndex] = $variadicVar;
+            if ($functionDef->argInfoList[$variadicArgIndex]->byRef) {
+                // The aggregation array owns the second reference to every
+                // caller slot. Release it after the full PHP statement and
+                // also during C++ exception unwinding into a PHP catch block.
+                $cleanupGuard = $this->genTmpVarName();
+                $this->context->beforeStmtLines[] = 'php::ArrayCleanupGuard ' . $cleanupGuard
+                    . '{' . $variadicVar . '};';
+                $this->context->afterStmtLines[] = $cleanupGuard . '.cleanup();';
+            }
         }
         ksort($resolvedArgs);
         return implode(', ', $resolvedArgs);
@@ -188,7 +231,8 @@ trait CallArgumentGenerator
         }
 
         if ($className) {
-            // 动态调用类方法，无法判断参数是否为引用
+            // For dynamically called class methods, whether the parameter is
+            // passed by reference cannot be determined
             if ($className === self::DYNAMIC_CALLED_CLASS) {
                 return false;
             }
@@ -201,7 +245,8 @@ trait CallArgumentGenerator
             return $param->isPassedByReference();
         }
 
-        // 参数索引超出声明范围，检查最后一个参数是否为变长引用参数（如 &...$rest）
+        // The argument index exceeds the declared range; check whether the last
+        // parameter is a by-reference variadic parameter (e.g. &...$rest)
         $variadicParam = Reflection::getVariadicParameter($funcName, $className);
         return $variadicParam !== null && $variadicParam->isPassedByReference();
     }
@@ -477,7 +522,7 @@ trait CallArgumentGenerator
                 $array = $this->parseIdentifier($arg->value->var);
                 if ($array === 'GLOBALS') {
                     $globalVar = $this->parseGlobalsArrayDimFetch($arg->value);
-                    // 全局变量作为引用参数
+                    // Global variable passed as a by-reference argument
                     if ($byRef) {
                         $ref = $this->addTmpVar(Type::REF);
                         $this->context->beforeStmtLines[] = $ref . ' = ' . $globalVar . '.toReference();';
@@ -734,8 +779,9 @@ trait CallArgumentGenerator
     }
 
     /**
-     * 展开 refval() 调用中的数组元素或对象属性，返回对应的 C++ 引用表达式。
-     * 若为普通变量则返回 null，由调用方自行处理。
+     * Expand an array element or object property inside a refval() call into its
+     * corresponding C++ reference expression. Returns null for a plain variable,
+     * which the caller then handles itself.
      */
     protected function expandRefvalExpr(NodeAbstract $inner, Node\Arg $arg): ?string
     {
@@ -762,27 +808,31 @@ trait CallArgumentGenerator
     }
 
     /**
-     * 仅用于动态调用的参数解析
+     * Argument parsing used only for dynamic calls
      */
     protected function parseArgRefVar(Node\Arg $arg, string $name): string
     {
         if (!$this->hasVar($name)) {
-            // 若参数是引用类型，可以传入未定义变量，将立即创建变量作为引用
+            // For a by-reference parameter, an undefined variable may be passed;
+            // it is created immediately as a reference
             $this->addLocalVar($name, Type::REF);
         } elseif ($this->getVarType($name) === Type::REF) {
             return '&' . $name;
         } else {
-            // 本地变量，且是原生类型，则转为普通变量
+            // A local variable of native type is converted to a plain variable
             if ($this->hasLocalVar($name) and $this->isNativeType($this->getVarType($name))) {
                 $this->context->localVars[$name] = Type::VAR;
             }
-            // 需要引用类型的参数，使用临时变量作为引用，并替换掉实际的参数
+            // For a by-reference parameter, use a temporary variable as the reference
+            // and replace the actual argument with it
             $tmpVar = $this->genTmpVarName();
             $this->addLocalVar($tmpVar, Type::REF);
             $this->context->beforeStmtLines[] = $tmpVar . ' = ' . $this->parseExpr($arg->value) . '.toReference();';
             $name = $tmpVar;
         }
-        // 动态调用，参数列表是 Variant 类型而不是 Reference，必须使用 & 符号取地址，传递指针，以保持引用传递
+        // For dynamic calls, the argument list is Variant rather than Reference,
+        // so the & operator must be used to take the address and pass a pointer
+        // in order to preserve pass-by-reference semantics
         return '&' . $name;
     }
 

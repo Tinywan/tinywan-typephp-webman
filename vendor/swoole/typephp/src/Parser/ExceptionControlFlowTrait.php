@@ -22,7 +22,8 @@ trait ExceptionControlFlowTrait
         if ($this->method === '__destruct') {
             $this->warning($expr, "Throwing exception in {$this->getFullClassName()}::__destruct() may cause memory leak");
         }
-        if ($this->isNativeObjectClass($this->detectClassOfExpr($expr->expr))) {
+        $class = $this->detectDeclaredClassOfExpr($expr->expr);
+        if ($this->isNativeObjectClass($class)) {
             $this->fatalError($expr, 'Native objects cannot be thrown as Zend exceptions');
         }
         $type = $this->detectTypeOfExpr($expr->expr);
@@ -37,7 +38,11 @@ trait ExceptionControlFlowTrait
         } else {
             $ex = $this->parseExpr($expr->expr);
         }
-        if ($type != Type::VAR) {
+        // A method call with a class return declaration is represented by a
+        // php::Variant on the dynamic path, but it is still statically known
+        // to be an object. Let throwValue() preserve that runtime value and
+        // perform Zend's ordinary Throwable validation.
+        if ($type !== Type::VAR && $type !== Type::OBJECT && $class === '') {
             $this->fatalError($expr, 'Can only throw objects');
         }
         return 'php::throwValue(' . $ex . ')';

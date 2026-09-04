@@ -6,7 +6,7 @@ class A
 
 class B extends A
 {
-    public readonly int $x = 2;
+    public readonly int $x;
 }
 
 function main() {}

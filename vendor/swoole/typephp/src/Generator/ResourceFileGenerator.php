@@ -3,11 +3,12 @@
 namespace TypePhp\Generator;
 
 /**
- * Windows 资源文件 (.rc) 生成器
+ * Windows resource file (.rc) generator
  *
- * 用于生成 Windows PE 资源文件，可将图标、版本信息等嵌入到 exe 中
+ * Generates Windows PE resource files, embedding icons, version information,
+ * and other resources into the exe
  *
- * 配置示例（在 project.yml 中）：
+ * Configuration example (in project.yml):
  *
  * resource:
  *   icon: path/to/icon.ico
@@ -28,18 +29,18 @@ namespace TypePhp\Generator;
  *     product-name: "My Product"
  *     comments: "Built with TypePHP"
  *
- * # manifest 与 resource 同级（可选，Windows 平台缺省不携带）
+ * # manifest sits at the same level as resource (optional; omitted by default on Windows)
  * manifest: path/to/app.manifest
  */
 class ResourceFileGenerator
 {
     /**
-     * 资源配置
+     * Resource configuration
      */
     private array $config;
 
     /**
-     * 项目目录（用于解析相对路径）
+     * Project directory (used to resolve relative paths)
      */
     private string $projectDir;
 
@@ -50,7 +51,7 @@ class ResourceFileGenerator
     }
 
     /**
-     * 检查是否有任何资源配置
+     * Check whether any resource is configured
      */
     public function hasResource(): bool
     {
@@ -60,7 +61,7 @@ class ResourceFileGenerator
     }
 
     /**
-     * 获取图标文件的绝对路径
+     * Get the absolute path of the icon file
      */
     public function getIconPath(): ?string
     {
@@ -73,7 +74,7 @@ class ResourceFileGenerator
     }
 
     /**
-     * 获取 manifest 文件的绝对路径
+     * Get the absolute path of the manifest file
      */
     public function getManifestPath(): ?string
     {
@@ -86,21 +87,21 @@ class ResourceFileGenerator
     }
 
     /**
-     * 解析相对/绝对路径为绝对路径
+     * Resolve a relative/absolute path into an absolute path
      */
     private function resolvePath(string $path): string
     {
-        // 如果是绝对路径，直接使用
+        // If it is already an absolute path, use it as-is
         if (preg_match('/^[A-Za-z]:\\\\|^\//', $path)) {
             return $path;
         }
 
-        // 相对路径，基于项目目录解析
+        // Otherwise resolve the relative path against the project directory
         return $this->projectDir . DIRECTORY_SEPARATOR . $path;
     }
 
     /**
-     * 生成 .rc 资源文件内容
+     * Generate the contents of the .rc resource file
      */
     public function generate(): string
     {
@@ -109,15 +110,15 @@ class ResourceFileGenerator
         $content .= '// DO NOT EDIT - This file is auto-generated' . PHP_EOL;
         $content .= PHP_EOL;
 
-        // 告诉 rc.exe 此文件使用 UTF-8 编码，避免中文乱码
+        // Tell rc.exe this file is UTF-8 encoded to avoid garbled Chinese text
         $content .= '#pragma code_page(65001)' . PHP_EOL;
         $content .= PHP_EOL;
 
-        // 包含 Windows 版本信息头文件
+        // Include the Windows header for version information
         $content .= '#include <windows.h>' . PHP_EOL;
         $content .= PHP_EOL;
 
-        // Manifest 资源（Windows 清单文件，如 UAC、DPI 感知等）
+        // Manifest resource (Windows application manifest, e.g. UAC, DPI awareness, etc.)
         $manifestPath = $this->getManifestPath();
         if ($manifestPath) {
             $manifestPathRc = str_replace('\\', '/', $manifestPath);
@@ -126,17 +127,17 @@ class ResourceFileGenerator
             $content .= PHP_EOL;
         }
 
-        // 图标资源
+        // Icon resource
         $iconPath = $this->getIconPath();
         if ($iconPath) {
-            // 使用正斜杠，Windows RC 编译器更兼容
+            // Use forward slashes for better compatibility with the Windows RC compiler
             $iconPathRc = str_replace('\\', '/', $iconPath);
             $content .= '// Icon Resource' . PHP_EOL;
             $content .= 'MAINICON ICON "' . addslashes($iconPathRc) . '"' . PHP_EOL;
             $content .= PHP_EOL;
         }
 
-        // 版本信息
+        // Version information
         $versionInfo = $this->config['version-info'] ?? [];
         if (!empty($versionInfo)) {
             $content .= $this->generateVersionInfo($versionInfo);
@@ -146,7 +147,7 @@ class ResourceFileGenerator
     }
 
     /**
-     * 生成版本信息块
+     * Generate the version information block
      */
     private function generateVersionInfo(array $info): string
     {
@@ -165,16 +166,17 @@ class ResourceFileGenerator
         $content .= 'FILESUBTYPE ' . ($info['file-subtype'] ?? 'VFT2_UNKNOWN') . PHP_EOL;
         $content .= 'BEGIN' . PHP_EOL;
 
-        // StringFileInfo 块
+        // StringFileInfo block
         $content .= '    BLOCK "StringFileInfo"' . PHP_EOL;
         $content .= '    BEGIN' . PHP_EOL;
 
-        // 语言代码页（040904b0 = 英文/UTF-8，配合 #pragma code_page(65001) 正确显示中文）
+        // Language code page (040904b0 = English/UTF-8, used with #pragma code_page(65001)
+        // so Chinese text renders correctly)
         $langCodepage = $info['lang-codepage'] ?? '040904b0';
         $content .= '        BLOCK "' . $langCodepage . '"' . PHP_EOL;
         $content .= '        BEGIN' . PHP_EOL;
 
-        // 字符串值
+        // String values
         $stringFields = [
             'company-name' => 'CompanyName',
             'file-description' => 'FileDescription',
@@ -195,19 +197,20 @@ class ResourceFileGenerator
             }
         }
 
-        // 如果没有设置 FileVersion，从 file-version 字段自动填入
+        // If FileVersion was not set, it is auto-filled from the file-version field
         if (!isset($info['file-version-str']) && $fileVersion) {
-            // 已在上面通过 file-version 键处理
+            // Already handled above via the file-version key
         }
 
         $content .= '        END' . PHP_EOL;
         $content .= '    END' . PHP_EOL;
 
-        // VarFileInfo 块
+        // VarFileInfo block
         $content .= '    BLOCK "VarFileInfo"' . PHP_EOL;
         $content .= '    BEGIN' . PHP_EOL;
-        // 0x0409 = English(US)，1200 = Unicode(UTF-16)
-        // 配合 StringFileInfo 中的 040904b0 代码页，确保中文在 UTF-8 源文件中正确编码
+        // 0x0409 = English(US), 1200 = Unicode(UTF-16)
+        // Combined with the 040904b0 code page in StringFileInfo, this ensures
+        // Chinese text in the UTF-8 source file is encoded correctly
         $content .= '        VALUE "Translation", 0x0409, 1200' . PHP_EOL;
         $content .= '    END' . PHP_EOL;
 
@@ -217,31 +220,31 @@ class ResourceFileGenerator
     }
 
     /**
-     * 将版本号格式化为逗号分隔的格式（1,0,0,0）
-     * 支持以下输入格式：
+     * Format a version number into comma-separated form (1,0,0,0).
+     * Supported input formats:
      * - "1.0.0.0" → "1,0,0,0"
      * - "1,0,0,0" → "1,0,0,0"
-     * - "v1052" → "1052,0,0,0"  （去掉 v 前缀）
+     * - "v1052" → "1052,0,0,0"  (strips the leading "v")
      * - "1.0" → "1,0,0,0"
      */
     private function formatVersionDots(string $version): string
     {
-        // 去掉 v/V 前缀（如 v1052 → 1052）
+        // Strip a leading v/V prefix (e.g. v1052 → 1052)
         $version = ltrim($version, 'vV');
 
-        // 如果已经是逗号分隔格式，直接返回
+        // Return as-is if it is already comma-separated
         if (str_contains($version, ',')) {
             return $version;
         }
 
-        // 用点号分隔
+        // Split on dots
         $parts = explode('.', $version);
-        // 确保每个部分都是数字（过滤掉非数字字符）
+        // Keep only digits in each part (filter out non-numeric characters)
         foreach ($parts as $i => $part) {
             $parts[$i] = preg_replace('/[^0-9]/', '', $part) ?: '0';
         }
 
-        // 确保恰好有4个部分
+        // Ensure exactly four parts
         while (count($parts) < 4) {
             $parts[] = '0';
         }
@@ -250,7 +253,7 @@ class ResourceFileGenerator
     }
 
     /**
-     * 生成 resource.h 头文件内容（可选，供 C++ 代码引用资源 ID）
+     * Generate the resource.h header contents (optional, lets C++ code reference resource IDs)
      */
     public function generateHeader(): string
     {

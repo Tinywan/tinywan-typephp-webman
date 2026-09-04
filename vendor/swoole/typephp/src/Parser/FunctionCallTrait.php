@@ -177,7 +177,7 @@ trait FunctionCallTrait
                 ) {
                     $this->fatalError($expr, 'Native ABI functions cannot be converted to Zend closures');
                 }
-                // 函数调用占位符，不是真实的函数调用
+                // Function call placeholder, not a real function call
                 if (count($expr->args) === 1 and $this->isPlaceholderExpr($expr->args[0])) {
                     return $this->genPlaceHolder($this->identifierToStr($expr->name));
                 }
@@ -195,7 +195,7 @@ trait FunctionCallTrait
                     return $this->genPlaceHolder($this->identifierToStr($expr->name));
                 }
             }
-            // 动态调用的函数，转换函数名为带有命名空间的全限定名称
+            // For dynamically dispatched functions, convert the function name to its fully qualified name including the namespace
             $name = $this->getNamespacedFuncName($name);
             $this->checkInternalFunctionArgCount($name, $expr);
             $code = $this->parseFuncCallWithOptimizer($name, $expr);
@@ -214,10 +214,17 @@ trait FunctionCallTrait
             $name = '';
         }
         if (empty($expr->args)) {
+            if ($name === '' && $runtimeCallScope === null) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
+            }
             $scopeArg = $runtimeCallScope === null ? '' : $runtimeCallScope . ', ';
             return 'php::call(' . $scopeArg . $fn . ')';
         }
         try {
+            if ($name === '' && $runtimeCallScope === null) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
+                    . $this->parseCallArgs($expr->args) . ')';
+            }
             return $this->genRuntimeFunctionCall(
                 $fn,
                 $expr->args,

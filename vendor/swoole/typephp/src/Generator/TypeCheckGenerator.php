@@ -19,6 +19,31 @@ use PhpParser\NodeAbstract;
 
 trait TypeCheckGenerator
 {
+    protected const string LATE_BOUND_TYPE_ATTRIBUTE = 'typephp_late_bound_type';
+
+    protected function markLateBoundTypeNodes(?NodeAbstract $type): void
+    {
+        if ($type === null) {
+            return;
+        }
+        if ($type instanceof NullableType) {
+            $this->markLateBoundTypeNodes($type->type);
+            return;
+        }
+        if ($type instanceof UnionType || $type instanceof IntersectionType) {
+            foreach ($type->types as $member) {
+                $this->markLateBoundTypeNodes($member);
+            }
+            return;
+        }
+        if ($type instanceof Node\Name) {
+            $name = strtolower($type->toString());
+            if (in_array($name, ['self', 'static', 'parent'], true)) {
+                $type->setAttribute(self::LATE_BOUND_TYPE_ATTRIBUTE, $name);
+            }
+        }
+    }
+
     protected function isStrictScalarType(string $type): bool
     {
         return in_array($type, [Type::INT, Type::FLOAT, Type::BOOL, Type::STR], true);
@@ -111,7 +136,7 @@ trait TypeCheckGenerator
         return $code;
     }
 
-    protected function buildTypeCheckFromNode(NodeAbstract $typeNode): array
+    protected function buildTypeCheckFromNode(NodeAbstract $typeNode, bool $includeSimpleType = false): array
     {
         $check = [];
         $typeStr = $this->typeCheckNodeToString($typeNode);
@@ -131,18 +156,15 @@ trait TypeCheckGenerator
                 $check[] = count($clause) === 1 ? $clause[0] : ['kind' => 'allOf', 'types' => $clause];
             }
         } elseif ($typeNode instanceof IntersectionType) {
-            foreach ($typeNode->types as $subType) {
-                $nameLower = strtolower($this->parseIdentifier($subType));
-                if ($nameLower === 'self' || $nameLower === 'parent' || $nameLower === 'static') {
-                    $this->fatalError($subType, "Type '{$nameLower}' cannot be part of an intersection type");
-                }
-            }
             $clause = $this->buildTypeCheckClause($typeNode);
             if (!empty($clause)) {
                 $check[] = count($clause) === 1 ? $clause[0] : ['kind' => 'allOf', 'types' => $clause];
             }
-        } else {
-            return ['check' => [], 'typeStr' => ''];
+        } elseif ($includeSimpleType) {
+            $clause = $this->buildTypeCheckClause($typeNode);
+            if (!empty($clause)) {
+                $check[] = count($clause) === 1 ? $clause[0] : ['kind' => 'allOf', 'types' => $clause];
+            }
         }
 
         if (empty($check)) {
@@ -195,17 +217,31 @@ trait TypeCheckGenerator
             return [$entry];
         }
 
-        if ($name === 'self') {
+        $lateBound = $typeNode instanceof Node\Name
+            ? $typeNode->getAttribute(self::LATE_BOUND_TYPE_ATTRIBUTE, '')
+            : '';
+        $lateBound = is_string($lateBound) ? $lateBound : '';
+        if ($lateBound === 'self') {
             $class = $this->getFullClassLikeName();
-        } elseif ($name === 'parent') {
+        } elseif ($lateBound === 'parent') {
             $class = $this->classDef->extends ?? '';
-        } elseif ($name === 'static') {
+        } elseif ($lateBound === 'static') {
             $class = 'static';
         } else {
             $class = $this->getNamespacedClassName($name);
         }
 
-        return $class ? [['kind' => 'instanceof', 'class' => $class]] : [];
+        if ($lateBound !== '') {
+            $typeNode->setAttribute(self::LATE_BOUND_TYPE_ATTRIBUTE, $lateBound);
+        }
+        if ($class === '' && !($lateBound === 'parent' && $this->classDef?->trait !== null)) {
+            return [];
+        }
+        $entry = ['kind' => 'instanceof', 'class' => $class];
+        if ($lateBound !== '') {
+            $entry['lateBound'] = $lateBound;
+        }
+        return [$entry];
     }
 
     protected function typeCheckNodeToString(NodeAbstract $typeNode): string

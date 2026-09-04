@@ -65,6 +65,24 @@ final class CompletionMetadata
         return ['--convert-python-to-php'];
     }
 
+    /**
+     * Options whose value is a command. `compgen -c` completes names found in
+     * PATH, and switches to executables in a directory once the word contains
+     * a slash, so both `clang++` and `/usr/bin/clang++` are covered.
+     *
+     * @return list<string>
+     */
+    public static function commandOptions(): array
+    {
+        return ['--compiler'];
+    }
+
+    /** @return list<string> */
+    public static function commandEqualsOptions(): array
+    {
+        return ['--compiler='];
+    }
+
     /** @return list<string> */
     public static function outputFileOptions(): array
     {

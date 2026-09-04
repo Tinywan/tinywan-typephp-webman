@@ -2,7 +2,7 @@
 /**
  * This file is part of TypePHP.
  *
- * Lowers switch cases, fallthrough, defaults, and loop-exit flags.
+ * Lowers switch cases, fallthrough, and defaults.
  */
 
 namespace TypePhp\Parser;
@@ -38,7 +38,7 @@ trait SwitchTrait
         $var_def .= $type . ' ' . $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
         $var_def .= $this->formatCapturedStmtLines($condAfterStmts);
 
-        // 保存作用域，switch 可能会解析失败，在这个过程中会增加变量，需重置
+        // Save the scope; switch parsing may fail partway and add variables in the process, so it must be reset
         $localVars = $this->context->localVars;
         $code      = $this->parseBeforeStmtLines() . PHP_EOL;
 
@@ -64,7 +64,6 @@ trait SwitchTrait
             }
             $this->indentLevel--;
             $code .= $this->getIndent() . '}' . PHP_EOL;
-            $code .= $this->genLoopEndFlagCheck();
             $this->indentLevel--;
             $code .= $this->getIndent() . '} while(0);' . PHP_EOL;
 
@@ -166,7 +165,6 @@ trait SwitchTrait
                 $code .= $this->getIndent() . '}' . PHP_EOL;
             }
         }
-        $code .= $this->genLoopEndFlagCheck();
         $this->indentLevel--;
         $code .= $this->getIndent() . '} while (0);';
 

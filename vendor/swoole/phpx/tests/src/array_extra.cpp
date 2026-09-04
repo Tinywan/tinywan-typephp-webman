@@ -43,6 +43,26 @@ TEST(array_extra, contains_strict) {
     ASSERT_FALSE(arr.contains(99, true));
 }
 
+TEST(array_extra, append_value_primitive_overloads_preserve_types_and_cow) {
+    Array values;
+    values.appendValue(42L);
+    values.appendValue(2.5);
+    values.appendValue(true);
+    values.appendValue(nullptr);
+
+    ASSERT_TRUE(values.get(0).isInt());
+    ASSERT_EQ(values.get(0).toInt(), 42);
+    ASSERT_TRUE(values.get(1).isFloat());
+    ASSERT_DOUBLE_EQ(values.get(1).toFloat(), 2.5);
+    ASSERT_TRUE(values.get(2).isTrue());
+    ASSERT_TRUE(values.get(3).isNull());
+
+    Array copy(values);
+    values.appendValue(99L);
+    ASSERT_EQ(values.count(), 5);
+    ASSERT_EQ(copy.count(), 4);
+}
+
 // Test isList for packed and non-packed arrays
 TEST(array_extra, isList) {
     Array a1{1, 2, 3, 4, 5};
@@ -167,6 +187,28 @@ TEST(array_extra, merge) {
     Array c{4, 5};
     a.merge(c);
     ASSERT_EQ(a.count(), 5);
+}
+
+TEST(array_extra, merge_references_preserves_writeback_and_cow) {
+    Array source{1, 2};
+    Array cow_copy(source);
+    Array arguments;
+
+    arguments.mergeReferences(source);
+    arguments.itemRef(0) = 11;
+    arguments.itemRef(1) = 22;
+
+    ASSERT_EQ(source.get(0).toInt(), 11);
+    ASSERT_EQ(source.get(1).toInt(), 22);
+    ASSERT_EQ(cow_copy.get(0).toInt(), 1);
+    ASSERT_EQ(cow_copy.get(1).toInt(), 2);
+
+    Variant external(30);
+    Array named;
+    named.set("value", external.toReference());
+    arguments.mergeReferences(named);
+    arguments.itemRef("value") = 31;
+    ASSERT_EQ(external.toInt(), 31);
 }
 
 // Test array copy construction

@@ -127,31 +127,43 @@ trait FuncCallOptimizer
             'defined'            => ['constFold' => self::FOLD_KNOWN_CONSTANT],
 
             // Big* dispatch
-            'abs' => ['bigDispatch' => [
-                Type::BIGINT => 'php::BigInt::abs',
-                Type::BIGFLOAT => 'php::BigFloat::abs',
-                Type::DECIMAL => 'php::Decimal::abs',
-                'fallback' => 'php::fn::abs',
-            ]],
+            'abs' => [
+                'bigDispatch' => [
+                    Type::BIGINT => 'php::BigInt::abs',
+                    Type::BIGFLOAT => 'php::BigFloat::abs',
+                    Type::DECIMAL => 'php::Decimal::abs',
+                    'fallback' => 'php::fn::abs',
+                ],
+                'fallbackArgTypes' => [[Type::INT, Type::FLOAT]],
+            ],
             'pow' => ['bigDispatch' => [
                 Type::BIGINT => 'php::BigInt::pow',
                 Type::DECIMAL => 'php::Decimal::pow',
                 'fallback' => 'php::fn::pow',
             ]],
-            'sqrt' => ['bigDispatch' => [
-                Type::BIGINT => 'php::BigInt::sqrt',
-                Type::DECIMAL => 'php::Decimal::sqrt',
-                Type::BIGFLOAT => 'php::BigFloat::sqrt',
-                'fallback' => 'php::fn::sqrt',
-            ]],
-            'floor' => ['bigDispatch' => [
-                Type::DECIMAL => 'php::Decimal::floor',
-                'fallback' => 'php::fn::floor',
-            ]],
-            'ceil' => ['bigDispatch' => [
-                Type::DECIMAL => 'php::Decimal::ceil',
-                'fallback' => 'php::fn::ceil',
-            ]],
+            'sqrt' => [
+                'bigDispatch' => [
+                    Type::BIGINT => 'php::BigInt::sqrt',
+                    Type::DECIMAL => 'php::Decimal::sqrt',
+                    Type::BIGFLOAT => 'php::BigFloat::sqrt',
+                    'fallback' => 'php::fn::sqrt',
+                ],
+                'fallbackArgTypes' => [[Type::INT, Type::FLOAT]],
+            ],
+            'floor' => [
+                'bigDispatch' => [
+                    Type::DECIMAL => 'php::Decimal::floor',
+                    'fallback' => 'php::fn::floor',
+                ],
+                'fallbackArgTypes' => [[Type::INT, Type::FLOAT]],
+            ],
+            'ceil' => [
+                'bigDispatch' => [
+                    Type::DECIMAL => 'php::Decimal::ceil',
+                    'fallback' => 'php::fn::ceil',
+                ],
+                'fallbackArgTypes' => [[Type::INT, Type::FLOAT]],
+            ],
 
             // Type conversions
             'strval'   => ['conversion' => self::ARG_TYPE_STR],
@@ -203,7 +215,11 @@ trait FuncCallOptimizer
             if ($this->isPlaceholderExpr($arg)) {
                 return false;
             }
-            if ($arg instanceof Node\Arg && $arg->name !== null) {
+            // Custom handlers, big-type dispatch and scalar conversions work
+            // with the syntactic argument list. Named arguments and unpacking
+            // require Zend's runtime binding/expansion semantics, so reject
+            // them before any optimizer-specific handler can consume them.
+            if ($arg instanceof Node\Arg && ($arg->name !== null || $arg->unpack)) {
                 return false;
             }
         }
@@ -233,8 +249,9 @@ trait FuncCallOptimizer
             }
         }
 
-        // 检测参数中使用的变量是否已定义，若变量不存在则回退到动态调用路径
-        // 动态路径中的 parseCallArgs() 会给出明确的错误信息
+        // Check whether the variables used in the arguments are defined; if a variable
+        // does not exist, fall back to the dynamic call path, where parseCallArgs()
+        // produces a clear error message.
         foreach ($expr->args as $arg) {
             if (!$arg instanceof Node\Arg) {
                 continue;
@@ -254,7 +271,11 @@ trait FuncCallOptimizer
             return $this->{$config['handler']}($name, $expr, $config);
         }
         if (isset($config['bigDispatch'])) {
-            return $this->dispatchBigType($expr, $config['bigDispatch']);
+            return $this->dispatchBigType(
+                $expr,
+                $config['bigDispatch'],
+                $config['fallbackArgTypes'] ?? [],
+            );
         }
         if (isset($config['conversion'])) {
             return $this->dispatchConversion($expr, $config['conversion']);
@@ -269,7 +290,7 @@ trait FuncCallOptimizer
 
     protected function dispatchFuncCall(string $name, Node\Expr\FuncCall $expr, array $config): string|false
     {
-        // 命名参数 / unpack（...）展开需要运行时处理，回退到动态调用路径
+        // Named arguments and unpack (...) expansion require runtime handling; fall back to the dynamic call path.
         foreach ($expr->args as $arg) {
             if ($arg->name !== null || $arg->unpack) {
                 return false;
@@ -286,9 +307,19 @@ trait FuncCallOptimizer
         $refInfo = $this->getArgReflectionInfo($name);
         $argTypeStr = $config['args'] ?? ($refInfo['args'] ?? '');
         $defaults = $config['defaults'] ?? [];
+        $variadicType = $config['variadicType'] ?? ($refInfo['variadicType'] ?? '');
+        $nullables = $refInfo['nullables'] ?? [];
+
+        if (!$this->hasOptimizerSafeTypedArguments(
+            $expr,
+            $argTypeStr,
+            $variadicType,
+            $nullables,
+        )) {
+            return false;
+        }
 
         if (!empty($config['variadic']) || ($refInfo['variadic'] ?? false)) {
-            $variadicType = $config['variadicType'] ?? $refInfo['variadicType'] ?? '';
             return $this->genVariadicCall($target, $expr, $variadicType);
         }
 
@@ -299,9 +330,78 @@ trait FuncCallOptimizer
             }
         }
 
-        $nullables = $refInfo['nullables'] ?? [];
         $args = $this->buildArgList($expr, $argTypeStr, $defaults, $nullables);
         return $target . '(' . implode(', ', $args) . ')';
+    }
+
+    protected function hasOptimizerSafeTypedArguments(
+        Node\Expr\FuncCall $expr,
+        string $argTypeStr,
+        string $variadicType,
+        array $nullables,
+    ): bool
+    {
+        // The optimized ABI conversions are safe for exact types and for
+        // strict PHP's int-to-float widening. Every other conversion would
+        // erase the runtime zval type before Zend can validate the parameter,
+        // so keep those calls on php::call().
+        $types = $argTypeStr === '' ? [] : explode('_', $argTypeStr);
+        foreach ($expr->args as $index => $arg) {
+            // Custom handlers call this helper too. They cannot lower an
+            // unpacked list as a fixed C++ ABI argument sequence.
+            if ($arg->unpack) {
+                return false;
+            }
+            $type = $types[$index] ?? $variadicType;
+            $base = ($type[0] ?? '') === self::ARG_OPTIONAL ? substr($type, 1) : $type;
+            if (!in_array($base, [
+                self::ARG_TYPE_STR,
+                self::ARG_TYPE_INT,
+                self::ARG_TYPE_FLOAT,
+                self::ARG_TYPE_BOOL,
+                self::ARG_TYPE_ARRAY,
+            ], true)) {
+                continue;
+            }
+            if ($this->isNull($arg->value)) {
+                if ($nullables[$index] ?? false) {
+                    continue;
+                }
+                return false;
+            }
+            $expected = match ($base) {
+                self::ARG_TYPE_STR => Type::STR,
+                self::ARG_TYPE_INT => Type::INT,
+                self::ARG_TYPE_FLOAT => Type::FLOAT,
+                self::ARG_TYPE_BOOL => Type::BOOL,
+                self::ARG_TYPE_ARRAY => Type::ARRAY,
+            };
+            $actual = $this->detectTypeOfExpr($arg->value);
+            if ($actual === $expected) {
+                continue;
+            }
+            if ($expected === Type::FLOAT && $actual === Type::INT) {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function hasOptimizerSafeReflectedArguments(
+        string $name,
+        Node\Expr\FuncCall $expr,
+        array $config,
+    ): bool
+    {
+        $refInfo = $this->getArgReflectionInfo($name);
+        return $this->hasOptimizerSafeTypedArguments(
+            $expr,
+            $config['args'] ?? ($refInfo['args'] ?? ''),
+            $config['variadicType'] ?? ($refInfo['variadicType'] ?? ''),
+            $refInfo['nullables'] ?? [],
+        );
     }
 
     // =========================================================================
@@ -526,8 +626,23 @@ trait FuncCallOptimizer
         return $target . '(' . implode(', ', $args) . ')';
     }
 
-    protected function dispatchConversion(Node\Expr\FuncCall $expr, string $convType): string
+    protected function dispatchConversion(Node\Expr\FuncCall $expr, string $convType): string|false
     {
+        // These four are lowered as single-argument Native casts, which cannot
+        // carry intval()'s $base. Any other arity must reach the runtime
+        // function instead of silently dropping the extra argument.
+        //
+        // An unpacked or named argument is a single Node\Arg whatever its
+        // runtime arity turns out to be, so neither may be read as the value
+        // being converted; both stay on the dynamic path like dispatchFuncCall()
+        // already does for every other builtin.
+        if (count($expr->args) !== 1
+            || !($expr->args[0] instanceof Node\Arg)
+            || $expr->args[0]->unpack
+            || $expr->args[0]->name !== null
+        ) {
+            return false;
+        }
         $arg = $expr->args[0]->value;
         $type = $this->detectTypeOfExpr($arg);
         $nativeClass = $this->detectClassOfExpr($arg);
@@ -565,10 +680,25 @@ trait FuncCallOptimizer
         };
     }
 
-    protected function dispatchBigType(Node\Expr\FuncCall $expr, array $dispatch): string|false
+    protected function dispatchBigType(
+        Node\Expr\FuncCall $expr,
+        array $dispatch,
+        array $fallbackArgTypes = [],
+    ): string|false
     {
         $type = $this->detectTypeOfExpr($expr->args[0]->value);
-        $target = $dispatch[$type] ?? $dispatch['fallback'] ?? null;
+        $target = $dispatch[$type] ?? null;
+        if ($target === null) {
+            foreach ($fallbackArgTypes as $index => $acceptedTypes) {
+                $arg = $expr->args[$index] ?? null;
+                if (!$arg instanceof Node\Arg
+                    || !in_array($this->detectTypeOfExpr($arg->value), $acceptedTypes, true)
+                ) {
+                    return false;
+                }
+            }
+            $target = $dispatch['fallback'] ?? null;
+        }
         if (!$target) {
             return false;
         }
@@ -655,16 +785,83 @@ trait FuncCallOptimizer
         }
         $arg = $expr->args[0]->value;
         if ($arg instanceof Node\Expr\Array_) {
+            if (!$this->isCountFoldableArray($arg)) {
+                return false;
+            }
             return count($arg->items) . $this->getPlatform()->getIntegerLiteralSuffix();
         }
         return $this->genStdContainerCount($arg);
     }
 
+    /**
+     * The number of AST items only equals the runtime element count when no
+     * item spreads another array, no key can collide with another key, and
+     * dropping the element expressions cannot lose an observable effect.
+     * Anything else keeps the runtime php::fn::count() call.
+     */
+    protected function isCountFoldableArray(Node\Expr\Array_ $array): bool
+    {
+        foreach ($array->items as $item) {
+            // [...$other] contributes an element count only known at runtime,
+            // a key may collapse onto an earlier one (['a' => 1, 'a' => 2]
+            // counts as one element, not two), and a by-reference item binds
+            // its source variable instead of reading it.
+            if ($item->unpack || $item->key !== null || $item->byRef) {
+                return false;
+            }
+            if (!$this->isCountFoldableItem($item->value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Only expressions whose evaluation is provably free of observable effects
+     * may be discarded. Variables, general constant and class constant
+     * fetches, interpolated strings and every other expression stay on the
+     * runtime path: they can be undefined, autoload, throw or call __get().
+     */
+    protected function isCountFoldableItem(Node\Expr $value): bool
+    {
+        // Node\Scalar\String_ is the literal string only; an interpolated
+        // string is a distinct Node\Scalar\InterpolatedString node.
+        if ($value instanceof Node\Scalar\Int_
+            || $value instanceof Node\Scalar\Float_
+            || $value instanceof Node\Scalar\String_
+        ) {
+            return true;
+        }
+        // The language constants only. Any other name may be undefined and
+        // must still raise the same Error PHP raises.
+        if ($value instanceof Node\Expr\ConstFetch) {
+            return in_array(strtolower($value->name->toString()), ['true', 'false', 'null'], true);
+        }
+        if ($value instanceof Node\Expr\UnaryMinus || $value instanceof Node\Expr\UnaryPlus) {
+            return $value->expr instanceof Node\Scalar\Int_ || $value->expr instanceof Node\Scalar\Float_;
+        }
+        if ($value instanceof Node\Expr\Array_) {
+            return $this->isCountFoldableArray($value);
+        }
+        return false;
+    }
+
     protected function doFoldKnownClass(Node\Expr\FuncCall $expr): string|false
     {
+        // An explicit $autoload argument must still be evaluated, including
+        // any side effects or exception it produces. Leave that form on the
+        // normal call path instead of duplicating argument semantics here.
+        if (count($expr->args) !== 1 || !($expr->args[0] instanceof Node\Arg)) {
+            return false;
+        }
         $cn = $expr->args[0]->value;
         if (!$this->isScalarString($cn) || !$this->hasClass($cn->value)) {
             return false;
+        }
+        // The class table also carries traits, but a trait is not a class to
+        // class_exists(): PHP answers false for it and true for an enum.
+        if ($this->getClassDef($cn->value)?->trait !== null) {
+            return 'false';
         }
         return $this->isNativeObjectClass($cn->value) ? 'false' : 'true';
     }
@@ -680,7 +877,16 @@ trait FuncCallOptimizer
         if (count($expr->args) !== 1 || !($expr->args[0] instanceof Node\Arg)) {
             return false;
         }
-        return ($this->detectTypeOfExpr($expr->args[0]->value) === $expectType) ? 'true' : false;
+        $value = $expr->args[0]->value;
+        if ($this->detectTypeOfExpr($value) !== $expectType) {
+            return false;
+        }
+        if ($value instanceof Node\Expr\Variable || $value instanceof Node\Scalar) {
+            return 'true';
+        }
+        // The argument can carry side effects (a call, an increment). Keep
+        // evaluating it, as genIsNull does for native scalar operands.
+        return '((void) (' . $this->parseExprAsValue($value) . '), true)';
     }
 
     // =========================================================================
@@ -731,7 +937,7 @@ trait FuncCallOptimizer
                 'Native classes do not support runtime class introspection; use `NativeClass::class`',
             );
         }
-        if ($this->isVarExpr($obj) && $this->isTypedObject($obj->name)) {
+        if ($this->isVarExpr($obj) && $this->isStableObject($obj->name)) {
             return $this->getLiteralString($this->getObjectType($obj->name));
         }
         return 'php::fn::get_class(' . $this->parseIdentifier($obj) . ')';
@@ -759,18 +965,25 @@ trait FuncCallOptimizer
             );
         }
         if ($this->isScalarString($arg)) {
-            $cls = $this->getClass($arg->value);
+            $cls = $this->getClassDef($arg->value);
             if ($cls && $cls->extends) return $this->getLiteralString($cls->extends);
             if ($cls && !$cls->extends) return 'false';
         }
         return 'php::fn::get_parent_class(' . $this->parseIdentifier($arg) . ')';
     }
 
-    protected function genArrayKeys(string $n, Node\Expr\FuncCall $e, array $c): string
+    protected function genArrayKeys(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
+        if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
+            return false;
+        }
         $cnt = count($e->args);
         if ($cnt >= 3) {
-            return 'php::fn::array_keys_filter(' . $this->getArg($e, 0) . ', ' . $this->getArg($e, 1) . ', ' . $this->getArg($e, 2) . ')';
+            if ($this->detectTypeOfExpr($e->args[2]->value) !== Type::BOOL) {
+                return false;
+            }
+            return 'php::fn::array_keys_filter(' . $this->getArg($e, 0) . ', ' . $this->getArg($e, 1) . ', '
+                . $this->resolveArg($e, 2, self::ARG_TYPE_BOOL) . ')';
         }
         if ($cnt >= 2) {
             return 'php::fn::array_keys_filter(' . $this->getArg($e, 0) . ', ' . $this->getArg($e, 1) . ', false)';
@@ -778,8 +991,11 @@ trait FuncCallOptimizer
         return 'php::fn::array_keys(' . $this->getArg($e, 0) . ')';
     }
 
-    protected function genArrayKeyExists(string $n, Node\Expr\FuncCall $e, array $c): string
+    protected function genArrayKeyExists(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
+        if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
+            return false;
+        }
         // The C++ receiver is PHP's second argument, but PHP still evaluates
         // the key first. Resolve both in source order before rearranging them.
         $key = $this->getArg($e, 0);
@@ -787,19 +1003,58 @@ trait FuncCallOptimizer
         return $array . '.offsetExists(' . $key . ')';
     }
 
-    protected function genRound(string $n, Node\Expr\FuncCall $e, array $c): string
+    protected function genRound(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
+        // An unpacked or named argument is a single Node\Arg whatever its
+        // runtime arity turns out to be, so the syntactic count below cannot
+        // stand in for the real one and no position may be read directly.
+        foreach ($e->args as $arg) {
+            if (!$arg instanceof Node\Arg || $arg->unpack || $arg->name !== null) {
+                return false;
+            }
+        }
         $type = $this->detectTypeOfExpr($e->args[0]->value);
         if ($type === Type::DECIMAL) {
+            // Decimal is a PHPX Box resource at the Zend boundary, so the
+            // generic round() function cannot implement its rounding mode.
+            // Reject the unsupported extension form instead of silently
+            // dropping the explicit argument or producing a resource TypeError.
+            if (count($e->args) > 2) {
+                $this->fatalError($e, 'round() with Decimal supports at most 2 arguments');
+            }
             $a0 = $this->parseExpr($e->args[0]->value);
             if (count($e->args) >= 2) {
                 return 'php::Decimal::round(' . $a0 . ', ' . $this->parseExpr($e->args[1]->value) . ')';
             }
             return 'php::Decimal::round(' . $a0 . ')';
         }
+        // Reflection reports int|float as a union, which is represented by a
+        // raw Variant in the generic ABI metadata. The direct round() wrapper
+        // accepts that Variant and performs its own numeric conversion, so it
+        // is only strict-compatible when the source type is already proven.
+        if (!in_array($type, [Type::INT, Type::FLOAT], true)) {
+            return false;
+        }
+        // PHP 8.4+ also declares $mode as int|RoundingMode. The direct PHPX
+        // wrapper takes an integer; enum objects must remain on Zend dispatch.
+        if (count($e->args) >= 3
+            && $this->detectTypeOfExpr($e->args[2]->value) !== Type::INT
+        ) {
+            return false;
+        }
+        if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
+            return false;
+        }
         $args = count($e->args);
         if ($args >= 3) {
-            return 'php::fn::round(' . $this->getArg($e, 0) . ', ' . $this->convertIntExpr($this->getArg($e, 1)) . ', ' . $this->convertIntExpr($this->getArg($e, 2)) . ')';
+            // php::fn::round() models the mode as an Int and calls
+            // _php_math_round() directly, bypassing Zend's validation of the
+            // parameter. A RoundingMode enum lowered to an int selects a
+            // different mode, and an out-of-range int aborts the process in
+            // php_round_helper instead of raising ValueError. A static int
+            // type does not prove the runtime value is one of the eight valid
+            // modes, so every explicit mode goes to the dynamic Zend path.
+            return false;
         }
         if ($args >= 2) {
             return 'php::fn::round(' . $this->getArg($e, 0) . ', ' . $this->convertIntExpr($this->getArg($e, 1)) . ')';
@@ -807,7 +1062,7 @@ trait FuncCallOptimizer
         return 'php::fn::round(' . $this->getArg($e, 0) . ')';
     }
 
-    protected function genCount(string $n, Node\Expr\FuncCall $e, array $c): string
+    protected function genCount(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
         $receiver = $e->args[0] ?? null;
         $nativeClass = $receiver instanceof Node\Arg
@@ -832,6 +1087,10 @@ trait FuncCallOptimizer
             ));
         }
 
+        if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
+            return false;
+        }
+
         $folded = $this->doFoldCountLiteral($e);
         if ($folded !== false) return $folded;
         if (count($e->args) >= 2) {
@@ -842,6 +1101,9 @@ trait FuncCallOptimizer
 
     protected function genDefine(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
+        if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
+            return false;
+        }
         $arg = $e->args[0]->value;
         if ($this->isScalarString($arg) && str_contains($arg->value, '::')) {
             $this->fatalError($e, 'Invalid define name `' . $arg->value . '`');
@@ -897,14 +1159,22 @@ trait FuncCallOptimizer
         $funcDef = $this->functionDef;
         foreach ($funcDef->argInfoList as $i => $argInfo) {
             if ($argInfo->variadic) {
-                return '(' . $argInfo->name . '.count() + ' . $i . ')';
+                // Array::count() is size_t, while func_num_args() is a PHP
+                // integer. Keep the folded expression in the exact native
+                // type so a surrounding toInt() cannot hit ambiguous C++
+                // scalar overloads.
+                return '(static_cast<' . Type::INT . '>(' . $argInfo->name . '.count()) + '
+                    . $this->genIntegerLiteral($i) . ')';
             }
         }
-        return count($funcDef->argInfoList);
+        return $this->genIntegerLiteral(count($funcDef->argInfoList));
     }
 
-    protected function genFunctionExists(string $name, Node\Expr\FuncCall $expr, array $config): string
+    protected function genFunctionExists(string $name, Node\Expr\FuncCall $expr, array $config): string|false
     {
+        if (!$this->hasOptimizerSafeReflectedArguments($name, $expr, $config)) {
+            return false;
+        }
         $funcName = $expr->args[0]->value;
         if ($this->isScalarString($funcName)) {
             $nameLower = strtolower(trim($funcName->value, '\\'));

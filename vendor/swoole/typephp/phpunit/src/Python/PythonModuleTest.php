@@ -3,7 +3,6 @@
 namespace TypePhp\Tests\Python;
 
 use PHPUnit\Framework\TestCase;
-use PhpParser\Error;
 use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
 
@@ -37,7 +36,7 @@ final class PythonModuleTest extends TestCase
         $compiler->prepareFile($source);
         $cpp = file_get_contents($compiler->convertFile($source));
 
-        self::assertStringContainsString('.call(', $cpp);
+        self::assertStringContainsString('typephp_call_method_cached(', $cpp);
         self::assertStringNotContainsString('php::python::callMember(', $cpp);
     }
 
@@ -123,7 +122,7 @@ final class PythonModuleTest extends TestCase
 
     public function testModuleAliasUsesPhpCaseInsensitiveConflictRules(): void
     {
-        $this->expectException(Error::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('the name is already in use');
 
         $this->compileFixture('alias-conflict.php');

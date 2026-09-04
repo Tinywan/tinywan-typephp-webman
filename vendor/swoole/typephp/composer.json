@@ -2,6 +2,14 @@
   "name": "swoole/typephp",
   "description": "TypePHP native AOT compiler",
   "type": "library",
+  "license": "GPL-3.0-only",
+  "authors": [
+    {
+      "name": "上海识沃网络科技有限公司",
+      "homepage": "https://www.swoole.com/",
+      "role": "Copyright holder"
+    }
+  ],
   "bin": [
     "bin/tpc.php"
   ],
@@ -13,7 +21,7 @@
     "marcj/topsort": "^2.0",
     "symfony/var-dumper": "^8.0",
     "symfony/yaml": "^8.0",
-    "swoole/phpx": "~2.6.4",
+    "swoole/phpx": "~2.7.0",
     "ajaxray/ansikit": "^0.3",
     "ext-dom": "*"
   },
@@ -29,7 +37,7 @@
   },
   "scripts": {
     "cs-fix": "php-cs-fixer fix $1",
-    "analyse": "phpstan analyse --memory-limit 512M -l 5 -c phpstan.neon",
+    "analyse": "phpstan analyse --memory-limit 1G -c phpstan.neon",
     "rector": "rector process --clear-cache"
   },
   "suggest": {

@@ -849,6 +849,27 @@ TEST(variant, take_value_materializes_reference_and_indirect) {
     ASSERT_STREQ(values.get(0).toCString(), "indirect value");
 }
 
+TEST(variant, copy_value_materializes_without_consuming_source) {
+    Variant referenced(41);
+    Variant reference(&referenced);
+    Variant reference_value = copyValue(reference);
+    reference_value += 1;
+
+    ASSERT_TRUE(reference.isReference());
+    ASSERT_EQ(referenced.toInt(), 41);
+    ASSERT_EQ(reference_value.toInt(), 42);
+
+    Array values{10};
+    Variant indirect = values.item(0);
+    Variant indirect_value = copyValue(indirect);
+    indirect_value += 5;
+
+    ASSERT_TRUE(indirect.isIndirect());
+    ASSERT_FALSE(indirect_value.isIndirect());
+    ASSERT_EQ(values.get(0).toInt(), 10);
+    ASSERT_EQ(indirect_value.toInt(), 15);
+}
+
 TEST(variant, concat1) {
     var s("abc");
     // s2 and s point to the same zend_string object
@@ -1535,6 +1556,18 @@ TEST(variant, itemRef2) {
     ASSERT_EQ(ref2.toInt(), 2000);
 }
 
+TEST(variant, assigning_alias_of_same_reference_is_noop) {
+    Variant value(123);
+    Reference first = value.toReference();
+    Reference alias(first);
+
+    alias = static_cast<const Variant &>(first);
+
+    ASSERT_EQ(value.toInt(), 123);
+    ASSERT_EQ(first.toInt(), 123);
+    ASSERT_EQ(alias.toInt(), 123);
+}
+
 TEST(variant, itemRef_missing_element_is_created) {
     Array array;
     auto ref = array.itemRef("created");
@@ -1873,6 +1906,46 @@ TEST(variant, assign_ref6) {
 
     b.append(5L);
     ASSERT_EQ(b.length(), 4);
+}
+
+TEST(variant, assign_ref_rebind_releases_previous_reference) {
+    Var first = "first";
+    Var target(&first);
+    ASSERT_TRUE(first.isReference());
+    ASSERT_TRUE(target.isReference());
+
+    Var second = "second";
+    Ref second_reference = second.toReference();
+    target = &second_reference;
+
+    first = "first changed";
+    ASSERT_STREQ(first.toCString(), "first changed");
+    ASSERT_STREQ(target.toCString(), "second");
+
+    second_reference = Var("second changed");
+    ASSERT_STREQ(target.toCString(), "second changed");
+
+    target = &target;
+    ASSERT_STREQ(target.toCString(), "second changed");
+}
+
+TEST(variant, assign_ref_rebinds_indirect_slot) {
+    Array values{Var("initial")};
+    Var slot = values.item(0, true);
+
+    Var first = "first";
+    Ref first_reference = first.toReference();
+    slot = &first_reference;
+
+    Var second = "second";
+    Ref second_reference = second.toReference();
+    slot = &second_reference;
+
+    first_reference = Var("first changed");
+    ASSERT_STREQ(values.get(0).toCString(), "second");
+
+    second_reference = Var("second changed");
+    ASSERT_STREQ(values.get(0).toCString(), "second changed");
 }
 
 TEST(variant, assign_ref_after_unset) {

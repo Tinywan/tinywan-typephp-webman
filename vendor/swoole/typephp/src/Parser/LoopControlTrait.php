@@ -85,6 +85,14 @@ trait LoopControlTrait
 
         $list_loop = [];
         foreach ($loop as $expr) {
+            // for-loop post-expressions discard return value, so $i++ ≡ ++$i.
+            // Only rewrite simple variables; TypePHP lowers prefix and postfix
+            // differently for compound lvalues (e.g. static-property write-back).
+            if ($expr instanceof Node\Expr\PostInc && $this->isVarExpr($expr->var)) {
+                $expr = new Node\Expr\PreInc($expr->var, $expr->getAttributes());
+            } elseif ($expr instanceof Node\Expr\PostDec && $this->isVarExpr($expr->var)) {
+                $expr = new Node\Expr\PreDec($expr->var, $expr->getAttributes());
+            }
             [$loopExpr, $beforeStmts, $afterStmts] = $this->parseExprWithCapturedStmts($expr);
             $loopExpr = $this->stringifyParsedExpr($loopExpr);
             if ($beforeStmts || $afterStmts) {
@@ -102,7 +110,6 @@ trait LoopControlTrait
         $code .= ') {' . PHP_EOL;
 
         $code .= $this->parseBlockStmts($stmts);
-        $code .= $this->genLoopEndFlagCheck();
         $code .= $this->getIndent() . '}' . PHP_EOL;
 
         return $code;
@@ -138,7 +145,6 @@ trait LoopControlTrait
             $code .= 'while (' . $cond . ') {' . PHP_EOL;
         }
         $code .= $this->parseBlockStmts($stmts);
-        $code .= $this->genLoopEndFlagCheck();
         $code .= $this->getIndent() . '}' . PHP_EOL;
 
         return $code;
@@ -172,7 +178,6 @@ trait LoopControlTrait
         $code  = $this->parseBeforeStmtLines() . PHP_EOL;
         $code .= 'do {' . PHP_EOL;
         $code .= $bodyCode;
-        $code .= $this->genLoopEndFlagCheck();
         $code .= $this->getIndent() . '} while (' . $cond . ');' . PHP_EOL;
 
         return $code;
@@ -189,6 +194,7 @@ trait LoopControlTrait
         }
         $num = $v->num;
         if ($num) {
+            $this->checkLoopJumpLevel($v, $num, 'break');
             if ($num->value > 1) {
                 $this->context->hasMultiLevelBreak = true;
                 return '_brk_flag = ' . ($num->value - 1) . '; break;';
@@ -205,6 +211,7 @@ trait LoopControlTrait
         }
         $num = $v->num;
         if ($num) {
+            $this->checkLoopJumpLevel($v, $num, 'continue');
             if ($num->value > 1) {
                 $this->context->hasMultiLevelContinue = true;
                 return '_cnt_flag = ' . ($num->value - 1) . '; break;';
@@ -214,12 +221,32 @@ trait LoopControlTrait
     }
 
     /**
-     * Emit flag-propagation checks at the end of a loop body.
-     *
-     * Translates multi-level break / continue into plain break / continue
-     * by decrementing a counter at each loop boundary until it reaches zero.
+     * PHP only accepts a positive integer literal that does not exceed the
+     * number of enclosing loops/switches. The flag lowering relies on this:
+     * it guarantees the countdown reaches zero at an enclosing construct.
      */
-    protected function genLoopEndFlagCheck(): string
+    protected function checkLoopJumpLevel(Node\Stmt $v, Node\Expr $num, string $operator): void
+    {
+        if (!$num instanceof Node\Scalar\Int_ || $num->value < 1) {
+            $this->fatalError($v, "'{$operator}' operator accepts only positive integer literals");
+        }
+        if ($num->value > $this->context->breakableDepth) {
+            $this->fatalError($v, "Cannot '{$operator}' {$num->value} levels");
+        }
+    }
+
+    /**
+     * Emit flag-propagation checks right after a nested breakable construct.
+     *
+     * A multi-level break / continue is lowered to a flag assignment plus a
+     * plain break out of the innermost construct. Each enclosing loop or
+     * switch places this check immediately after every nested loop / switch
+     * statement, so the flag keeps breaking outward — before any trailing
+     * statements of the enclosing body can run — until it reaches zero at
+     * the targeted level. When the check sits inside a switch, a continue
+     * that lands on the switch level behaves like break, matching PHP.
+     */
+    protected function genMultiLevelJumpCheck(bool $enclosingIsSwitch): string
     {
         $code = '';
         $indent = $this->getIndent();
@@ -227,7 +254,11 @@ trait LoopControlTrait
             $code .= "{$indent}if (_brk_flag > 0) { _brk_flag--; break; }" . PHP_EOL;
         }
         if ($this->context->hasMultiLevelContinue) {
-            $code .= "{$indent}if (_cnt_flag > 0) { _cnt_flag--; if (_cnt_flag == 0) continue; else break; }" . PHP_EOL;
+            if ($enclosingIsSwitch) {
+                $code .= "{$indent}if (_cnt_flag > 0) { _cnt_flag--; break; }" . PHP_EOL;
+            } else {
+                $code .= "{$indent}if (_cnt_flag > 0) { _cnt_flag--; if (_cnt_flag == 0) continue; else break; }" . PHP_EOL;
+            }
         }
         return $code;
     }

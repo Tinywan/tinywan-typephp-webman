@@ -1,5 +1,7 @@
 <?php
 
+use native_types;
+
 class NativePropertyAssignOpIntBox
 {
     public int $value = 1;

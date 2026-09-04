@@ -102,7 +102,12 @@ trait AssignOpTrait
         return $code . '((' . $tmp . ' = ' . $value . ', ' . "{$array}.offsetSet({$dim}, {$tmp})" . '), ' . $tmp . ')';
     }
 
-    protected function parseAssignPropertyFetch(NodeAbstract $left, NodeAbstract $right, ?PropertyWriteTarget $target = null): string
+    protected function parseAssignPropertyFetch(
+        NodeAbstract $left,
+        NodeAbstract $right,
+        ?PropertyWriteTarget $target = null,
+        bool $resultUnused = false,
+    ): string
     {
         if ($target !== null) {
             $this->assertCanAssignPropertyWrite($target, $right);
@@ -113,6 +118,15 @@ trait AssignOpTrait
             $rightExpr = $this->wrapPropertyWriteTypeCheck($target, $right, $rightExpr);
         } else {
             $rightExpr = $this->wrapObjectPropertyAssignTypeCheck($left, $right, $rightExpr);
+        }
+
+        if ($resultUnused
+            && $left instanceof Expr\PropertyFetch
+            && !$this->shouldMaterializeOrderedOperand($left->name)
+            && $this->canEmitDirectArrayWriteOperand($right)
+            && $this->canEmitDynamicPropertyTarget($target)
+        ) {
+            return $this->emitDynamicPropertyFetchWrite($left, $rightExpr, $target);
         }
 
         $tmp = $this->genTmpVarName();
@@ -139,7 +153,7 @@ trait AssignOpTrait
             $this->addLocalVar($tmpVar, Type::VAR);
         }
 
-        // 翻转赋值链
+        // Reverse the assignment chain
         $chain = array_reverse($chain);
         $list  = [];
 
@@ -494,7 +508,7 @@ trait AssignOpTrait
         }
 
         if ($propertyWriteTarget !== null && $this->shouldUseDynamicNativePropertyWrite($left, $type)) {
-            return $this->parseAssignPropertyFetch($left, $right, $propertyWriteTarget);
+            return $this->parseAssignPropertyFetch($left, $right, $propertyWriteTarget, $resultUnused);
         }
 
         if ($this->isVarExpr($left)) {
@@ -511,7 +525,7 @@ trait AssignOpTrait
                     return $copyAssign;
                 }
             }
-            // 类型推断，获取对象的类名，如果不是对象则返回空字符串
+            // Infer the type and obtain the object's class name; return an empty string for non-objects
             $rightClass = $this->detectClassOfExpr($right);
             $markNativeObjectNonNull = $this->context->scopeLevel <= 1
                 && !$this->hasScopeGlobalVar($var)
@@ -534,7 +548,7 @@ trait AssignOpTrait
                     $this->fatalError($right, "Cannot assign native object `{$rightClass}` to `{$leftClass}`");
                 }
             }
-            // 右值是一个对象，已获得类的名称，左值必须与右值的类一致
+            // The right-hand value is an object and its class name is known; the left-hand side must match the right-hand side's class
             if ($rightClass) {
                 if (!$this->hasVar($var)) {
                     if ($this->isNativeObjectClass($rightClass)) {
@@ -607,11 +621,15 @@ trait AssignOpTrait
                                 $finalVarType = $right->getAttribute('nativeType');
                                 $this->addLocalVar($var, $finalVarType);
                             }
+                            $this->context->explicitNativeTypeVars[$var] = true;
                             return $var . ' = ' . $valueExpr;
                         }
                     }
                 } elseif ($this->isVarExpr($right)) {
                     $rightVar = $this->parseIdentifier($right);
+                    if (isset($this->context->explicitNativeTypeVars[$rightVar])) {
+                        $this->context->explicitNativeTypeVars[$var] = true;
+                    }
                     $this->assertStdContainerDoesNotEscapeNativeObjects($right, $rightVar);
                     $type = $this->isStdContainer($rightVar) ? Type::ARRAY : $this->getVarType($rightVar);
                     $finalVarType = $this->getNormalAssignType($type);
@@ -627,7 +645,7 @@ trait AssignOpTrait
                         }
                     }
                 }
-                // 变量第一次被赋值，确定其类型，由于 PHP 的变量作用域是 function 级的，在 for/while 块中声明的变量，可以在块外使用
+                // On first assignment the variable's type is determined. PHP variable scope is function-level, so variables declared in for/while blocks remain usable outside the block
                 if (!$this->hasVar($var)) {
                     $finalVarType = $this->getNormalAssignType($type);
                     $finalVarType = $this->isNativeType($finalVarType) ? $this->getNativeType($finalVarType) : $finalVarType;
@@ -645,12 +663,10 @@ trait AssignOpTrait
                 }
             }
         } elseif ($this->isPropertyFetch($left) and !$this->isNativePropertyAccess($left)) {
-            return $this->parseAssignPropertyFetch($left, $right, $propertyWriteTarget);
+            return $this->parseAssignPropertyFetch($left, $right, $propertyWriteTarget, $resultUnused);
         } elseif ($this->isArrayDimFetch($left) and $this->isVarExpr($left->var)) {
             $tmp = $this->parseIdentifier($left->var);
-            if ($this->getVarType($tmp) === Type::STR and $left->dim === null) {
-                $this->fatalError($left, 'Cannot use [] for strings');
-            }
+            $this->assertArrayDimVariableTypeIsSupported($left, $tmp);
             if ($this->isStdContainerExpr($left)) {
                 return $this->parseStdContainerAssign($left, $right);
             }
@@ -830,6 +846,14 @@ trait AssignOpTrait
             $node->var = $this->stabilizeAssignOpArrayAccess($node->var);
         }
 
+        if ($node->var instanceof Expr\PropertyFetch && !$this->isVarExpr($node->var->var)) {
+            $stableProperty = $this->stabilizeAssignOpPropertyReceiver($node->var);
+            if ($stableProperty !== $node->var) {
+                $node = clone $node;
+                $node->var = $stableProperty;
+            }
+        }
+
         $this->assertImmutableMutationTarget($node->var);
         $this->assertNativeArrayAccessDirectWrite($node->var, false);
         $this->assertNativeObjectOperatorOperandSupported($node->var, $node, $op);
@@ -841,6 +865,31 @@ trait AssignOpTrait
         }
         $propertyWriteTarget = $this->preparePropertyWriteTarget($node->var);
         $this->guardLiteralDivisionByZero($node->expr, $op);
+
+        // A compound division/modulo on a NATIVE scalar slot with a proven
+        // zero divisor cannot fall through to the raw C++ operator (SIGFPE
+        // for ints, INF for floats). A zero divisor always throws the
+        // catchable DivisionByZeroError before any assignment happens, so
+        // lower the whole expression to the PHP-semantics binary operation
+        // and leave the target untouched.
+        if (($op === '/=' || $op === '%=')
+            && !$this->nativeTypes
+            && $this->isZeroLiteral($node->expr)
+            && $this->isVarExpr($node->var)
+            && $this->hasVar((string) $this->parseIdentifier($node->var))
+            && in_array($this->detectVarType($node->var), [Type::INT, Type::FLOAT], true)
+        ) {
+            // std::int()/std::float() values are an explicit opt-in to native
+            // C++ arithmetic; changing them to PHP semantics here would be as
+            // wrong as the undefined raw operation. Keep the compile-time
+            // rejection native_types mode uses.
+            if ($this->isExplicitNativeArithmeticExpr($node->var)) {
+                $this->fatalError($node->expr, 'Cannot divide or modulo by zero');
+            }
+            $binOp = $op === '/=' ? '/' : '%';
+            return '((php::Var(' . $this->parseExprAsValue($node->var) . ')) '
+                . $binOp . ' (php::Var(' . $this->parseExprAsValue($node->expr) . ')))';
+        }
 
         if ($node->var instanceof Expr\PropertyFetch && $this->isNativeObjectPropertyHook($node->var)) {
             $this->fatalError(
@@ -895,7 +944,14 @@ trait AssignOpTrait
                 return $this->parseBigAssignOp($node, $var, $type, $expr, $rightType, $op);
             }
 
-            $rightExprStr = $this->convertExprType($expr, $type, $rightType);
+            // A dynamic local must retain the RHS runtime type. Variant's
+            // compound operators already implement PHP coercion and checked
+            // integer overflow; eagerly converting an int-looking expression
+            // both adds an unnecessary unbox/rebox pair and can collapse an
+            // overflowed float back to int before the assignment.
+            $rightExprStr = $type === Type::VAR
+                ? $expr
+                : $this->convertExprType($expr, $type, $rightType);
             if ($this->isAssignOpConcat($op)) {
                 if ($this->isArrayVar($node->var)) {
                     $this->fatalError($node->var, 'Cannot concat string to array');
@@ -910,6 +966,9 @@ trait AssignOpTrait
             if ($this->isAssignOpPow($op)) {
                 $powExpr = 'php::fn::pow(' . $var . ', ' . $rightExprStr . ')';
                 return $var . ' = ' . $this->convertVarType($var, $powExpr);
+            }
+            if ($type === Type::VAR && $op === '+=') {
+                return $var . '.addAssign(' . $rightExprStr . ')';
             }
             return $var . ' ' . $op . ' ' . $rightExprStr;
         }
@@ -930,9 +989,9 @@ trait AssignOpTrait
             }
             /**
              * $count[$r] -= 1;
-             * 需要转为下面语句：
+             * must be lowered to the following statements:
              * $tmp_var = $count[$r] - 1;
-             * $count[$r] = $tmp_var;.
+             * $count[$r] = $tmp_var;
              */
             $isGlobals = $this->isVarExpr($node->var->var) && $node->var->var->name === 'GLOBALS';
             $type      = $isGlobals ? Type::VAR : $this->detectVarType($node->var);
@@ -987,8 +1046,14 @@ trait AssignOpTrait
             } else {
                 $this->context->beforeStmtLines[] = "{$tmpVar} = {$readProperty} {$binaryOp} ({$expr});";
             }
-            $this->context->afterStmtLines[] = $this->emitDynamicPropertyFetchWrite($node->var, $tmpVar, $propertyWriteTarget) . ';';
-            return $tmpVar;
+            // The write is part of the compound-assignment expression. Apart
+            // from matching PHP's sequencing, this ensures a materialized
+            // receiver remains alive until the write has completed.
+            return '((' . $this->emitDynamicPropertyFetchWrite(
+                $node->var,
+                $tmpVar,
+                $propertyWriteTarget,
+            ) . '), ' . $tmpVar . ')';
         }
 
         if ($this->isAssignOpConcat($op)) {
@@ -1036,6 +1101,41 @@ trait AssignOpTrait
     }
 
     /**
+     * Materialize a statically known object receiver used by a property
+     * compound assignment. The read and write phases may be emitted by
+     * different helpers, but PHP evaluates the receiver only once.
+     */
+    private function stabilizeAssignOpPropertyReceiver(Expr\PropertyFetch $property): Expr\PropertyFetch
+    {
+        $receiverClass = $this->detectClassOfExpr($property->var);
+        if ($receiverClass === '') {
+            return $property;
+        }
+
+        [$receiverExpr, $beforeStmts, $afterStmts] = $this->parseExprWithCapturedStmts($property->var);
+        $this->appendCapturedStmtLinesToContext($beforeStmts);
+
+        if ($this->isNativeObjectClass($receiverClass)) {
+            $tmp = $this->genTmpVarName();
+            $this->addLocalVar($tmp, $this->getNativeObjectPointerType($receiverClass));
+            $this->addNativeObject($tmp, $receiverClass);
+            $cleanup = $tmp . ' = nullptr;';
+        } else {
+            $tmp = $this->addTmpVar(Type::VAR);
+            $this->addObject($tmp, $receiverClass);
+            $cleanup = $tmp . '.unset();';
+        }
+
+        $this->context->beforeStmtLines[] = $tmp . ' = ' . $receiverExpr . ';';
+        $this->appendCapturedStmtLinesToContext($afterStmts);
+        $this->context->afterStmtLines[] = $cleanup;
+
+        $stableProperty = clone $property;
+        $stableProperty->var = new Variable($tmp, $property->var->getAttributes());
+        return $stableProperty;
+    }
+
+    /**
      * Preserve PHP's concat-assignment operation for statically typed strings.
      * String::append() calls concat_function() with the target as both the
      * result and left operand, allowing Zend to extend an unshared string in
@@ -1072,6 +1172,22 @@ trait AssignOpTrait
         }
 
         $rightType = $this->detectTypeOfExpr($node->expr);
+
+        // In ordinary PHP mode, an int compound assignment must perform the
+        // arithmetic before the typed-property write is validated. The result
+        // may therefore be a float (division or integer overflow), in which
+        // case Zend rejects the write and leaves the old property value intact.
+        // A direct zend_long reference would bypass that behavior completely.
+        // Native objects cannot cross the Variant boundary and retain their
+        // native C++ property access path.
+        if (!$this->nativeTypes
+            && $def->type === Type::INT
+            && !$this->isNativeObjectClass($this->detectClassOfExpr($node->var->var))
+            && in_array($op, ['+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '&=', '|=', '^='], true)
+        ) {
+            return $this->parseCheckedIntPropertyAssignOp($node, $op);
+        }
+
         if (in_array($def->type, [Type::BIGINT, Type::DECIMAL, Type::BIGFLOAT], true)) {
             $binaryOp = $this->removeAssignOp($op);
             $leftExpr = $this->parseWritableIdentifier($node->var);
@@ -1132,10 +1248,73 @@ trait AssignOpTrait
         }
 
         return match ($propertyType) {
-            Type::INT => in_array($op, ['+=', '-=', '*=', '%=', '<<=', '>>=', '&=', '|=', '^='], true),
+            Type::INT => in_array($op, ['+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '|=', '^='], true),
             Type::FLOAT => in_array($op, ['+=', '-=', '*=', '/='], true),
             default => false,
         };
+    }
+
+    /**
+     * Apply PHP arithmetic first, then let Zend validate the int property
+     * write. A complex receiver is materialized before the property read, so
+     * both the read and write refer to the same object and the receiver has
+     * exactly one observable evaluation.
+     */
+    private function parseCheckedIntPropertyAssignOp(Expr\AssignOp $node, string $op): string
+    {
+        /** @var Expr\PropertyFetch $property */
+        $property = $node->var;
+        $receiver = $property->var;
+        $receiverTmp = null;
+
+        if ($this->isVarExpr($receiver)) {
+            $objectExpr = $this->parseIdentifier($receiver);
+        } else {
+            [$receiverExpr, $receiverBefore, $receiverAfter] = $this->parseExprWithCapturedStmts($receiver);
+            $this->appendCapturedStmtLinesToContext($receiverBefore);
+
+            // Keep the object in a Variant: this path intentionally uses Zend
+            // object handlers, and a Variant also covers dynamically resolved
+            // receivers whose concrete class is known only at runtime.
+            $receiverTmp = $this->addTmpVar(Type::VAR);
+            $this->context->beforeStmtLines[] = $receiverTmp . ' = ' . $receiverExpr . ';';
+            $this->appendCapturedStmtLinesToContext($receiverAfter);
+            $objectExpr = $receiverTmp;
+        }
+
+        $target = new PropertyWriteTarget(
+            $property,
+            'object property',
+            $objectExpr,
+            $this->propertyNameToStr($property->name, literal: true),
+        );
+
+        // Read before evaluating the RHS, matching PHP compound-assignment
+        // order even when the RHS itself emits prerequisite statements.
+        $current = $this->addTmpVar(Type::VAR);
+        $this->context->beforeStmtLines[] = $current . ' = '
+            . $this->emitDynamicPropertyTargetRead($target) . ';';
+
+        [$rightExpr, $rightBefore, $rightAfter] = $this->parseExprWithCapturedStmts($node->expr);
+        $this->appendCapturedStmtLinesToContext($rightBefore);
+
+        $result = $this->addTmpVar(Type::VAR);
+        $binaryOp = $this->removeAssignOp($op);
+        $value = $binaryOp === '**'
+            ? 'php::fn::pow(' . $current . ', ' . $rightExpr . ')'
+            : $current . ' ' . $binaryOp . ' (' . $rightExpr . ')';
+        $this->context->beforeStmtLines[] = $result . ' = ' . $value . ';';
+        $this->appendCapturedStmtLinesToContext($rightAfter);
+
+        $this->context->afterStmtLines[] = $current . '.unset();';
+        if ($receiverTmp !== null) {
+            $this->context->afterStmtLines[] = $receiverTmp . '.unset();';
+        }
+
+        // Execute the checked write at the expression point. If Zend rejects
+        // the result, the exception is raised before this expression yields and
+        // the original property zval remains unchanged.
+        return '((' . $this->emitDynamicPropertyTargetWrite($target, $result) . '), ' . $result . ')';
     }
 
     protected function parseBigAssignOp(Expr\AssignOp $node, string $var, string $type, string $expr, string $rightType, string $op): string
@@ -1151,6 +1330,7 @@ trait AssignOpTrait
             Type::BIGINT   => ['BigInt',   ['+' => 'add', '-' => 'sub', '*' => 'mul', '/' => 'div', '%' => 'mod', '&' => 'bitAnd', '|' => 'bitOr', '^' => 'bitXor', '<<' => 'bitShiftLeft', '>>' => 'bitShiftRight']],
             Type::DECIMAL  => ['Decimal',  ['+' => 'add', '-' => 'sub', '*' => 'mul', '/' => 'div', '%' => 'mod']],
             Type::BIGFLOAT => ['BigFloat', ['+' => 'add', '-' => 'sub', '*' => 'mul', '/' => 'div']],
+            default => $this->fatalError($errorNode, "Unsupported compound assignment type '{$leftType}'"),
         };
 
         $method = $opMap[$binaryOp] ?? null;
@@ -1164,6 +1344,7 @@ trait AssignOpTrait
             Type::BIGINT   => $isShift ? $rightExpr : $this->convertBigIntExpr($rightExpr, $rightType),
             Type::DECIMAL  => $this->convertDecimalExpr($rightExpr, $rightType, $rightNode),
             Type::BIGFLOAT => $this->convertBigFloatExpr($rightExpr, $rightType),
+            default => $this->fatalError($errorNode, "Unsupported compound assignment type '{$leftType}'"),
         };
 
         return 'php::' . $class . '::' . $method . '(' . $leftExpr . ', ' . $convertedRight . ')';
@@ -1301,7 +1482,26 @@ trait AssignOpTrait
         $this->assertReadonlyPropertyReferenceForbidden($expr->var, $expr, true);
         $this->assertReadonlyPropertyReferenceForbidden($expr->expr, $expr, false);
 
-        $left = $this->parseWritableIdentifier($expr->var);
+        $propertyReferenceTarget = null;
+        $nativeObjectProperty = $expr->var instanceof Expr\PropertyFetch
+            && $this->getNativePropertyClassDef($expr->var)?->nativeObject === true;
+        if ($expr->var instanceof Expr\PropertyFetch && !$nativeObjectProperty) {
+            // A property reference assignment must go through Zend's property
+            // metadata path. A plain Variant indirect slot cannot maintain
+            // typed-property reference sources safely. Parse the complete LHS
+            // before the RHS so PHP's source evaluation order is preserved.
+            $object = $this->parseOrderedOperand($expr->var->var, false);
+            $member = $this->isIdExpr($expr->var->name)
+                ? $this->propertyNameToStr($expr->var->name, literal: true)
+                : $this->parseOrderedOperand($expr->var->name, false, true);
+            $scope = $this->usesTraitPropertyScope($object)
+                ? 'php::FakeScopeGuard::current()'
+                : ($this->class ? $this->getClassEntryPtr($this->getFullClassName()) : 'nullptr');
+            $propertyReferenceTarget = [$object, $member, $scope];
+            $left = '';
+        } else {
+            $left = $this->parseWritableIdentifier($expr->var);
+        }
         // Keep this write-context form for every RHS kind. Re-parsing it as a
         // read later breaks append and missing-key targets such as
         // `$array[] =& $source`.
@@ -1395,8 +1595,10 @@ trait AssignOpTrait
         }
 
         $this->context->beforeStmtLines[] = $rightExpr . ';';
-        if ($expr->var instanceof Expr\PropertyFetch && $this->isNativePropertyAccess($expr->var)) {
-            return $left . '.rebindReference(' . $tmpVar . ')';
+        if ($propertyReferenceTarget !== null) {
+            [$object, $member, $scope] = $propertyReferenceTarget;
+            return 'typephp_rebind_property_reference('
+                . $object . ', ' . $member . ', ' . $tmpVar . ', ' . $scope . ')';
         }
         return $left . ' = &' . $tmpVar;
     }
@@ -1445,6 +1647,15 @@ trait AssignOpTrait
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->checkLeftValue($expr->var);
+
+        // Zend evaluates the target's receiver and array keys exactly once,
+        // before the isset check and regardless of its outcome. The lowering
+        // below mentions the target several times (isset, read, write), so
+        // side-effecting subexpressions of the target are materialized into
+        // temporaries first and the target is rewritten to reference them.
+        if (!$this->isVarExpr($expr->var)) {
+            $expr->var = $this->stabilizeCoalesceTarget($expr->var);
+        }
 
         $rightClass = $this->detectClassOfExpr($expr->expr);
         $nativeRight = $this->isNativeObjectClass($rightClass);
@@ -1498,9 +1709,24 @@ trait AssignOpTrait
             }
         }
 
-        $isset = $var !== null && $this->isNativeObjectVar($var)
-            ? $var . ' != nullptr'
-            : $this->parseChainedExpr($expr->var, self::OP_ISSET);
+        $arrayAccessTarget = $this->resolveCoalesceArrayAccessTarget($expr->var);
+        $arrayAccessSelectedValue = null;
+        $arrayAccessContainer = null;
+        $arrayAccessKey = null;
+        if ($arrayAccessTarget !== null) {
+            $arrayAccessSelectedValue = $this->addTmpVar(Type::VAR);
+            $arrayAccessPresence = $this->parseArrayAccessCoalescePresence(
+                $arrayAccessTarget,
+                $arrayAccessSelectedValue,
+            );
+            $isset = $arrayAccessPresence['condition'];
+            $arrayAccessContainer = $arrayAccessPresence['container'];
+            $arrayAccessKey = $arrayAccessPresence['key'];
+        } else {
+            $isset = $var !== null && $this->isNativeObjectVar($var)
+                ? $var . ' != nullptr'
+                : $this->parseChainedExpr($expr->var, self::OP_ISSET);
+        }
 
         $var ??= $this->parseWritableIdentifier($expr->var);
         $propertyWriteTarget = $this->preparePropertyWriteTarget($expr->var);
@@ -1530,6 +1756,20 @@ trait AssignOpTrait
         if ($this->isVarExpr($expr->expr) and !$this->hasVar($right)) {
             $this->errorUndefinedVariable($expr->expr);
         }
+
+        if ($arrayAccessTarget !== null) {
+            return $this->emitCoalesceArrayAccessAssignment(
+                $arrayAccessTarget,
+                $isset,
+                $arrayAccessSelectedValue,
+                $arrayAccessContainer,
+                $arrayAccessKey,
+                $right,
+                $rightBefore,
+                $rightAfter,
+            );
+        }
+
         $targetClass = $var !== null && $this->isNativeObjectVar($var)
             ? $this->getNativeObjectVarClass($var)
             : $this->detectClassOfExpr($expr->var);
@@ -1548,11 +1788,272 @@ trait AssignOpTrait
             $code .= $this->getIndent() . '}()';
             return $code;
         }
-        $this->appendCapturedStmtLinesToContext($rightBefore);
-        foreach ($rightAfter as $stmt) {
-            $this->context->afterStmtLines[] = $stmt;
+        if ($rightBefore !== [] || $rightAfter !== []) {
+            // PHP evaluates the RHS of ??= only when the target is not set.
+            // A compound RHS materializes captured statements (call results,
+            // operand temporaries); appending them to the enclosing statement
+            // would run its side effects unconditionally. Wrap the not-set
+            // branch in an immediately-invoked lambda so they execute only
+            // when the assignment actually happens. The RHS is completed —
+            // including its deferred write-backs (a postfix ++ on the RHS
+            // must finish before the outer assignment, which a set hook on
+            // the target can observe) — into a temporary before the target
+            // is written, and the assignment expression itself is returned
+            // so the target is not read again afterwards.
+            $rhsTmp = $this->genTmpVarName();
+            $code = '[&]() {' . PHP_EOL;
+            $code .= $this->getIndent() . 'if (' . $isset . ') { return ' . $var . '; }' . PHP_EOL;
+            $code .= $this->formatCapturedStmtLines($rightBefore);
+            $code .= $this->getIndent() . 'auto ' . $rhsTmp . ' = ' . $right . ';' . PHP_EOL;
+            $code .= $this->formatCapturedStmtLines($rightAfter);
+            $code .= $this->getIndent() . 'return (' . $var . ' = ' . $rhsTmp . ');' . PHP_EOL;
+            $code .= $this->getIndent() . '}()';
+            return $code;
         }
         return '(' . $isset . '?' . $var . ':(' . $var . ' = ' . $right . '))';
+    }
+
+    /**
+     * Use the separated ArrayAccess read/write path only when the dimension
+     * container may be an object at runtime. Fixed arrays keep their existing
+     * bucket-lvalue path.
+     */
+    private function resolveCoalesceArrayAccessTarget(Expr $target): ?Expr\ArrayDimFetch
+    {
+        if (!$target instanceof Expr\ArrayDimFetch
+            || $target->dim === null
+            || $this->isStdContainerExpr($target)
+            || $this->isNativeObjectClass($this->detectClassOfExpr($target->var))
+        ) {
+            return null;
+        }
+
+        return in_array(
+            $this->detectTypeOfExpr($target->var),
+            [Type::OBJECT, Type::VAR, Type::REF],
+            true,
+        ) ? $target : null;
+    }
+
+    /**
+     * Resolve nested ArrayAccess presence from outermost to innermost. This
+     * avoids assigning to the value returned by offsetGet() and avoids the
+     * generic exists() chain invoking offsetExists() more than once.
+     *
+     * @return array{condition: string, container: string, key: string}
+     */
+    private function parseArrayAccessCoalescePresence(
+        Expr\ArrayDimFetch $target,
+        string $selectedValue,
+    ): array {
+        if ($this->isVarExpr($target->var)) {
+            $container = $this->parseIdentifier($target->var);
+            $this->checkVarMustExist($target->var, $container);
+            $containerPresence = null;
+        } elseif ($target->var instanceof Expr\ArrayDimFetch && $target->var->dim !== null) {
+            $container = $this->addTmpVar(Type::VAR);
+            $outerPresence = $this->parseArrayAccessCoalescePresence(
+                $target->var,
+                $container,
+            );
+            $containerPresence = $outerPresence['condition'];
+        } else {
+            $container = $this->parseIdentifier($target->var);
+            $containerPresence = null;
+        }
+
+        $key = $this->parseIdentifier($target->dim);
+        $stableContainer = $this->addTmpVar(Type::VAR);
+        $stableKey = $this->addTmpVar(Type::VAR);
+        $objectPresence = '(' . $stableContainer . '.offsetExists(' . $stableKey . ')'
+            . ' && ((' . $selectedValue . ' = ' . $stableContainer . '.offsetGet(' . $stableKey . ')),'
+            . ' !' . $selectedValue . '.isNull()))';
+        $otherPresence = 'php::exists(' . $stableContainer . ', '
+            . '{{php::ArrayDimFetch, ' . Type::VAR . '(' . $stableKey . ')}}, '
+            . $selectedValue . ')';
+        $probe = '((' . $stableContainer . ' = ' . $container . '), ('
+            . $stableKey . ' = ' . $key . '), (' . $stableContainer . '.isObject() ? '
+            . $objectPresence . ' : ' . $otherPresence . '))';
+
+        return [
+            'condition' => $containerPresence === null
+                ? $probe
+                : '(' . $containerPresence . ' && ' . $probe . ')',
+            'container' => $stableContainer,
+            'key' => $stableKey,
+        ];
+    }
+
+    /**
+     * Arrays expose a writable bucket. Every other supported dynamic receiver
+     * goes through PHPX offsetSet(); unsupported scalars fail there with one
+     * stable PHPX error rather than silently discarding the write.
+     */
+    private function parseArrayAccessCoalesceStore(
+        Expr\ArrayDimFetch $target,
+        string $stableContainer,
+        string $stableKey,
+        string $value,
+    ): string {
+        $array = $this->parseWritableIdentifier($target->var);
+
+        return '(' . $stableContainer . '.isObject()'
+            . ' ? (' . $stableContainer . '.offsetSet(' . $stableKey . ', ' . $value . '), ' . $value . ')'
+            . ' : (' . $array . '.item(' . $stableKey . ', true) = ' . $value . '))';
+    }
+
+    /**
+     * @param list<string> $rightBefore
+     * @param list<string> $rightAfter
+     */
+    private function emitCoalesceArrayAccessAssignment(
+        Expr\ArrayDimFetch $target,
+        string $isset,
+        string $selectedValue,
+        string $stableContainer,
+        string $stableKey,
+        string $right,
+        array $rightBefore,
+        array $rightAfter,
+    ): string {
+        $rhs = $this->addTmpVar(Type::VAR);
+        $store = $this->parseArrayAccessCoalesceStore(
+            $target,
+            $stableContainer,
+            $stableKey,
+            $rhs,
+        );
+
+        if ($rightBefore === [] && $rightAfter === []) {
+            return '(' . $isset . ' ? ' . $selectedValue
+                . ' : ((' . $rhs . ' = ' . $right . '), ' . $store . '))';
+        }
+
+        $code = '[&]() -> php::Var {' . PHP_EOL;
+        $code .= $this->getIndent() . 'if (' . $isset . ') { return ' . $selectedValue . '; }' . PHP_EOL;
+        $code .= $this->formatCapturedStmtLines($rightBefore);
+        $code .= $this->getIndent() . $rhs . ' = ' . $right . ';' . PHP_EOL;
+        $code .= $this->formatCapturedStmtLines($rightAfter);
+        $code .= $this->getIndent() . 'return ' . $store . ';' . PHP_EOL;
+        return $code . $this->getIndent() . '}()';
+    }
+
+    /**
+     * Rewrite a coalesce-assignment target so that every side-effecting
+     * subexpression is evaluated exactly once, in PHP source order —
+     * container/receiver first, then a dynamic property name, then the array
+     * dimension — before the target is mentioned. Containers of an array
+     * write keep their original node when they are plain variables (writing
+     * through a copied temporary would write to the copy), while a
+     * value-producing container is itself the temporary PHP writes into;
+     * object receivers are handles, so a temporary preserves identity.
+     */
+    private function stabilizeCoalesceTarget(Expr $target): Expr
+    {
+        if ($target instanceof Expr\PropertyFetch || $target instanceof Expr\NullsafePropertyFetch) {
+            if (!$this->isCoalesceTargetTrivialSubexpr($target->var)) {
+                $target->var = $this->materializeCoalesceTargetSubexpr($target->var, true);
+            }
+            if ($target->name instanceof Expr && !$this->isCoalesceTargetTrivialSubexpr($target->name)) {
+                $target->name = $this->materializeCoalesceTargetSubexpr($target->name, false);
+            }
+            return $target;
+        }
+        if ($target instanceof Expr\StaticPropertyFetch) {
+            if ($target->class instanceof Expr && !$this->isCoalesceTargetTrivialSubexpr($target->class)) {
+                $target->class = $this->materializeCoalesceTargetSubexpr($target->class, false);
+            }
+            if ($target->name instanceof Expr && !$this->isCoalesceTargetTrivialSubexpr($target->name)) {
+                $target->name = $this->materializeCoalesceTargetSubexpr($target->name, false);
+            }
+            return $target;
+        }
+        if ($target instanceof Expr\ArrayDimFetch) {
+            if ($target->var instanceof Expr\PropertyFetch
+                || $target->var instanceof Expr\NullsafePropertyFetch
+                || $target->var instanceof Expr\StaticPropertyFetch
+                || $target->var instanceof Expr\ArrayDimFetch
+            ) {
+                $target->var = $this->stabilizeCoalesceTarget($target->var);
+            } elseif (!$this->isCoalesceTargetTrivialSubexpr($target->var)) {
+                $target->var = $this->materializeCoalesceTargetSubexpr(
+                    $target->var,
+                    isReceiver: false,
+                    writableContainer: true,
+                );
+            }
+            // An object container is a handle, so copying it into a temporary
+            // preserves identity and lets ArrayAccess presence/read/write all
+            // use the same property or nested-dimension result. Do not do this
+            // for arrays: their write must continue through the original
+            // bucket/property lvalue.
+            if (!$this->isVarExpr($target->var)
+                && $this->detectTypeOfExpr($target->var) === Type::OBJECT
+                && !$this->isNativeObjectClass($this->detectClassOfExpr($target->var))
+            ) {
+                $target->var = $this->materializeCoalesceTargetSubexpr(
+                    $target->var,
+                    isReceiver: true,
+                    writableContainer: true,
+                );
+            }
+            if ($target->dim !== null && !$this->isCoalesceTargetTrivialSubexpr($target->dim)) {
+                $target->dim = $this->materializeCoalesceTargetSubexpr($target->dim, false);
+            }
+            return $target;
+        }
+        return $target;
+    }
+
+    private function isCoalesceTargetTrivialSubexpr(Expr $expr): bool
+    {
+        return $expr instanceof Expr\Variable
+            || $expr instanceof Node\Scalar
+            || $expr instanceof Expr\ConstFetch
+            || $expr instanceof Expr\ClassConstFetch;
+    }
+
+    private function materializeCoalesceTargetSubexpr(
+        Expr $sub,
+        bool $isReceiver,
+        bool $writableContainer = false,
+    ): Expr\Variable
+    {
+        [$code, $before, $after] = $this->parseExprWithCapturedStmts($sub);
+        $this->appendCapturedStmtLinesToContext($before);
+
+        $class = $isReceiver ? $this->detectClassOfExpr($sub) : '';
+        if ($isReceiver && $this->isNativeObjectClass($class)) {
+            // Boxing a raw Native pointer in a Variant would coerce it to
+            // bool; keep the typed pointer slot instead.
+            $tmp = $this->genTmpVarName();
+            $this->addLocalVar($tmp, $this->getNativeObjectPointerType($class));
+            $this->addNativeObject($tmp, $class);
+            $cleanup = $tmp . ' = nullptr;';
+        } elseif ($writableContainer && $this->resolveRefReturningCall($sub) !== false) {
+            // A call result used as an array write target may be a reference to
+            // external storage. Boxing it in a Variant applies normal PHP value
+            // semantics and dereferences it, so the later write would modify a
+            // detached array copy. A Reference temporary preserves known
+            // by-reference returns as well as runtime-resolved dynamic calls;
+            // assigning a normal value to it still provides the disposable
+            // temporary container required by PHP.
+            $tmp = $this->addTmpVar(Type::REF);
+            $cleanup = $tmp . '.unset();';
+        } else {
+            // Keep the value in a Variant: the rewritten target then goes
+            // through the generic Zend handlers, which also covers receivers
+            // whose concrete class is known only at runtime.
+            $tmp = $this->addTmpVar(Type::VAR);
+            $cleanup = $tmp . '.unset();';
+        }
+        $this->context->beforeStmtLines[] = $tmp . ' = ' . $code . ';';
+        $this->appendCapturedStmtLinesToContext($after);
+        // The temporary must not outlive the statement: PHP destroys the
+        // target's receiver/container at the end of the statement, and a
+        // function-scoped Variant would defer destructors to function exit.
+        $this->context->afterStmtLines[] = $cleanup;
+        return new Expr\Variable($tmp, $sub->getAttributes());
     }
 
     protected function getNormalAssignType(string $type): string

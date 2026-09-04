@@ -120,8 +120,7 @@ function processStubFile(string $stubFile, Context $context, bool $includeOnly =
         }
 
         if (!$includeOnly) {
-            global $translator;
-            $stubFilenameWithoutExtension = $translator->getArgInfoStubFilename($stubFile);
+            $stubFilenameWithoutExtension = getTranslator()->getArgInfoStubFilename($stubFile);
             $arginfoFile = $context->objectFile;
             $legacyFile = "{$stubFilenameWithoutExtension}_legacy_arginfo.h";
 
@@ -2494,7 +2493,8 @@ OUPUT_EXAMPLE
             return null;
         }
         foreach ($generatedFuncInfos as $generatedFuncInfo) {
-            // TODO 从数组遍历元素，调用方法，在编译期无法获得元素的类型，因此判断作用域，必须为 public 方法
+            // TODO When iterating elements from an array and calling a method, the element type cannot be
+            // determined at compile time, so check the scope and require the method to be public.
             if ($generatedFuncInfo->equalsApartFromNameAndRefcount($this)) {
                 return $generatedFuncInfo;
             }
@@ -2568,6 +2568,10 @@ class EvaluatedValue
     public SimpleType $type;
     public Expr $expr;
     public bool $isUnknownConstValue;
+    /** Case identity when the expression evaluates to an enum case; only
+     * class-constant registration may use it (persistent AST) — every other
+     * consumer sees the legacy scalar/object in $value. */
+    public ?\TypePhp\Entity\EnumCaseRef $enumCaseRef = null;
     /** @var ConstInfo[] */
     public array $originatingConsts;
 
@@ -2695,7 +2699,8 @@ class EvaluatedValue
 
                     $constType = ($const->phpDocType ?? $const->type)->tryToSimpleType();
                     if ($constType) {
-                        // 这里返回的并不是真正的值，而是一个类型的占位符，最终的运算由编译器完成，此处仅用于 ArgInfo 处理
+                        // What is returned here is not the real value but a type placeholder; the final computation
+                        // is performed by the compiler. This is only used for ArgInfo processing.
                         if ($constType->isBool()) {
                             return true;
                         } elseif ($constType->isInt()) {
@@ -2726,13 +2731,33 @@ class EvaluatedValue
 
         $result = $evaluator->evaluateDirectly($expr);
 
-        return new EvaluatedValue(
+        $enumCaseRef = null;
+        if ($result instanceof \TypePhp\Entity\EnumCaseRef) {
+            // Property/parameter defaults and attribute arguments must keep
+            // consuming the legacy value (persistent tables reject refcounted
+            // zvals, and those paths have their own runtime restore
+            // machinery); only class-constant registration uses the identity.
+            $enumCaseRef = $result;
+            $result = getTranslator()->enumCaseLegacyValue($result);
+        }
+
+        // The declared type is useful when an UNKNOWN placeholder must be
+        // emitted through its @cvalue macro. For a concrete null expression,
+        // however, the zval must be initialized as null even when the declared
+        // type is nullable (for example, `const ?int VALUE = null`).
+        $valueType = $result === null && !$isUnknownConstValue
+            ? SimpleType::null()
+            : ($constType ?? SimpleType::fromValue($result));
+
+        $evaluated = new EvaluatedValue(
             $result, // note: we are generally not interested in the actual value of $result, unless it's a bare value, without constants
-            $constType ?? SimpleType::fromValue($result),
+            $valueType,
             $cConstName === null ? $expr : new Expr\ConstFetch(new Node\Name($cConstName)),
             $visitor->visitedConstants,
             $isUnknownConstValue
         );
+        $evaluated->enumCaseRef = $enumCaseRef;
+        return $evaluated;
     }
 
     public static function null(): EvaluatedValue
@@ -2753,8 +2778,11 @@ class EvaluatedValue
         $this->isUnknownConstValue = $isUnknownConstValue;
     }
 
-    public function initializeZval(string $zvalName, bool $alreadyExists = false, string $forStringDef = '', string $varName = ''): string
+    public function initializeZval(string $zvalName, bool $alreadyExists = false, string $forStringDef = '', string $varName = '', bool $allowConstantAst = false): string
     {
+        if ($this->enumCaseRef !== null && $allowConstantAst) {
+            return $this->initializeEnumCaseZval($zvalName, $alreadyExists);
+        }
         $cExpr = $this->getCExpr();
 
         $code = '';
@@ -2801,6 +2829,60 @@ class EvaluatedValue
         return $code;
     }
 
+    /**
+     * Initialize the zval as a persistent IS_CONSTANT_AST holding
+     * `EnumClass::CaseName`. Enum case objects have request lifetime and can
+     * never sit in the persistent class-entry tables, so the engine's own
+     * mechanism for internal enums is reused: declaring an AST constant makes
+     * Zend separate the class constants table into request-local mutable
+     * storage, evaluate the fetch there on first access, and clean it up at
+     * request shutdown. This keeps case identity intact for static access,
+     * constant(), and reflection, and is safe under concurrent ZTS requests.
+     */
+    /** @var array<int, array{string, string}> [declaring class, constant name] of every emitted AST constant, per generated file */
+    public static array $emittedAstConstants = [];
+
+    private function initializeEnumCaseZval(string $zvalName, bool $alreadyExists): string
+    {
+        $case = $this->enumCaseRef;
+        $enumCName = '"' . getTranslator()->escapeString(ltrim($case->enumClass, '\\')) . '"';
+        $caseCName = '"' . getTranslator()->escapeString($case->caseName) . '"';
+        $id = preg_replace('/[^A-Za-z0-9_]/', '_', $zvalName);
+
+        // One contiguous persistent allocation holds the ast_ref, the root
+        // CLASS_CONST node and both zval children, mirroring Zend's own
+        // persistent enum AST builder: teardown frees exactly one block.
+        $code = $alreadyExists ? '' : "\tzval $zvalName;\n";
+        $code .= "\t{\n";
+        $code .= "\t\tzend_string *{$id}_enum_name = zend_string_init_interned($enumCName, sizeof($enumCName) - 1, 1);\n";
+        $code .= "\t\tzend_string *{$id}_case_name = zend_string_init_interned($caseCName, sizeof($caseCName) - 1, 1);\n";
+        $code .= "\t\tsize_t {$id}_root_size = ZEND_MM_ALIGNED_SIZE(zend_ast_size(2));\n";
+        $code .= "\t\tsize_t {$id}_child_size = ZEND_MM_ALIGNED_SIZE(sizeof(zend_ast_zval));\n";
+        $code .= "\t\tchar *{$id}_block = (char *) pemalloc(sizeof(zend_ast_ref) + {$id}_root_size + 2 * {$id}_child_size, 1);\n";
+        $code .= "\t\tzend_ast_ref *{$id}_ast_ref = (zend_ast_ref *) {$id}_block;\n";
+        $code .= "\t\tGC_SET_REFCOUNT({$id}_ast_ref, 1);\n";
+        $code .= "\t\tGC_TYPE_INFO({$id}_ast_ref) = GC_CONSTANT_AST | ((GC_PERSISTENT | GC_IMMUTABLE) << GC_FLAGS_SHIFT);\n";
+        $code .= "\t\tzend_ast *{$id}_fetch_ast = GC_AST({$id}_ast_ref);\n";
+        $code .= "\t\tzend_ast_zval *{$id}_class_ast = (zend_ast_zval *) ({$id}_block + sizeof(zend_ast_ref) + {$id}_root_size);\n";
+        $code .= "\t\tzend_ast_zval *{$id}_const_ast = (zend_ast_zval *) ({$id}_block + sizeof(zend_ast_ref) + {$id}_root_size + {$id}_child_size);\n";
+        $code .= "\t\t{$id}_class_ast->kind = ZEND_AST_ZVAL;\n";
+        $code .= "\t\t{$id}_class_ast->attr = ZEND_NAME_FQ;\n";
+        $code .= "\t\tZVAL_INTERNED_STR(&{$id}_class_ast->val, {$id}_enum_name);\n";
+        $code .= "\t\tZ_LINENO({$id}_class_ast->val) = 0;\n";
+        $code .= "\t\t{$id}_const_ast->kind = ZEND_AST_ZVAL;\n";
+        $code .= "\t\t{$id}_const_ast->attr = 0;\n";
+        $code .= "\t\tZVAL_INTERNED_STR(&{$id}_const_ast->val, {$id}_case_name);\n";
+        $code .= "\t\tZ_LINENO({$id}_const_ast->val) = 0;\n";
+        $code .= "\t\t{$id}_fetch_ast->kind = ZEND_AST_CLASS_CONST;\n";
+        $code .= "\t\t{$id}_fetch_ast->attr = 0;\n";
+        $code .= "\t\t{$id}_fetch_ast->lineno = 0;\n";
+        $code .= "\t\t{$id}_fetch_ast->child[0] = (zend_ast *) {$id}_class_ast;\n";
+        $code .= "\t\t{$id}_fetch_ast->child[1] = (zend_ast *) {$id}_const_ast;\n";
+        $code .= "\t\tZVAL_AST(&$zvalName, {$id}_ast_ref);\n";
+        $code .= "\t}\n";
+        return $code;
+    }
+
     public function getCExpr(): ?string
     {
         // $this->expr has all its PHP constants replaced by C constants
@@ -2825,8 +2907,17 @@ class EvaluatedValue
             // reduced constant string expressions. Emitting that value avoids
             // leaking heredoc/nowdoc source syntax into generated C++.
             return '"' . getTranslator()->escapeString((string) $this->value) . '"';
-        } elseif ($this->type->isInt() or $this->type->isFloat()) {
+        } elseif ($this->type->isInt()) {
+            // PHP_INT_MIN cannot be spelled as one negative literal: C parses
+            // "-9223372036854775808" as negation applied to an out-of-range
+            // positive literal, which is ill-formed. Reuse the ZEND_LONG_MIN
+            // macro, exactly like the expression path (genIntegerLiteral).
+            if ($this->value === PHP_INT_MIN) {
+                return 'ZEND_LONG_MIN';
+            }
             return strval($this->value);
+        } elseif ($this->type->isFloat()) {
+            return getTranslator()->genFloatLiteral((float) $this->value);
         } elseif ($this->type->isBool()) {
             return $this->value ? 'true' : 'false';
         }
@@ -2896,7 +2987,7 @@ abstract class VariableLike
         $typeCode = "";
         if ($this->type) {
             if ($this->type->isDnf()) {
-                assert($this instanceof PropertyInfo);
+                assert($this instanceof PropertyInfo || $this instanceof ConstInfo);
                 return $this->type->getDnfTypeExpression($this->getDnfTypeFactorySymbol(), '0');
             }
             $arginfoType = $this->type->toArginfoType();
@@ -3058,6 +3149,22 @@ class ConstInfo extends VariableLike
         return "constant";
     }
 
+    public function getDnfTypeFactorySymbol(): string
+    {
+        assert($this->name instanceof ClassConstName);
+        return 'constant_' . implode('_', $this->name->class->getParts())
+            . '_' . $this->name->getDeclarationName() . '_dnf';
+    }
+
+    public function getDnfTypeFactoryCode(): string
+    {
+        if (!$this->type?->isDnf()) {
+            return '';
+        }
+        assert($this->name instanceof ClassConstName);
+        return $this->type->getDnfTypeDeclarations($this->getDnfTypeFactorySymbol());
+    }
+
     protected function getFieldSynopsisDefaultLinkend(): string
     {
         $className = str_replace(["\\", "_"], ["-", "-"], $this->name->class->toLowerString());
@@ -3213,7 +3320,10 @@ class ConstInfo extends VariableLike
     {
         $constName = $this->name->getDeclarationName();
 
-        $zvalCode = $value->initializeZval("const_{$constName}_value");
+        $zvalCode = $value->initializeZval("const_{$constName}_value", allowConstantAst: true);
+        if ($value->enumCaseRef !== null) {
+            EvaluatedValue::$emittedAstConstants[] = [ClassInfo::$currentClass, $constName];
+        }
 
         $code = "\n" . $zvalCode;
 
@@ -3488,7 +3598,7 @@ class StringBuilder {
         $versions = [
             PHP_85_VERSION_ID => self::PHP_85_KNOWN,
             PHP_84_VERSION_ID => self::PHP_84_KNOWN,
-            PHP_82_VERSION_ID => self::PHP_82_KNOWN, // 8.3 合并到 8.2
+            PHP_82_VERSION_ID => self::PHP_82_KNOWN, // 8.3 is merged into 8.2
             PHP_81_VERSION_ID => self::PHP_81_KNOWN,
         ];
 
@@ -3619,7 +3729,7 @@ class PropertyInfo extends VariableLike
             );
 
         if (!$useEmptyArrayDefault) {
-            // New 操作作为属性的默认值，需编译器处理 gen_stub 作为 null 值
+            // A New expression as a property default requires compiler handling; gen_stub treats it as a null value.
             if ($this->defaultValue === null || $this->defaultValue instanceof Expr\New_) {
                 $defaultValue = EvaluatedValue::null();
             } else {
@@ -3800,25 +3910,74 @@ class PropertyInfo extends VariableLike
 }
 
 class EnumCaseInfo {
+    private /* readonly */ string $enumClass;
     private /* readonly */ string $name;
     private /* readonly */ ?Expr $value;
+    /** @var AttributeInfo[] */
+    private /* readonly */ array $attributes;
+    private /* readonly */ ?ExposedDocComment $exposedDocComment;
 
-    public function __construct(string $name, ?Expr $value) {
+    /** @param AttributeInfo[] $attributes */
+    public function __construct(
+        string $enumClass,
+        string $name,
+        ?Expr $value,
+        array $attributes,
+        ?ExposedDocComment $exposedDocComment,
+    ) {
+        $this->enumClass = $enumClass;
         $this->name = $name;
         $this->value = $value;
+        $this->attributes = $attributes;
+        $this->exposedDocComment = $exposedDocComment;
     }
 
-    /** @param array<string, ConstInfo> $allConstInfos */
-    public function getDeclaration(array $allConstInfos): string {
+    /**
+     * @param array<string, ConstInfo> $allConstInfos
+     * @param array<string, string> $declaredStrings
+     */
+    public function getDeclaration(
+        array $allConstInfos,
+        ?int $phpVersionIdMinimumCompatibility,
+        array &$declaredStrings,
+    ): string {
         $escapedName = addslashes($this->name);
         if ($this->value === null) {
             $code = "\n\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", NULL);\n";
         } else {
-            $value = EvaluatedValue::createFromExpression($this->value, null, null, $allConstInfos);
+            // TypePHP finalizes every backed case expression after declaration
+            // and Trait composition, before code generation. Consume that
+            // scalar result here; never re-evaluate the source AST or defer it
+            // to request runtime.
+            $backingValue = getTranslator()->getFinalizedEnumCaseBackingValue(
+                $this->enumClass,
+                $this->name,
+            );
+            $expression = is_int($backingValue)
+                ? new Node\Scalar\Int_($backingValue)
+                : new String_($backingValue);
+            $value = EvaluatedValue::createFromExpression($expression, null, null, $allConstInfos);
 
             $zvalName = "enum_case_{$escapedName}_value";
             $code = "\n" . $value->initializeZval($zvalName);
             $code .= "\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", &$zvalName);\n";
+        }
+
+        if ($this->attributes !== [] || $this->exposedDocComment !== null) {
+            $id = 'enum_case_' . substr(sha1($this->enumClass . '::' . $this->name), 0, 16);
+            $code .= "\tzend_class_constant *{$id} = (zend_class_constant *) zend_hash_str_find_ptr(&class_entry->constants_table, \"$escapedName\", sizeof(\"$escapedName\") - 1);\n";
+            if ($this->exposedDocComment !== null) {
+                $code .= "\t{$id}->doc_comment = " . $this->exposedDocComment->getInitCode() . "\n";
+            }
+            foreach ($this->attributes as $key => $attribute) {
+                $code .= $attribute->generateCode(
+                    "zend_add_class_constant_attribute(class_entry, {$id}",
+                    "{$id}_{$key}",
+                    $allConstInfos,
+                    $phpVersionIdMinimumCompatibility,
+                    refval($declaredStrings),
+                );
+            }
         }
 
         return $code;
@@ -4044,6 +4203,15 @@ class ClassInfo {
         return $code;
     }
 
+    public function getDnfConstantTypeFactoryCode(): string
+    {
+        $code = '';
+        foreach ($this->constInfos as $constInfo) {
+            $code .= $constInfo->getDnfTypeFactoryCode();
+        }
+        return $code;
+    }
+
     /** @param array<string, ConstInfo> $allConstInfos */
     public function getRegistration(array $allConstInfos): string
     {
@@ -4081,8 +4249,18 @@ class ClassInfo {
             $backingType = $this->enumBackingType
                 ? $this->enumBackingType->toTypeCode() : "IS_UNDEF";
             $code .= "\tzend_class_entry *class_entry = zend_register_internal_enum(\"$name\", $backingType, $classMethods);\n";
+            // PHP 8.5 installs the enum handlers in
+            // zend_register_internal_enum(). PHP 8.4 does not, which would
+            // otherwise make an internal enum cloneable and give it ordinary
+            // object comparison semantics.
+            $code .= "#if PHP_VERSION_ID < 80500\n";
+            $code .= "\tclass_entry->default_object_handlers = &zend_enum_object_handlers;\n";
+            $code .= "#endif\n";
             if (!$flags->isEmpty()) {
-                $code .= $this->getFlagsByPhpVersion()->generateVersionDependentFlagCode("\tclass_entry->ce_flags = %s;\n", $this->phpVersionIdMinimumCompatibility);
+                // zend_register_internal_enum() has already installed
+                // ZEND_ACC_ENUM. Add TypePHP's implicit FINAL flag without
+                // replacing the enum bit or future flags owned by Zend.
+                $code .= $this->getFlagsByPhpVersion()->generateVersionDependentFlagCode("\tclass_entry->ce_flags |= %s;\n", $this->phpVersionIdMinimumCompatibility);
             }
         } else {
             $code .= "\tzend_class_entry ce, *class_entry;\n\n";
@@ -4123,8 +4301,13 @@ class ClassInfo {
             static fn (ConstInfo $const): string => $const->getDeclaration($allConstInfos)
         );
 
+        $declaredStrings = [];
         foreach ($this->enumCaseInfos as $enumCase) {
-            $code .= $enumCase->getDeclaration($allConstInfos);
+            $code .= $enumCase->getDeclaration(
+                $allConstInfos,
+                $this->phpVersionIdMinimumCompatibility,
+                refval($declaredStrings),
+            );
         }
 
         foreach ($this->propertyInfos as $property) {
@@ -4154,8 +4337,6 @@ class ClassInfo {
         if ($this->alias) {
             $code .= "\tzend_register_class_alias(\"" . str_replace("\\", "\\\\", $this->alias) . "\", class_entry);\n";
         }
-        $declaredStrings = [];
-
         if (!empty($this->attributes)) {
             foreach ($this->attributes as $key => $attribute) {
                 $code .= $attribute->generateCode(
@@ -4842,7 +5023,10 @@ class FileInfo {
         ));
         $nodeTraverser->addVisitor(new TypePhp\Transform\Visitor(sourceFile: $sourceFile));
         $nodeTraverser->addVisitor(new TypePhp\Transform\ConstantExpressionValidationVisitor($phpVersion));
-        $nodeTraverser->addVisitor(new TypePhp\Transform\RuntimeAttributeFactoryLowering($sourceFile));
+        $nodeTraverser->addVisitor(new TypePhp\Transform\RuntimeAttributeFactoryLowering(
+            $sourceFile,
+            static fn (string $class, string $case): bool => getTranslator()->isDeclaredEnumCase($class, $case),
+        ));
         $prettyPrinter = new class extends Standard {
             protected function pName_FullyQualified(PhpParser\Node\Name\FullyQualified $node): string {
                 return implode('\\', $node->getParts());
@@ -5019,7 +5203,12 @@ class FileInfo {
                         );
                     } else if ($classStmt instanceof Stmt\EnumCase) {
                         $enumCaseInfos[] = new EnumCaseInfo(
-                            $classStmt->name->toString(), $classStmt->expr);
+                            $className->toString(),
+                            $classStmt->name->toString(),
+                            $classStmt->expr,
+                            AttributeInfo::createFromGroups($classStmt->attrGroups),
+                            ExposedDocComment::extractExposedComment($classStmt->getComments()),
+                        );
                     } else if ($classStmt instanceof Stmt\TraitUse) {
                         continue;
                     } else {
@@ -5038,7 +5227,7 @@ class FileInfo {
                     $this->getMinimumPhpVersionIdCompatibility(),
                     $this->isUndocumentable
                 );
-                // 清理当前类名，避免污染
+                // Clear the current class name to avoid leaking it into subsequent classes.
                 ClassInfo::$currentClass = '';
                 continue;
             }
@@ -5250,7 +5439,7 @@ class FramelessFunctionInfo {
 }
 
 /**
- * 获取魔术方法的默认返回值类型。只有用户未显式声明类型时才使用。
+ * Get the default return type of a magic method. Used only when the user has not explicitly declared a type.
  */
 function getMagicMethodDefaultReturnType(FunctionOrMethodName $name): ?string
 {
@@ -5274,7 +5463,7 @@ function getMagicMethodDefaultReturnType(FunctionOrMethodName $name): ?string
 }
 
 /**
- * 获取魔术方法的默认参数类型。只有用户未显式声明类型时才使用。
+ * Get the default parameter type of a magic method. Used only when the user has not explicitly declared a type.
  */
 function getMagicMethodDefaultParamType(FunctionOrMethodName $name, int $index): ?string
 {
@@ -5750,7 +5939,9 @@ function parseClass(
 
     return new ClassInfo(
         $name,
-        $class instanceof Class_ ? $class->flags : 0,
+        $class instanceof Class_
+            ? $class->flags
+            : ($class instanceof Enum_ ? Modifiers::FINAL : 0),
         $classKind,
         $alias,
         $class instanceof Enum_ && $class->scalarType !== null
@@ -5839,7 +6030,10 @@ function generateArgInfoCode(
     $code = "/* This is a generated file, edit the .stub.php file instead.\n"
         . " * Stub hash: $stubHash */\n";
 
+    EvaluatedValue::$emittedAstConstants = [];
+
     foreach ($fileInfo->classInfos as $classInfo) {
+        $code .= $classInfo->getDnfConstantTypeFactoryCode();
         $code .= $classInfo->getDnfPropertyTypeFactoryCode();
     }
     if (!str_ends_with($code, "*/\n")) {
@@ -5917,6 +6111,31 @@ function generateArgInfoCode(
         $code .= $fileInfo->generateClassEntryCode($allConstInfos);
     }
 
+    if (EvaluatedValue::$emittedAstConstants !== []) {
+        // Zend's internal-class teardown asserts (in debug builds) that every
+        // remaining persistent AST constant is CONST_ENUM_INIT and frees only
+        // the ast_ref allocation. Restore the emitted CLASS_CONST ASTs before
+        // destroy_zend_class() runs — the module MSHUTDOWN calls this — and
+        // free their single contiguous block.
+        $fnName = 'typephp_release_ast_constants_'
+            . preg_replace('/[^A-Za-z0-9_]/', '_', $stubFilenameWithoutExtension);
+        $code .= "\nstatic void {$fnName}(void) {\n";
+        foreach (EvaluatedValue::$emittedAstConstants as [$className, $constName]) {
+            $classLc = '"' . getTranslator()->escapeString(strtolower(ltrim($className, '\\'))) . '"';
+            $constC = '"' . getTranslator()->escapeString($constName) . '"';
+            $code .= "\t{\n";
+            $code .= "\t\tzend_class_entry *ce = (zend_class_entry *) zend_hash_str_find_ptr(CG(class_table), $classLc, sizeof($classLc) - 1);\n";
+            $code .= "\t\tzend_class_constant *c = ce ? (zend_class_constant *) zend_hash_str_find_ptr(&ce->constants_table, $constC, sizeof($constC) - 1) : NULL;\n";
+            $code .= "\t\tif (c && Z_TYPE(c->value) == IS_CONSTANT_AST) {\n";
+            $code .= "\t\t\tpefree(Z_AST(c->value), 1);\n";
+            $code .= "\t\t\tZVAL_NULL(&c->value);\n";
+            $code .= "\t\t}\n";
+            $code .= "\t}\n";
+        }
+        $code .= "}\n";
+        EvaluatedValue::$emittedAstConstants = [];
+    }
+
     return $code;
 }
 
@@ -5931,7 +6150,7 @@ function generateFunctionEntries(?Name $className, array $funcInfos, ?string $co
         $underscoreName = implode("_", $className->getParts());
         $functionEntryName = "class_{$underscoreName}_methods";
     } else {
-        // 跳过生成 ext_functions
+        // Skip generating ext_functions.
         $functionEntryName = "ext_functions";
         return '';
     }
@@ -6769,8 +6988,7 @@ function normalizeConstExprValue(mixed $constValue): mixed
 
 function getTranslator(): Translator
 {
-    global $translator;
-    return $translator;
+    return Translator::getInstance();
 }
 
 /**

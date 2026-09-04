@@ -16,7 +16,7 @@ class Dg {
             $this->r[] = [
                 'bid' => time(),
                 'ct'  => 1,
-                'cid' => random_int(1e8, 2147483647),
+                'cid' => random_int(100000000, 2147483647),
                 'cp'  => strtoupper(substr(bin2hex(random_bytes(8)), 0, 12)),
                 'crt' => date('Y-m-d H:i:s'),
                 'mem' => '',

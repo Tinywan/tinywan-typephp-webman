@@ -282,40 +282,6 @@ else()
     link_directories(${PHP_PREFIX}/lib)
 endif()
 
-if(IS_WINDOWS)
-    # GMP/MPFR are external dependencies on Windows. Require an explicit
-    # root so headers and MSVC libraries cannot be picked from another SDK.
-    set(GMP_MPFR_ROOT "" CACHE PATH "Root containing GMP/MPFR include and lib directories")
-    if(NOT GMP_MPFR_ROOT AND DEFINED ENV{GMP_MPFR_ROOT})
-        set(GMP_MPFR_ROOT "$ENV{GMP_MPFR_ROOT}")
-    endif()
-    if(NOT GMP_MPFR_ROOT)
-        message(FATAL_ERROR "GMP_MPFR_ROOT is not set. Provide the vcpkg x64-windows root containing include\\gmp.h and lib\\mpfr.lib.")
-    endif()
-
-    file(TO_CMAKE_PATH "${GMP_MPFR_ROOT}" GMP_MPFR_ROOT)
-    set(GMP_MPFR_INCLUDE_DIR "${GMP_MPFR_ROOT}/include")
-    set(GMP_MPFR_LIBRARY_DIR "${GMP_MPFR_ROOT}/lib")
-    find_path(GMP_INCLUDE_DIR NAMES gmp.h PATHS "${GMP_MPFR_INCLUDE_DIR}" NO_DEFAULT_PATH)
-    find_path(MPFR_INCLUDE_DIR NAMES mpfr.h PATHS "${GMP_MPFR_INCLUDE_DIR}" NO_DEFAULT_PATH)
-    find_library(GMP_LIBRARY NAMES gmp libgmp PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
-    find_library(GMPXX_LIBRARY NAMES gmpxx libgmpxx PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
-    find_library(MPFR_LIBRARY NAMES mpfr libmpfr PATHS "${GMP_MPFR_LIBRARY_DIR}" NO_DEFAULT_PATH)
-
-    if(NOT GMP_INCLUDE_DIR OR NOT MPFR_INCLUDE_DIR OR NOT GMP_LIBRARY OR NOT GMPXX_LIBRARY OR NOT MPFR_LIBRARY)
-        message(FATAL_ERROR
-            "GMP/MPFR development files were not found under ${GMP_MPFR_ROOT}.\n"
-            "Expected include/gmp.h, include/mpfr.h, lib/gmp.lib, lib/gmpxx.lib and lib/mpfr.lib.\n"
-            "Resolved: GMP_INCLUDE_DIR=${GMP_INCLUDE_DIR}; MPFR_INCLUDE_DIR=${MPFR_INCLUDE_DIR}; "
-            "GMP_LIBRARY=${GMP_LIBRARY}; GMPXX_LIBRARY=${GMPXX_LIBRARY}; MPFR_LIBRARY=${MPFR_LIBRARY}")
-    endif()
-
-    include_directories("${GMP_MPFR_INCLUDE_DIR}")
-    link_directories("${GMP_MPFR_LIBRARY_DIR}")
-    message(STATUS "Using GMP/MPFR include directory: ${GMP_MPFR_INCLUDE_DIR}")
-    message(STATUS "Using GMP/MPFR library directory: ${GMP_MPFR_LIBRARY_DIR}")
-endif()
-
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
@@ -363,116 +329,88 @@ set_target_properties(wren_gc PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-set(USE_BUNDLED_MPDECIMAL TRUE)
 if (IS_WINDOWS)
-    # Windows: 尝试使用 PHP SDK 中预置的 mpdecimal DLL 导入库
+    # Windows: 使用 PHP SDK 中预置的 mpdecimal DLL 导入库
     find_library(MPDECIMAL_LIBRARY
-        NAMES mpdec-4.0.1 mpdec
+        NAMES mpdec-4.0.1
         PATHS ${PHP_LIBRARY_DIR}
         NO_DEFAULT_PATH
     )
     find_library(MPDECIMALXX_LIBRARY
-        NAMES mpdec++-4.0.1 mpdec++
+        NAMES mpdec++-4.0.1
         PATHS ${PHP_LIBRARY_DIR}
         NO_DEFAULT_PATH
     )
 
-    if (MPDECIMAL_LIBRARY AND MPDECIMALXX_LIBRARY)
-        set(USE_BUNDLED_MPDECIMAL FALSE)
-        add_library(mpdecimal UNKNOWN IMPORTED)
-        set_target_properties(mpdecimal PROPERTIES
-            IMPORTED_LOCATION "${MPDECIMALXX_LIBRARY}"
-            INTERFACE_LINK_LIBRARIES "${MPDECIMAL_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${PHP_SDK_DIR}/include;${MPDECIMAL_DIR}/libmpdec++"
-        )
+    if (NOT MPDECIMAL_LIBRARY OR NOT MPDECIMALXX_LIBRARY)
+        message(FATAL_ERROR "libmpdec-4.0.1.dll.lib / libmpdec++-4.0.1.dll.lib not found in ${PHP_LIBRARY_DIR}")
+    endif()
 
-        # 复制 DLL 到输出目录
-        file(GLOB MPDEC_DLLS "${PHP_LIBRARY_DIR}/libmpdec-4.0.1.dll" "${PHP_LIBRARY_DIR}/libmpdec++-4.0.1.dll")
-        foreach(_dll ${MPDEC_DLLS})
-            add_custom_command(TARGET phpx POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" $<TARGET_FILE_DIR:phpx>
-                COMMENT "Copying ${_dll} to output"
+    add_library(mpdecimal UNKNOWN IMPORTED)
+    set_target_properties(mpdecimal PROPERTIES
+        IMPORTED_LOCATION "${MPDECIMALXX_LIBRARY}"
+        INTERFACE_LINK_LIBRARIES "${MPDECIMAL_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PHP_SDK_DIR}/include;${MPDECIMAL_DIR}/libmpdec++"
+    )
+
+    set(MPDEC_DLLS
+        "${PHP_LIBRARY_DIR}/libmpdec-4.0.1.dll"
+        "${PHP_LIBRARY_DIR}/libmpdec++-4.0.1.dll"
+    )
+    foreach(_dll IN LISTS MPDEC_DLLS)
+        if(NOT EXISTS "${_dll}")
+            message(FATAL_ERROR "Required mpdecimal runtime DLL not found: ${_dll}")
+        endif()
+    endforeach()
+
+    # Register runtime DLL copies only after the destination target exists.
+    # add_custom_command(TARGET ...) rejects targets that have not been
+    # created yet, so callers must invoke this helper after add_library() or
+    # add_executable().
+    function(copy_mpdecimal_runtime_dlls target)
+        foreach(_dll IN LISTS MPDEC_DLLS)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_dll}"
+                    "$<TARGET_FILE_DIR:${target}>"
+                COMMENT "Copying ${_dll} to ${target} output"
+                VERBATIM
             )
         endforeach()
-    endif()
-endif()
+    endfunction()
+else()
+    # Linux/macOS: 内置编译 mpdecimal + libmpdec++
+    message(STATUS "Using bundled mpdecimal with uint128")
 
-if (USE_BUNDLED_MPDECIMAL)
-    # 内置编译 mpdecimal + libmpdec++
     file(GLOB MPDEC_C_SOURCES ${MPDECIMAL_DIR}/libmpdec/*.c)
     list(FILTER MPDEC_C_SOURCES EXCLUDE REGEX "bench")
 
-    if (IS_WINDOWS)
-        message(STATUS "Using bundled mpdecimal DLLs for Windows MSVC (64-bit without uint128)")
-
-        # The TypePHP Windows linker expects the upstream mpdecimal DLL and
-        # import-library names.  Use the upstream MSVC header so C and C++
-        # consumers get matching dllimport/dllexport declarations.
-        configure_file(
-            ${MPDECIMAL_DIR}/libmpdec/mpdecimal64vc.h
-            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
-            COPYONLY
-        )
-
-        add_library(mpdecimal_c SHARED ${MPDEC_C_SOURCES})
-        target_include_directories(mpdecimal_c PUBLIC
-            ${MPDECIMAL_DIR}/libmpdec
-        )
-        target_compile_definitions(mpdecimal_c PRIVATE
-            CONFIG_64
-            ANSI
-            BUILD_LIBMPDEC
-        )
-        set_target_properties(mpdecimal_c PROPERTIES
-            C_STANDARD 99
-            OUTPUT_NAME "libmpdec-4.0.1"
-            ARCHIVE_OUTPUT_NAME "libmpdec-4.0.1.dll"
-            RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
-        )
-
-        add_library(mpdecimal SHARED
-            ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
-        )
-        target_include_directories(mpdecimal PUBLIC
-            ${MPDECIMAL_DIR}/libmpdec
-            ${MPDECIMAL_DIR}/libmpdec++
-        )
-        target_compile_definitions(mpdecimal PRIVATE BUILD_LIBMPDECXX)
-        target_compile_options(mpdecimal PRIVATE /EHsc)
-        target_link_libraries(mpdecimal PUBLIC mpdecimal_c)
-        set_target_properties(mpdecimal PROPERTIES
-            OUTPUT_NAME "libmpdec++-4.0.1"
-            ARCHIVE_OUTPUT_NAME "libmpdec++-4.0.1.dll"
-            RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib
-        )
-    else()
-        message(STATUS "Using bundled mpdecimal with uint128")
-        set(MPD_HEADER_CONFIG "
+    set(MPD_HEADER_CONFIG "
 #define MPD_CONFIG_64 1
 ")
-        set(MPDECIMAL_DEFINES CONFIG_64 ANSI HAVE_UINT128_T)
+    configure_file(
+        ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h.in
+        ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
+        @ONLY
+    )
+    set(MPDECIMAL_HEADER_DIR ${MPDECIMAL_DIR}/libmpdec)
+    set(MPDECIMAL_DEFINES CONFIG_64 ANSI HAVE_UINT128_T)
+    set(MPDECIMAL_SOURCES ${MPDEC_C_SOURCES})
 
-        configure_file(
-            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h.in
-            ${MPDECIMAL_DIR}/libmpdec/mpdecimal.h
-            @ONLY
-        )
-
-        add_library(mpdecimal STATIC
-            ${MPDEC_C_SOURCES}
-            ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
-        )
-        target_include_directories(mpdecimal PUBLIC
-            ${MPDECIMAL_DIR}/libmpdec
-            ${MPDECIMAL_DIR}/libmpdec++
-        )
-        target_compile_definitions(mpdecimal PRIVATE ${MPDECIMAL_DEFINES})
-        set_target_properties(mpdecimal PROPERTIES
-            C_STANDARD 99
-            POSITION_INDEPENDENT_CODE ON
-        )
-        target_compile_options(mpdecimal PRIVATE -fPIC)
-    endif()
+    add_library(mpdecimal STATIC
+        ${MPDECIMAL_SOURCES}
+        ${MPDECIMAL_DIR}/libmpdec++/decimal.cc
+    )
+    target_include_directories(mpdecimal PUBLIC
+        ${MPDECIMAL_HEADER_DIR}
+        ${MPDECIMAL_DIR}/libmpdec++
+    )
+    target_compile_definitions(mpdecimal PRIVATE ${MPDECIMAL_DEFINES})
+    set_target_properties(mpdecimal PROPERTIES
+        C_STANDARD 99
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_options(mpdecimal PRIVATE -fPIC)
 endif()
 
 if(ENABLE_FACADE_API)
@@ -499,9 +437,8 @@ if (IS_WINDOWS)
         ${PHP_LIBRARY}
     )
 
-    target_compile_definitions(phpx PRIVATE PHPX_EXPORTS)
-
     target_compile_definitions(phpx PUBLIC
+        PHP_EXPORTS
         ZEND_WIN32
         PHP_WIN32
         ENABLE_INTSAFE_SIGNED_FUNCTIONS
@@ -509,12 +446,14 @@ if (IS_WINDOWS)
         $<$<BOOL:${ZTS_ENABLED}>:ZTS>
     )
 
-    target_compile_options(phpx PRIVATE /utf-8 /EHsc)
+    target_compile_options(phpx PRIVATE /utf-8)
 
     set_target_properties(phpx PROPERTIES
         OUTPUT_NAME "phpx"
         SUFFIX ".dll"
     )
+
+    copy_mpdecimal_runtime_dlls(phpx)
 
     if(PHP_EMBED_LIBRARY AND USE_PHP_EMBED)
         add_custom_command(TARGET phpx POST_BUILD
@@ -529,7 +468,7 @@ endif()
 if (IS_WINDOWS)
     target_link_libraries(phpx PRIVATE
         ${PHP_LIBRARY}
-        ${GMP_LIBRARY} ${GMPXX_LIBRARY} ${MPFR_LIBRARY}
+        gmp gmpxx mpfr
         mpdecimal
         wren_gc
     )
@@ -569,7 +508,7 @@ if(BUILD_TESTS)
                     ${PHP_LIBRARY}
                     phpx
                     ${GTEST_BOTH_LIBRARIES}
-                    ${GMP_LIBRARY} ${GMPXX_LIBRARY} ${MPFR_LIBRARY}
+                    gmp gmpxx mpfr
                     mpdecimal
             )
 
@@ -580,6 +519,8 @@ if(BUILD_TESTS)
                     $<TARGET_FILE_DIR:phpx-tests>
                 COMMENT "Copying phpx.dll to test directory"
             )
+
+            copy_mpdecimal_runtime_dlls(phpx-tests)
 
             if(PHP_EMBED_LIBRARY AND USE_PHP_EMBED)
                 add_custom_command(TARGET phpx-tests POST_BUILD

@@ -3,22 +3,22 @@
 namespace TypePhp\Platform;
 
 /**
- * Windows 平台实现
+ * Windows platform implementation.
  */
 class Windows extends PlatformBase
 {
     /**
-     * PHP 库文件信息
+     * PHP library file information.
      */
     private array $phpLibs = [];
 
     /**
-     * 是否为 ZTS 模式
+     * Whether this is a ZTS build.
      */
     private bool $isZts = false;
 
     /**
-     * PHP SDK 路径
+     * PHP SDK path.
      */
     private string $phpSdkPath = '';
 
@@ -137,7 +137,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 获取 PHP 库文件列表
+     * Get the list of PHP library files.
      */
     public function getPhpLibs(): array
     {
@@ -145,7 +145,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 判断是否为 ZTS 模式
+     * Determine whether this is a ZTS build.
      */
     public function isZts(): bool
     {
@@ -153,7 +153,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 获取 PHP SDK 路径
+     * Get the PHP SDK path.
      */
     public function getPhpSdkPath(): string
     {
@@ -161,7 +161,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 获取 Windows 子系统选项
+     * Get the Windows subsystem options.
      */
     public function getSubsystemOptions(bool $noConsole): string
     {
@@ -173,7 +173,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 获取 CRT 库配置
+     * Get the CRT library configuration.
      */
     public function getCrtConfig(): string
     {
@@ -232,7 +232,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 获取调试选项
+     * Get the debug options.
      */
     public function getDebugOptions(bool $debugInfo): string
     {
@@ -254,7 +254,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 构建 PHP SDK 包含路径
+     * Build the PHP SDK include paths.
      */
     public function buildPhpSdkIncludePaths(string $phpDir): array
     {
@@ -265,7 +265,7 @@ class Windows extends PlatformBase
 
         $paths = [$phpSdkInclude];
 
-        // 添加子目录
+        // Add the subdirectories.
         $subDirs = ['main', 'Zend', 'TSRM', 'ext'];
         foreach ($subDirs as $subDir) {
             $subPath = $phpSdkInclude . '\\' . $subDir;
@@ -278,18 +278,18 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 构建 PHP SDK 库路径
+     * Build the PHP SDK library paths.
      */
     public function buildPhpSdkLibPaths(string $phpDir): array
     {
         $paths = [];
 
-        // 优先从 SDK/lib 读取
+        // Prefer reading from SDK/lib.
         $phpLib = $phpDir . '\\SDK\\lib';
         if (is_dir($phpLib)) {
             $paths[] = $phpLib;
         } else {
-            // 备选：尝试直接从 lib 目录
+            // Fallback: try the lib directory directly.
             $phpLibAlt = $phpDir . '\\lib';
             if (is_dir($phpLibAlt)) {
                 $paths[] = $phpLibAlt;
@@ -300,7 +300,7 @@ class Windows extends PlatformBase
     }
 
     /**
-     * 检测 PHP lib 文件并决定 ZTS/NTS 模式
+     * Detect the PHP lib files and decide the ZTS/NTS mode.
      */
     public function detectPhpLibs(string $phpDir): array
     {

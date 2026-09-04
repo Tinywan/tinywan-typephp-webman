@@ -42,7 +42,7 @@ itself.
 TypePHP is under active development. It intentionally supports a defined,
 testable subset of PHP rather than claiming drop-in compatibility with every
 dynamic PHP program. Read [Compatibility model](#compatibility-model) and the
-[incompatible-feature list](docs/INCOMPATIBLE_PHP_FEATURES.md) before adopting
+[incompatible-feature list](docs/en/INCOMPATIBLE_PHP_FEATURES.md) before adopting
 it for an existing application.
 
 ## How it works
@@ -209,7 +209,7 @@ Binary and shared-library builds require PHP's `embed` SAPI. If `libphp.so` is
 missing on Linux, `tpc.php` can interactively download the PHP source and build
 it for you. A PHP extension build resolves Zend symbols from the host SAPI and
 must not load a second `libphp`. See
-[Automatic libphp.so build](docs/LIBPHP_INSTALLER.md).
+[Automatic libphp.so build](docs/en/LIBPHP_INSTALLER.md).
 
 ## Quick Start
 
@@ -268,7 +268,7 @@ bin/tpc.php extension/ -m ext -o my_extension
 bin/tpc.php lib/ -m lib -o mylib
 ```
 
-See [Compilation modes](docs/COMPILATION_MODES.md) for details.
+See [Compilation modes](docs/en/COMPILATION_MODES.md) for details.
 
 ## Project configuration
 
@@ -320,7 +320,7 @@ The build directory contains generated C++, dependency objects, and the
 precompiled-header cache. Reusing it makes incremental builds much faster;
 use `--force` only when the reusable PHPX objects must be rebuilt.
 
-See [Compiler CLI](docs/COMPILER_CLI.md) for all project keys and command-line
+See [Compiler CLI](docs/en/COMPILER_CLI.md) for all project keys and command-line
 precedence rules.
 
 ## Compatibility model
@@ -342,7 +342,7 @@ ahead-of-time compilation, but it also makes several deliberate restrictions:
 
 The compatibility boundary is part of the public contract and has both
 positive and negative tests. Consult
-[Incompatible PHP features](docs/INCOMPATIBLE_PHP_FEATURES.md) for the current,
+[Incompatible PHP features](docs/en/INCOMPATIBLE_PHP_FEATURES.md) for the current,
 specific list instead of assuming that absence from this README means support.
 
 ## Compile-time attributes and code generation
@@ -457,8 +457,8 @@ function main(): void
 }
 ```
 
-See [High-precision types](docs/HIGH_PRECISION_TYPES.md) and
-[Native types](docs/NATIVE_TYPES.md).
+See [High-precision types](docs/en/HIGH_PRECISION_TYPES.md) and
+[Native types](docs/en/NATIVE_TYPES.md).
 
 ### 3. Strongly-typed containers
 
@@ -489,7 +489,7 @@ function main(): void
 }
 ```
 
-See [Std containers](docs/STD_CONTAINERS.md).
+See [Std containers](docs/en/STD_CONTAINERS.md).
 
 ### 4. Universal methods
 
@@ -514,7 +514,7 @@ function main(): void
 
 Method calls on primitives are resolved at compile time into direct C/C++
 function calls — no vtable lookup, no reflection, no runtime dispatch. See
-[Universal methods](docs/UNIVERSAL_METHODS.md).
+[Universal methods](docs/en/UNIVERSAL_METHODS.md).
 
 ### 5. Mixed C++ / PHP
 
@@ -549,7 +549,7 @@ Add `math.cpp`, `math.stub.php`, and the calling PHP source to the same project
 configuration. The `php_` C++ symbol prefix is the TypePHP callable ABI; stub
 functions provide type metadata only and must not contain an implementation.
 
-See [Mixed C++/PHP](docs/MIXED_CPP_PHP.md).
+See [Mixed C++/PHP](docs/en/MIXED_CPP_PHP.md).
 
 ## Benchmark
 
@@ -565,8 +565,9 @@ benchmarks that ship with the PHP source tree, compiled with `-O3`:
 
 Both benchmarks measure core PHP language performance — function calls, object
 property access, array/hash access, string handling, control flow, and more.
-The checked-in workloads are [`examples/bench.php`](examples/bench.php) and
-[`examples/micro_bench.php`](examples/micro_bench.php).
+The checked-in workloads are [`benchmark/bench.php`](benchmark/bench.php) and
+[`benchmark/micro_bench.php`](benchmark/micro_bench.php). Additional focused
+performance regressions live in the same [`benchmark/`](benchmark/) directory.
 
 These numbers are a project measurement snapshot, not a performance guarantee.
 PHP version, compiler, CPU, optimization flags, and enabled extensions can all
@@ -586,7 +587,7 @@ A 10000×100000 element update loop, comparing PHP arrays against TypePHP's
 
 `std::array` is roughly **10× faster** than PHP arrays and performs
 close to the hand-written C++ result in this workload. See the benchmark in
-[Std containers](docs/STD_CONTAINERS.md).
+[Std containers](docs/en/STD_CONTAINERS.md).
 
 ## Command Line
 
@@ -645,7 +646,7 @@ Key options:
 | `-I`, `-D`, `-L`, `-l` | Repeatable native include, define, library path, and library options |
 
 Run `bin/tpc.php --help` for the authoritative, up-to-date list. See
-[Compiler CLI](docs/COMPILER_CLI.md) for details, including Bash completion:
+[Compiler CLI](docs/en/COMPILER_CLI.md) for details, including Bash completion:
 
 ```bash
 source <(./tpc --generate-completion=bash)
@@ -682,7 +683,7 @@ TypePHP ships a Python tool submodule that shares the `tpc` entry point:
 ./tpc --convert-python-to-php script.py > script.php
 ```
 
-See [Python tool submodule](docs/python/tools.md).
+See [Python tool submodule](docs/en/python/tools.md).
 
 ## Development and testing
 
@@ -714,7 +715,7 @@ php bin/analyze-test-coverage.php \
 The coverage tool reports PHP version × feature × positive compilation ×
 runtime semantics × negative diagnostics, plus concrete PHP-parser AST nodes.
 It intentionally does not publish a single percentage without an explicit
-denominator. See [Test coverage analyzer](docs/TEST_COVERAGE_ANALYZER.md).
+denominator. See [Test coverage analyzer](docs/en/TEST_COVERAGE_ANALYZER.md).
 
 GitHub Actions runs PHPUnit and self-hosted PHPT on PHP 8.4 and 8.5. Changes to
 compiler behavior should add a focused PHPUnit test for internal/code-generation
@@ -722,23 +723,30 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 
 ## Documentation
 
-- [Quick Start](docs/QUICKSTART.md) — minimal compilation flow
-- [Compilation modes](docs/COMPILATION_MODES.md) — `bin`, `ext`, `lib`
-- [Compiler CLI](docs/COMPILER_CLI.md) — CLI arguments and project config
-- [Incompatible PHP features](docs/INCOMPATIBLE_PHP_FEATURES.md) — current limits
-- [Native types](docs/NATIVE_TYPES.md) — native scalar types
-- [High-precision types](docs/HIGH_PRECISION_TYPES.md) — BigInt / Decimal / BigFloat
-- [Std containers](docs/STD_CONTAINERS.md) — strongly-typed containers
-- [Universal methods](docs/UNIVERSAL_METHODS.md) — compile-time method resolution
-- [Compile-time functions](docs/COMPILE_TIME_FUNCTIONS.md) — `any()`, `refval()`, `objval()`, …
-- [Mixed C++/PHP](docs/MIXED_CPP_PHP.md) — C++/PHP interop
-- [`#[Immutable]`](docs/IMMUTABLE.md) — compile-time read-only contracts
-- [`#[ArrayDef]`](docs/ARRAY_DEF.md) — typed array-property contracts
-- [Property hooks](docs/PROPERTY_HOOKS.md) — PHP 8.4 hook lowering and runtime metadata
-- [Object storage models](docs/OBJECT_STORAGE_AND_PASSING_MODELS.md) — Zend object, Box, and Native class boundaries
-- [Generators](docs/YIELD_GENERATOR.md) — generator lowering and lifecycle
-- [Test coverage analyzer](docs/TEST_COVERAGE_ANALYZER.md) — AST and feature evidence matrix
-- [WASI build](docs/WASI_BUILD.md) — WASI targets
+- [Quick Start](docs/en/QUICKSTART.md) — minimal compilation flow
+- [Compilation modes](docs/en/COMPILATION_MODES.md) — `bin`, `ext`, `lib`
+- [Compiler CLI](docs/en/COMPILER_CLI.md) — CLI arguments and project config
+- [Incompatible PHP features](docs/en/INCOMPATIBLE_PHP_FEATURES.md) — current limits
+- [Native types](docs/en/NATIVE_TYPES.md) — native scalar types
+- [High-precision types](docs/en/HIGH_PRECISION_TYPES.md) — BigInt / Decimal / BigFloat
+- [Std containers](docs/en/STD_CONTAINERS.md) — strongly-typed containers
+- [Universal methods](docs/en/UNIVERSAL_METHODS.md) — compile-time method resolution
+- [Compile-time functions](docs/en/COMPILE_TIME_FUNCTIONS.md) — `any()`, `refval()`, `objval()`, …
+- [Mixed C++/PHP](docs/en/MIXED_CPP_PHP.md) — C++/PHP interop
+- [`#[Immutable]`](docs/en/IMMUTABLE.md) — compile-time read-only contracts
+- [`#[ArrayDef]`](docs/en/ARRAY_DEF.md) — typed array-property contracts
+- [Property hooks](docs/en/PROPERTY_HOOKS.md) — PHP 8.4 hook lowering and runtime metadata
+- [Object storage models](docs/en/OBJECT_STORAGE_AND_PASSING_MODELS.md) — Zend object, Box, and Native class boundaries
+- [Generators](docs/en/YIELD_GENERATOR.md) — generator lowering and lifecycle
+- [Test coverage analyzer](docs/en/TEST_COVERAGE_ANALYZER.md) — AST and feature evidence matrix
+- [WASI build](docs/en/WASI_BUILD.md) — WASI targets
+
+## Acknowledgements
+
+TypePHP thanks every developer and contributor who has helped build the project.
+It also stands on the work of the GCC, Clang/LLVM, MSVC, ISO C++ (WG21), PHP,
+PHP-Parser, and many supporting open-source communities. See the full
+[Acknowledgements](docs/en/ACKNOWLEDGEMENTS.md).
 
 ## License
 

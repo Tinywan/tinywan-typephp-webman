@@ -56,6 +56,13 @@ class ClassDef extends ClassLikeDef
      * @var array<string, int|string|null>
      */
     public array $enumCases = [];
+
+    /**
+     * Backing-value ASTs waiting for declaration-expression finalization.
+     * These expressions are never emitted as runtime calculations.
+     * @var array<string, \PhpParser\Node\Expr>
+     */
+    public array $enumCaseExpressions = [];
     /**
      * Abstract method name (lowercase) => flags
      * @var array<string, int>
@@ -76,16 +83,29 @@ class ClassDef extends ClassLikeDef
     public array $traitUseFunctions = [];
     /** @var array<string, string> */
     public array $traitUseConstants = [];
+    /** @var list<string> Traits directly used by this class or trait. */
+    public array $usedTraits = [];
 
     /**
      * FullMethodName -> alias list
-     * @var array<string, array<int, array{newName: string, newModifier: int}>>
+     * @var array<string, list<array{
+     *     group: string,
+     *     trait: string|null,
+     *     method: string,
+     *     newName: string,
+     *     newModifier: int
+     * }>>
      */
     public array $traitAliases = [];
 
     /**
-     * FullMethodName -> true
-     * @var array<string, bool>
+     * Excluded FullMethodName -> precedence rules.
+     *
+     * A list is required here: PHP rejects excluding the same method more
+     * than once, so overwriting duplicate rules would hide an invalid
+     * declaration before the composition phase can diagnose it.
+     *
+     * @var array<string, list<array{winnerTrait: string, loserTrait: string, method: string}>>
      */
     public array $traitIgnored = [];
     public int $flags;
@@ -177,6 +197,6 @@ class ClassDef extends ClassLikeDef
 
     public function isAbstract(): bool
     {
-        return $this->flags & Modifiers::ABSTRACT;
+        return ($this->flags & Modifiers::ABSTRACT) !== 0;
     }
 }

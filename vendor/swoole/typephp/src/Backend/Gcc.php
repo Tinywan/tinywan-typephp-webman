@@ -5,7 +5,7 @@ namespace TypePhp\Backend;
 use TypePhp\Platform\PlatformBase;
 
 /**
- * GCC 编译器后端实现
+ * GCC compiler backend implementation.
  */
 class Gcc extends GccLikeBackend
 {

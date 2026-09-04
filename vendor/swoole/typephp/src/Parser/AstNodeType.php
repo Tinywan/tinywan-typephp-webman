@@ -11,143 +11,162 @@ namespace TypePhp\Parser;
 use PhpParser\Node;
 use PhpParser\Node\Expr;
 use PhpParser\Node\VariadicPlaceholder;
-use PhpParser\NodeAbstract;
 
 trait AstNodeType
 {
-    protected function isArrayDimFetch(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\ArrayDimFetch $expr */
+    protected function isArrayDimFetch(Node $expr): bool
     {
         return $expr instanceof Expr\ArrayDimFetch;
     }
 
-    protected function isVarExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\Variable $expr */
+    protected function isVarExpr(Node $expr): bool
     {
         return $expr instanceof Expr\Variable;
     }
 
-    protected function isIdExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Identifier $expr */
+    protected function isIdExpr(Node $expr): bool
     {
         return $expr instanceof Node\Identifier;
     }
 
-    protected function isPropertyFetch(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\PropertyFetch $expr */
+    protected function isPropertyFetch(Node $expr): bool
     {
         return $expr instanceof Expr\PropertyFetch;
     }
 
-    protected function isStaticPropertyFetch(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\StaticPropertyFetch $expr */
+    protected function isStaticPropertyFetch(Node $expr): bool
     {
         return $expr instanceof Expr\StaticPropertyFetch;
     }
 
-    protected function isClassConstFetch(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\ClassConstFetch $expr */
+    protected function isClassConstFetch(Node $expr): bool
     {
         return $expr instanceof Expr\ClassConstFetch;
     }
 
-    protected function isNewExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\New_ $expr */
+    protected function isNewExpr(Node $expr): bool
     {
         return $expr instanceof Expr\New_;
     }
 
-    protected function isNameExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Name $expr */
+    protected function isNameExpr(Node $expr): bool
     {
         return $expr instanceof Node\Name;
     }
 
-    protected function isFullNameExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Name\FullyQualified $expr */
+    protected function isFullNameExpr(Node $expr): bool
     {
         return $expr instanceof Node\Name\FullyQualified;
     }
 
-    protected function isNamedMethod(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Identifier $expr */
+    protected function isNamedMethod(Node $expr): bool
     {
         return $this->isIdExpr($expr);
     }
 
-    protected function isScalarString(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Scalar\String_ $expr */
+    protected function isScalarString(Node $expr): bool
     {
         return $expr instanceof Node\Scalar\String_;
     }
 
-    protected function isFuncCallExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\FuncCall $expr */
+    protected function isFuncCallExpr(Node $expr): bool
     {
         return $expr instanceof Expr\FuncCall;
     }
 
-    protected function isRefvalCall(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\FuncCall $expr */
+    protected function isRefvalCall(Node $expr): bool
     {
         return $this->isFuncCallExpr($expr) and $this->isNameExpr($expr->name) and $expr->name->toString() === 'refval';
     }
 
-    protected function isMethodCall(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\MethodCall $expr */
+    protected function isMethodCall(Node $expr): bool
     {
         return $expr instanceof Expr\MethodCall;
     }
 
-    protected function isStaticCall(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\StaticCall $expr */
+    protected function isStaticCall(Node $expr): bool
     {
         return $expr instanceof Expr\StaticCall;
     }
 
-    protected function isScalar(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Scalar $expr */
+    protected function isScalar(Node $expr): bool
     {
         return $expr instanceof Node\Scalar;
     }
 
-    protected function isScalarInt(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Scalar\Int_ $expr */
+    protected function isScalarInt(Node $expr): bool
     {
         return $expr instanceof Node\Scalar\Int_;
     }
 
-    protected function isScalarBool(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\ConstFetch $expr */
+    protected function isScalarBool(Node $expr): bool
     {
         return $expr instanceof Expr\ConstFetch and in_array(strtolower($expr->name->toString()), ['true', 'false']);
     }
 
-    protected function getBoolValue(Expr\ConstFetch $expr): string
-    {
-        return strcasecmp($expr->name->toString(), 'true') === 0 ? self::VALUE_TRUE : self::VALUE_FALSE;
-    }
-
-    protected function isMatchExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\Match_ $expr */
+    protected function isMatchExpr(Node $expr): bool
     {
         return $expr instanceof Expr\Match_;
     }
 
-    protected function isAssignExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\Assign $expr */
+    protected function isAssignExpr(Node $expr): bool
     {
         return $expr instanceof Expr\Assign;
     }
 
-    protected function isCallExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\FuncCall|Expr\MethodCall|Expr\StaticCall $expr */
+    protected function isCallExpr(Node $expr): bool
     {
         return $expr instanceof Expr\FuncCall
             or $expr instanceof Expr\MethodCall
             or $expr instanceof Expr\StaticCall;
     }
 
-    protected function isPlaceholderExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true VariadicPlaceholder $expr */
+    protected function isPlaceholderExpr(Node $expr): bool
     {
         return $expr instanceof VariadicPlaceholder;
     }
 
-    protected function isReturnExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Stmt\Return_ $expr */
+    protected function isReturnExpr(Node $expr): bool
     {
         return $expr instanceof Node\Stmt\Return_;
     }
 
-    protected function isBreakExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Stmt\Break_ $expr */
+    protected function isBreakExpr(Node $expr): bool
     {
         return $expr instanceof Node\Stmt\Break_;
     }
 
-    protected function isContinueExpr(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Node\Stmt\Continue_ $expr */
+    protected function isContinueExpr(Node $expr): bool
     {
         return $expr instanceof Node\Stmt\Continue_;
     }
 
-    protected function isThrowExpr(NodeAbstract $expr): bool
+    protected function isThrowExpr(Node $expr): bool
     {
         if ($expr instanceof Node\Stmt\Expression) {
             $expr = $expr->expr;
@@ -155,7 +174,7 @@ trait AstNodeType
         return $expr instanceof Expr\Throw_;
     }
 
-    protected function isExitExpr(NodeAbstract $expr): bool
+    protected function isExitExpr(Node $expr): bool
     {
         if ($expr instanceof Node\Stmt\Expression) {
             $expr = $expr->expr;
@@ -163,12 +182,14 @@ trait AstNodeType
         return $expr instanceof Expr\Exit_;
     }
 
-    protected function isEmptyArray(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\Array_ $expr */
+    protected function isEmptyArray(Node $expr): bool
     {
         return $expr instanceof Expr\Array_ && count($expr->items) === 0;
     }
 
-    protected function isNull(NodeAbstract $expr): bool
+    /** @phpstan-assert-if-true Expr\ConstFetch $expr */
+    protected function isNull(Node $expr): bool
     {
         return $expr instanceof Expr\ConstFetch && strcasecmp($expr->name->toString(), 'null') === 0;
     }

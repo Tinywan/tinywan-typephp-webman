@@ -13,9 +13,12 @@ class ClosureTest extends \BaseTest
         $translator = $compiler;
         $compiler->addFiles([$testFile]);
         $compiler->prepareFile($testFile);
-        $compiler->convertFile($testFile);
+        $generated = $compiler->convertFile($testFile);
+        $code = file_get_contents($generated);
 
-        $this->assertTrue(true);
+        self::assertIsString($code);
+        self::assertSame(3, substr_count($code, 'php::newClosureWithParameters('));
+        self::assertSame(3, substr_count($code, 'php::ClosureStrictTypes::Enabled'));
     }
 
     public function testClosureRebindingIsRejectedAtCompileTime(): void

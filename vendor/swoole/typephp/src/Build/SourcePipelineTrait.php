@@ -34,7 +34,7 @@ trait SourcePipelineTrait
         $path = $realpath;
 
         if (is_dir($path)) {
-            // 目录模式：不解析 YAML
+            // Directory mode: no YAML parsing
             $list = $this->getFilesFromDir($path);
             $targetName = basename($path);
             $this->setTargetName($targetName);
@@ -42,10 +42,10 @@ trait SourcePipelineTrait
         } else {
             $ext = pathinfo($path, PATHINFO_EXTENSION);
             if ($ext === 'yml' || $ext === 'yaml') {
-                // YAML 配置模式：先解析 YAML
+                // YAML config mode: parse the YAML first
                 $list = $this->parseProjectYaml($path);
             } elseif ($ext === 'php') {
-                // 单文件模式：不解析 YAML
+                // Single-file mode: no YAML parsing
                 $list = [$path];
                 $targetName = FileScanner::getFileName($path);
                 $this->setTargetName($targetName);
@@ -55,7 +55,8 @@ trait SourcePipelineTrait
             }
         }
 
-        // 在所有配置加载完成后，应用命令行参数（确保优先级最高）
+        // Apply command-line arguments after all configuration is loaded (so they
+        // take the highest precedence)
         $this->applyCommandLineArguments();
 
         // The generated public import stub is an output artifact, not an input
@@ -100,19 +101,22 @@ trait SourcePipelineTrait
             }
         }
 
-        // 仅在 PHP 脚本入口（bin/tpc.php）前置检测 phpx 库：缺少库立即 fatal，
-        // 避免继续向下执行到文件处理/编译阶段才报错。已编译的 tpc 可执行文件
-        // 在进入 main() 前就由动态链接器加载 libphpx，无需（也无法）在此检测。
+        // Pre-check the phpx library only at the PHP script entry (bin/tpc.php):
+        // a missing library fails immediately rather than surfacing later during
+        // file processing/compilation. The compiled tpc executable has libphpx
+        // loaded by the dynamic linker before entering main(), so checking here
+        // is neither needed nor possible.
         if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($this->getPlatform() instanceof Wasi)) {
             $this->validatePhpxLibrary();
         }
 
         $this->validateCompilerToolchain();
 
-        // shell_exec 和 define 已通过 php::fn:: 直接调用，无需动态符号表
+        // shell_exec and define are already called directly via php::fn::, so no
+        // dynamic symbol table is needed
 
-        // Windows 的所有构建模式都依赖 PHPX 导入库和运行库。
-        // 其他平台仅在嵌入式构建模式下执行现有检查。
+        // All Windows build modes depend on the PHPX import library and runtime.
+        // Other platforms only run the existing checks in embedded build mode.
         if ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows) {
             foreach ($this->getPlatform()->getBuildLibraryWarnings(
                 $this->getPhpDir(),
@@ -136,7 +140,7 @@ trait SourcePipelineTrait
 
         $files = $this->filterIgnoredFiles($files);
         $this->discoverNativeClassDeclarations($files);
-        // 分析 PHP 文件，预处理
+        // Analyze and preprocess the PHP files
         foreach ($files as $k => $file) {
             if (FileScanner::isPhpFile($file)) {
                 try {
@@ -150,6 +154,10 @@ trait SourcePipelineTrait
                 }
             }
         }
+        // Trait declarations can only be flattened after the complete source
+        // set has been prepared: a consuming class may precede its Trait file.
+        // Complete the declaration graph before any body is converted.
+        $this->composeTraitDeclarations(array_values($files));
         // Global slots are shared by every translation unit. Fix any Native
         // pointer ABI now, after declarations are known and before the first
         // per-file C++ body is generated.
@@ -167,7 +175,7 @@ trait SourcePipelineTrait
             $this->error(
                 "C/C++ compiler executable not found: {$program}\n" .
                 "Configured compiler command: {$compilerCommand}\n" .
-                "Install a supported compiler or set `cpp-compiler` in project.yml / PHPX_CC / CXX."
+                "Install a supported compiler, or select one with --compiler, or set `cpp-compiler` in project.yml."
             );
         }
 
@@ -249,6 +257,7 @@ trait SourcePipelineTrait
 
     public function convert(array $files): array
     {
+        $this->composeTraitDeclarations($files);
         $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
         try {
             // All declarations are now known. Lower declaration constant
@@ -258,7 +267,7 @@ trait SourcePipelineTrait
 
             $sourceFiles = [];
             $validSourceCount = 0;
-            // 生成 C++ 文件
+            // Generate the C++ files
             foreach ($files as $k => $file) {
                 try {
                     if (FileScanner::isPhpFile($file)) {
@@ -293,10 +302,11 @@ trait SourcePipelineTrait
                 $this->genLibraryImportStub($files);
             }
 
-            // 生成构建期内部头文件：函数声明、运行时数据声明
+            // Generate the build-time internal headers: function declarations and
+            // runtime data declarations
             $this->genFunctionDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_func_decl.h");
             $this->genDataDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_data_decl.h");
-            // 生成扩展模块源文件
+            // Generate the extension module source file
             $sourceFiles[] = $this->genExtension();
 
             return $sourceFiles;

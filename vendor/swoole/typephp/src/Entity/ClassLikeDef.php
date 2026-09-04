@@ -13,6 +13,8 @@ class ClassLikeDef
     public string $name;
     public string $namespace;
     public string $extends = '';
+    /** Source file owning this declaration, used by compile-time expressions. */
+    public string $sourceFile = '';
 
     public function __construct(string $name, string $namespace = '')
     {

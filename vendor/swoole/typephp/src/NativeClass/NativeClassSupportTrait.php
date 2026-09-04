@@ -1168,7 +1168,7 @@ trait NativeClassSupportTrait
      * the reference itself, while assignments, returns, arguments and
      * comparisons need the typed pointer.
      */
-    protected function normalizeNativeObjectValueExpr(NodeAbstract $expr, string $value): string
+    protected function normalizeNativeObjectValueExpr(Node $expr, string $value): string
     {
         if ($this->classDef?->nativeObject
             && $this->isVarExpr($expr)

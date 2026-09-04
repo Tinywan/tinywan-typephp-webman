@@ -1,0 +1,8 @@
+name: dynamic_call_benchmark
+mode: bin
+optimize: 3
+lto: true
+build-dir: build
+output: dynamic_call
+sources:
+  - benchmark.php

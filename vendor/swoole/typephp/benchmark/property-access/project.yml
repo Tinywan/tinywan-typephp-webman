@@ -1,0 +1,8 @@
+name: property_access_benchmark
+mode: bin
+optimize: 3
+lto: true
+build-dir: build
+output: property_access
+sources:
+  - benchmark.php

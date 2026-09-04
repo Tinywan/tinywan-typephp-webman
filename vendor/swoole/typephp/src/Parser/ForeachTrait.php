@@ -48,7 +48,7 @@ trait ForeachTrait
 
     protected function parseForeachBody(Foreach_ $node): string
     {
-        return $this->parseStmts($node->stmts) . $this->genLoopEndFlagCheck();
+        return $this->parseStmts($node->stmts);
     }
 
     protected function parseForeachKeyAssignment(Foreach_ $node, string $keyExpr, string $defaultType = Type::VAR): string
@@ -124,7 +124,7 @@ trait ForeachTrait
     {
         $iterator = $this->genTmpVarName();
         $byRef = $node->byRef ? 'true' : 'false';
-        $scope = $this->class ? $this->getClassEntryPtr($this->getFullClassName()) : 'nullptr';
+        $scope = $this->class ? $this->getLocalClassEntryPtr($this->getFullClassName()) : 'nullptr';
         $code = '{' . PHP_EOL;
         $this->indentLevel++;
         $code .= $this->getIndent() . "php::ForeachIterator $iterator{{$iterableVar}, $byRef, $scope};" . PHP_EOL;
@@ -194,9 +194,15 @@ trait ForeachTrait
             $name = $this->parseIdentifier($node->expr);
             if ($this->hasVar($name)) {
                 $type = $this->getVarType($name);
-                if ($type === Type::ARRAY) {
-                    return $this->parseForeachIterable($node, $name);
-                } elseif ($type === Type::OBJECT) {
+                // A by-reference foreach must operate on the original variable.
+                // Copying a dynamically typed iterable into a temporary triggers
+                // normal PHP array COW, so references would update only that
+                // temporary instead of the source variable. ForeachIterator
+                // performs the runtime array/object validation itself.
+                if ($type === Type::ARRAY
+                    || $type === Type::OBJECT
+                    || ($node->byRef && ($type === Type::VAR || $type === Type::REF))
+                ) {
                     return $this->parseForeachIterable($node, $name);
                 } elseif ($this->isStdContainerType($type)) {
                     return $this->parseForeachStdContainer($node);
@@ -220,8 +226,8 @@ trait ForeachTrait
     }
 
     /**
-     * 为了兼容已有代码，默认不使用原生类型，而是将整数和浮点数作为 php 变量处理
-     * 原生 int/float/bool 类型，是不支持自动转换的，例如如果 int 计算超过最大值后，会自动转为 float，除法若不能除尽，则会转为 float
-     * 某些情况下高性能计算，可能需要使用原生类型，使用 $a = std::int(0) 来显式地使用原生类型
+     * For backward compatibility, native types are not used by default; integers and floats are treated as php variables.
+     * Native int/float/bool types do not support automatic conversion. For example, an int computation that exceeds its maximum value is promoted to float, and a division that does not divide evenly becomes float.
+     * In some cases high-performance computation may need native types; use `$a = std::int(0)` to explicitly opt into native types.
      */
 }

@@ -29,6 +29,28 @@
 
 using typephp_attribute_value_factory = php::Var (*)(php::Bool describe);
 
+/** Direct trait-use metadata emitted for one TypePHP class or trait. */
+struct typephp_trait_metadata_entry {
+    std::string_view name;
+    const std::string_view *traits;
+    size_t trait_count;
+    bool is_trait;
+};
+
+/**
+ * Register immutable TypePHP trait-use metadata for one extension module.
+ *
+ * TypePHP traits remain compile-time AST templates and deliberately have no
+ * zend_class_entry. This side table lets SPL class_uses() recover their direct
+ * trait list without exposing incomplete runtime trait classes.
+ */
+PHPX_API zend_result typephp_register_trait_metadata(int module_number,
+                                                     const typephp_trait_metadata_entry *entries,
+                                                     size_t entry_count) noexcept;
+
+/** Remove every trait metadata entry owned by an extension module. */
+PHPX_API void typephp_unregister_trait_metadata(int module_number) noexcept;
+
 /** Mark one persistent attribute argument for request-time value materialization. */
 PHPX_API void typephp_attribute_set_lazy_value_argument(zend_attribute *attribute,
                                                         uint32_t argument_index,
@@ -70,6 +92,31 @@ PHPX_API zend_function *typephp_get_parent_property_hook(zend_class_entry *paren
 #endif
 
 namespace php {
+
+/**
+ * Release a generated temporary argument array both after a successful full
+ * expression and while a C++ exception unwinds into the surrounding PHP
+ * try/catch lowering.
+ */
+class ArrayCleanupGuard {
+    Array *array_;
+
+  public:
+    explicit ArrayCleanupGuard(Array &array) noexcept : array_(&array) {}
+    ArrayCleanupGuard(const ArrayCleanupGuard &) = delete;
+    ArrayCleanupGuard &operator=(const ArrayCleanupGuard &) = delete;
+
+    ~ArrayCleanupGuard() {
+        if (array_ != nullptr) {
+            array_->clean();
+        }
+    }
+
+    void cleanup() {
+        array_->clean();
+        array_ = nullptr;
+    }
+};
 
 /**
  * Validate an indexed list write against PHP's real append position.
@@ -142,6 +189,119 @@ static inline void resetPersistentCache(PersistentCacheSlot<T> &slot) {
     slot = T{};
 #endif
 }
+
+/**
+ * One request-local Zend object-handler cache entry.
+ *
+ * Zend treats three adjacent pointers as one polymorphic property cache: the
+ * runtime class entry, an encoded property offset/sentinel, and optional
+ * property metadata. Keep the representation opaque so generated code can
+ * only pass it back to the standard object handlers, never dereference a
+ * cached offset itself.
+ */
+class PropertyCacheSlot final {
+    void *slots_[3]{};
+
+  public:
+    PropertyCacheSlot() = default;
+    PropertyCacheSlot(const PropertyCacheSlot &) = delete;
+    PropertyCacheSlot &operator=(const PropertyCacheSlot &) = delete;
+
+    void **data() noexcept {
+        return slots_;
+    }
+
+    void reset() noexcept {
+        slots_[0] = nullptr;
+        slots_[1] = nullptr;
+        slots_[2] = nullptr;
+    }
+};
+
+static_assert(sizeof(PropertyCacheSlot) == sizeof(void *) * 3);
+
+/**
+ * Request-local cache owned by one TypePHP dynamic function-call site.
+ *
+ * The first stable string callable stays in the inline entry. A call site
+ * that observes several names is promoted to a private HashTable, avoiding a
+ * process-global cache and preventing one extension from retaining another
+ * extension's request functions. Object-bearing callables are never stored.
+ */
+class PHPX_API FunctionCallCacheSlot final {
+    zend_string *name_ = nullptr;
+    zend_fcall_info_cache cache_{};
+    zend_array *polymorphic_cache_ = nullptr;
+
+  public:
+    FunctionCallCacheSlot() = default;
+    ~FunctionCallCacheSlot();
+    FunctionCallCacheSlot(const FunctionCallCacheSlot &) = delete;
+    FunctionCallCacheSlot &operator=(const FunctionCallCacheSlot &) = delete;
+
+    void reset() noexcept;
+    Variant call(const Variant &func, uint32_t param_count, zval *params, zend_array *named_args = nullptr);
+    Variant call(const Variant &func, Args &args, zend_array *named_args = nullptr) {
+        return call(func, args.count(), args.ptr(), named_args);
+    }
+};
+
+/** Request-local monomorphic cache for one unscoped dynamic method call. */
+class PHPX_API MethodCallCacheSlot final {
+    zend_class_entry *class_entry_ = nullptr;
+    zend_string *name_ = nullptr;
+    zend_function *function_ = nullptr;
+    zend_class_entry *called_scope_ = nullptr;
+    bool polymorphic_ = false;
+
+  public:
+    MethodCallCacheSlot() = default;
+    ~MethodCallCacheSlot();
+    MethodCallCacheSlot(const MethodCallCacheSlot &) = delete;
+    MethodCallCacheSlot &operator=(const MethodCallCacheSlot &) = delete;
+
+    void reset() noexcept;
+    Variant call(const Variant &object,
+                 const Variant &method,
+                 uint32_t param_count,
+                 zval *params,
+                 zend_array *named_args = nullptr);
+    Variant call(const Variant &object, const Variant &method, Args &args, zend_array *named_args = nullptr) {
+        return call(object, method, args.count(), args.ptr(), named_args);
+    }
+};
+
+/** Exception-safe owner of Zend's per-object magic-property recursion guard. */
+class MagicPropertyGuard final {
+    zend_object *object_ = nullptr;
+    uint32_t *guard_ = nullptr;
+    uint32_t flag_ = 0;
+    bool active_ = false;
+
+  public:
+    MagicPropertyGuard(zend_object *object, zend_string *member, uint32_t flag) noexcept
+        : object_(object), guard_(zend_get_property_guard(object, member)), flag_(flag) {}
+
+    MagicPropertyGuard(const MagicPropertyGuard &) = delete;
+    MagicPropertyGuard &operator=(const MagicPropertyGuard &) = delete;
+
+    bool enter() noexcept {
+        if (UNEXPECTED((*guard_ & flag_) != 0)) {
+            return false;
+        }
+        GC_ADDREF(object_);
+        *guard_ |= flag_;
+        active_ = true;
+        return true;
+    }
+
+    ~MagicPropertyGuard() noexcept {
+        if (active_) {
+            *guard_ &= ~flag_;
+            OBJ_RELEASE(object_);
+        }
+    }
+};
 
 /**
  * Create a deep copy from $GLOBALS. $GLOBALS is a special INDIRECT zval
@@ -252,6 +412,76 @@ static inline auto getCreateObjectFn(zend_class_entry *ce) {
 
 }  // namespace php
 
+/**
+ * Materialize the common small positional-argument list on the C++ stack.
+ *
+ * This intentionally mirrors php::Args::append(): INDIRECT values are
+ * materialized, references are preserved, and every copied zval is released
+ * after the call. Larger lists keep using php::Args so this optimization does
+ * not change the general-purpose container or its ABI.
+ */
+template <typename Invoke>
+static zend_always_inline php::Variant typephp_invoke_arg_list(const php::ArgList &args, Invoke invoke) {
+    constexpr size_t stack_capacity = 4;
+    if (UNEXPECTED(args.size() > stack_capacity)) {
+        php::Args call_args(args);
+        return invoke(call_args.count(), call_args.ptr());
+    }
+
+    zval params[stack_capacity];
+    uint32_t count = 0;
+    for (const auto &arg : args) {
+        const zval *source = arg.const_ptr();
+        ZVAL_DEINDIRECT(source);
+        ZVAL_COPY(&params[count++], source);
+    }
+
+    try {
+        php::Variant retval = invoke(count, count == 0 ? nullptr : params);
+        for (uint32_t i = 0; i < count; i++) {
+            zval_ptr_dtor(&params[i]);
+        }
+        return retval;
+    } catch (...) {
+        for (uint32_t i = 0; i < count; i++) {
+            zval_ptr_dtor(&params[i]);
+        }
+        throw;
+    }
+}
+
+static inline php::Variant typephp_call_cached(const php::Variant &func,
+                                               php::FunctionCallCacheSlot &cache,
+                                               php::Args &args,
+                                               zend_array *named_args = nullptr) {
+    return cache.call(func, args, named_args);
+}
+
+static zend_always_inline php::Variant typephp_call_cached(const php::Variant &func,
+                                                           php::FunctionCallCacheSlot &cache,
+                                                           const php::ArgList &args = {},
+                                                           zend_array *named_args = nullptr) {
+    return typephp_invoke_arg_list(
+        args, [&](uint32_t count, zval *params) { return cache.call(func, count, params, named_args); });
+}
+
+static inline php::Variant typephp_call_method_cached(const php::Variant &object,
+                                                      const php::Variant &method,
+                                                      php::MethodCallCacheSlot &cache,
+                                                      php::Args &args,
+                                                      zend_array *named_args = nullptr) {
+    return cache.call(object, method, args, named_args);
+}
+
+static zend_always_inline php::Variant typephp_call_method_cached(const php::Variant &object,
+                                                                  const php::Variant &method,
+                                                                  php::MethodCallCacheSlot &cache,
+                                                                  const php::ArgList &args = {},
+                                                                  zend_array *named_args = nullptr) {
+    return typephp_invoke_arg_list(
+        args, [&](uint32_t count, zval *params) { return cache.call(object, method, count, params, named_args); });
+}
+
 /** Invoke the lexical parent constructor as part of a new-expression chain. */
 static inline php::Variant typephp_call_parent_constructor(php::Object &object,
                                                            zend_function *constructor,
@@ -302,6 +532,28 @@ static inline php::Variant typephp_call_parent_clone(php::Object &object, zend_f
                              nullptr);
     php::throwErrorIfOccurred();
     return retval;
+}
+
+/**
+ * Read one dynamic dimension for TypePHP's null-coalescing assignment.
+ *
+ * ArrayAccess requires offsetExists() followed by offsetGet(), because an
+ * existing null value still selects the assignment branch. Arrays, strings,
+ * and unsupported scalar values retain PHPX's normal exists() behavior.
+ * Keeping this dispatch here prevents generated code from duplicating the
+ * ArrayAccess protocol without exposing Zend dimension-handler details.
+ */
+static inline bool typephp_coalesce_dimension_read(const php::Variant &container,
+                                                   const php::Variant &key,
+                                                   php::Variant &result) {
+    if (container.isObject()) {
+        if (!container.offsetExists(key)) {
+            return false;
+        }
+        result = container.offsetGet(key);
+        return !result.isNull();
+    }
+    return php::exists(container, {{php::ArrayDimFetch, key}}, result);
 }
 
 /**
@@ -357,11 +609,96 @@ PHPX_API void typephp_write_property_scoped(const php::Variant &object,
                                             const php::Variant &value,
                                             zend_class_entry *scope);
 
+/**
+ * Write a statically named property through its normal object handler while
+ * supplying one request-local cache entry dedicated to this write site.
+ */
+PHPX_API void typephp_write_property_cached(const php::Variant &object,
+                                            const php::String &member,
+                                            const php::Variant &value,
+                                            zend_class_entry *scope,
+                                            php::PropertyCacheSlot &cache);
+
+/**
+ * Bind an object property to an existing PHP reference while preserving
+ * declared-property type sources and runtime property-handler semantics.
+ */
+PHPX_API void typephp_rebind_property_reference(const php::Variant &object,
+                                                const php::Variant &member,
+                                                const php::Variant &reference,
+                                                zend_class_entry *scope);
+
 /** Read a dynamic property using the lexical scope supplied by an AOT trait wrapper. */
 PHPX_API php::Variant typephp_read_property_scoped(const php::Variant &object,
                                                    const php::Variant &member,
                                                    zend_class_entry *scope,
                                                    php::AttrMode mode);
+
+/**
+ * Read a statically named property through its normal object handler while
+ * supplying one request-local cache entry dedicated to this read site.
+ */
+PHPX_API php::Variant typephp_read_property_cached(const php::Variant &object,
+                                                   const php::String &member,
+                                                   php::AttrMode mode,
+                                                   php::PropertyCacheSlot &cache);
+
+/**
+ * Directly invoke a statically proven TypePHP __get() implementation only
+ * while the runtime object remains the exact simple object anticipated by the
+ * compiler. Every dynamic or custom-handler case falls back to Zend.
+ */
+template <typename Getter>
+static inline php::Variant typephp_read_magic_property_direct(
+    const php::Variant &object,
+    const php::String &member,
+    zend_class_entry *expected_class,
+    php::PropertyCacheSlot &cache,
+    Getter &&getter) {
+    if (EXPECTED(object.isObject())) {
+        zend_object *zobj = object.object();
+        const zend_object_handlers *standard_handlers = zend_get_std_object_handlers();
+        if (EXPECTED(zobj->ce == expected_class)
+            && EXPECTED(zobj->handlers->read_property == standard_handlers->read_property)
+            && EXPECTED(!zend_lazy_object_must_init(zobj))
+            && EXPECTED(zend_hash_find(&zobj->ce->properties_info, member.str()) == nullptr)
+            && EXPECTED(zobj->properties == nullptr || zend_hash_find(zobj->properties, member.str()) == nullptr)) {
+            php::MagicPropertyGuard guard{zobj, member.str(), ZEND_GUARD_PROPERTY_GET};
+            if (EXPECTED(guard.enter())) {
+                return getter();
+            }
+        }
+    }
+    return typephp_read_property_cached(object, member, php::AttrMode::Get, cache);
+}
+
+/** Guarded direct counterpart for a statically proven TypePHP __set(). */
+template <typename Setter>
+static inline void typephp_write_magic_property_direct(
+    const php::Variant &object,
+    const php::String &member,
+    const php::Variant &value,
+    zend_class_entry *scope,
+    zend_class_entry *expected_class,
+    php::PropertyCacheSlot &cache,
+    Setter &&setter) {
+    if (EXPECTED(object.isObject())) {
+        zend_object *zobj = object.object();
+        const zend_object_handlers *standard_handlers = zend_get_std_object_handlers();
+        if (EXPECTED(zobj->ce == expected_class)
+            && EXPECTED(zobj->handlers->write_property == standard_handlers->write_property)
+            && EXPECTED(!zend_lazy_object_must_init(zobj))
+            && EXPECTED(zend_hash_find(&zobj->ce->properties_info, member.str()) == nullptr)
+            && EXPECTED(zobj->properties == nullptr || zend_hash_find(zobj->properties, member.str()) == nullptr)) {
+            php::MagicPropertyGuard guard{zobj, member.str(), ZEND_GUARD_PROPERTY_SET};
+            if (EXPECTED(guard.enter())) {
+                setter();
+                return;
+            }
+        }
+    }
+    typephp_write_property_cached(object, member, value, scope, cache);
+}
 
 /**
  * Return a typed C++ reference into a static-property (or object-property) zval's

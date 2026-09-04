@@ -48,6 +48,13 @@ class HookOnlyDefaultCodegen
     }
 }
 
+class GetterOnlyDefaultCodegen
+{
+    public string $value {
+        get => 'computed';
+    }
+}
+
 class AsymmetricOnlyDefaultCodegen
 {
     public private(set) int $value = 0;

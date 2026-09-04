@@ -5,6 +5,21 @@ use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
 
 require __DIR__ . '/../bin/bootstrap.php';
+
+// The vendor directory may be shared between checkouts (e.g. a git worktree
+// with a symlinked vendor/). Composer's autoloader resolves TypePhp\ against
+// the checkout that owns vendor/, which would silently test another tree's
+// sources. Prepend a loader anchored to THIS checkout so the test suite always
+// exercises the code it ships with.
+spl_autoload_register(static function (string $class): void {
+    if (str_starts_with($class, 'TypePhp\\')) {
+        $path = dirname(__DIR__) . '/src/' . str_replace('\\', '/', substr($class, strlen('TypePhp\\'))) . '.php';
+        if (is_file($path)) {
+            require $path;
+        }
+    }
+}, true, true);
+
 require_once __DIR__ . '/../src/polyfills.php';
 require __DIR__ . '/../src/gen_stub.php';
 

@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/bootstrap.php';
 // ============================================================================
-// 命令行接口
+// Command-line interface
 // ============================================================================
 
 function showUsage(): void
@@ -50,7 +50,7 @@ USAGE;
 
 function extractorMain(array $argv): void
 {
-    // 解析命令行参数
+    // Parse command-line arguments
     $options = [
         'help' => false,
         'pretty' => false,
@@ -73,16 +73,16 @@ function extractorMain(array $argv): void
         }
     }
 
-    // 显示帮助
+    // Show help
     if ($options['help'] || (empty($args) && !$options['batch'])) {
         showUsage();
         exit(0);
     }
 
-    // 创建提取器
+    // Create the extractor
     $extractor = new TypePhp\Extractor();
 
-    // 批量模式
+    // Batch mode
     if ($options['batch']) {
         $prefixes = !empty($args[0]) ? explode(',', $args[0]) : ['php_'];
         $files = [];
@@ -101,7 +101,7 @@ function extractorMain(array $argv): void
 
         $functions = $extractor->extractFromFiles($files, $prefixes);
 
-        // 输出结果
+        // Output the result
         $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
         if ($options['pretty']) {
             $jsonFlags |= JSON_PRETTY_PRINT;
@@ -111,7 +111,7 @@ function extractorMain(array $argv): void
         exit(0);
     }
 
-    // 单文件模式
+    // Single-file mode
     $filename = $args[0] ?? null;
     $prefixesStr = $args[1] ?? 'php_';
     $output = $args[2] ?? null;
@@ -122,14 +122,14 @@ function extractorMain(array $argv): void
         exit(1);
     }
 
-    // 解析前缀
+    // Parse prefixes
     $prefixes = array_map('trim', explode(',', $prefixesStr));
 
     try {
-        // 提取函数
+        // Extract functions
         $functions = $extractor->extractFunctions($filename, $prefixes);
 
-        // 准备 JSON 输出
+        // Prepare JSON output
         $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
         if ($options['pretty']) {
             $jsonFlags |= JSON_PRETTY_PRINT;
@@ -137,7 +137,7 @@ function extractorMain(array $argv): void
 
         $json = json_encode($functions, $jsonFlags);
 
-        // 输出
+        // Output
         if ($output) {
             file_put_contents($output, $json . "\n");
             fprintf(STDERR, "\033[0;32m已保存到: %s\033[0m\n", $output);
@@ -151,7 +151,7 @@ function extractorMain(array $argv): void
     }
 }
 
-// 运行主函数
+// Run the main function.
 if (php_sapi_name() === 'cli') {
     extractorMain($argv);
 }

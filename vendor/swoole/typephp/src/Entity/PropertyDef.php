@@ -52,12 +52,12 @@ class PropertyDef
 
     public function isPrivate(): bool
     {
-        return $this->flags & Modifiers::PRIVATE;
+        return ($this->flags & Modifiers::PRIVATE) !== 0;
     }
 
     public function isProtected(): bool
     {
-        return $this->flags & Modifiers::PROTECTED;
+        return ($this->flags & Modifiers::PROTECTED) !== 0;
     }
 
     public function isPublic(): bool
@@ -67,7 +67,7 @@ class PropertyDef
 
     public function isStatic(): bool
     {
-        return $this->flags & Modifiers::STATIC;
+        return ($this->flags & Modifiers::STATIC) !== 0;
     }
 
     public function isReadonly(): bool

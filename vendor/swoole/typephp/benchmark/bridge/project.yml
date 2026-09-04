@@ -1,0 +1,8 @@
+name: bridge_benchmark
+mode: bin
+optimize: 3
+lto: true
+build-dir: build
+output: bridge_benchmark
+sources:
+  - benchmark.php

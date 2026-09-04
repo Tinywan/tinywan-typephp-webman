@@ -42,6 +42,13 @@ jobs:
           phpts: ts
           update: true
 
+      - name: Show PHP environment
+        shell: pwsh
+        run: |
+          php -v
+          php --ini
+          php -r 'printf("PHP_ZTS=%d\nopcache.enable=%s\nopcache.enable_cli=%s\nopcache.jit=%s\nopcache.jit_buffer_size=%s\npcre.jit=%s\n", PHP_ZTS, ini_get("opcache.enable"), ini_get("opcache.enable_cli"), ini_get("opcache.jit"), ini_get("opcache.jit_buffer_size"), ini_get("pcre.jit"));'
+
       - name: Resolve PHP build environment
         id: php-build-env
         shell: pwsh
@@ -175,37 +182,6 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --prefer-dist --no-progress
-
-      - name: Patch PHPX Windows CMake target ordering
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $cmakeFile = Join-Path $env:PHPX_HOME 'CMakeLists.txt'
-          $source = [IO.File]::ReadAllText($cmakeFile).Replace("`r`n", "`n")
-          $copyBlockPattern = '(?ms)^    # 复制 DLL 到输出目录\n    file\(GLOB MPDEC_DLLS .*?^    endforeach\(\)\n'
-          $copyBlock = [regex]::Match($source, $copyBlockPattern)
-          if (-not $copyBlock.Success) {
-              throw 'Unable to locate the pre-target PHPX mpdecimal copy block'
-          }
-          $source = $source.Remove($copyBlock.Index, $copyBlock.Length)
-
-          $targetPattern = '(?ms)(add_library\(phpx SHARED \$\{SRC_FILES\}\)\nset_target_properties\(phpx PROPERTIES\n    CLEAN_DIRECT_OUTPUT 1\n\)\n)'
-          $target = [regex]::Match($source, $targetPattern)
-          if (-not $target.Success) {
-              throw 'Unable to locate the PHPX target declaration'
-          }
-
-          $copyBlockText = $copyBlock.Value.Replace('    # 复制 DLL 到输出目录', '    # Copy mpdecimal DLLs after the phpx target exists.')
-          $guardedCopyBlock = "`nif (IS_WINDOWS)`n$copyBlockText" + "endif()`n"
-          $source = $source.Insert($target.Index + $target.Length, $guardedCopyBlock)
-          [IO.File]::WriteAllText($cmakeFile, $source, [Text.UTF8Encoding]::new($false))
-
-          $targetOffset = $source.IndexOf('add_library(phpx SHARED')
-          $copyOffset = $source.IndexOf('add_custom_command(TARGET phpx POST_BUILD')
-          if ($targetOffset -lt 0 -or $copyOffset -le $targetOffset) {
-              throw 'PHPX post-build command still precedes its target declaration'
-          }
 
       - name: Configure MSVC
         uses: ilammy/msvc-dev-cmd@v1

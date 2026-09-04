@@ -49,6 +49,45 @@ TEST(base, constant2) {
     ASSERT_TRUE(c8.isNull());
 }
 
+TEST(base, constant_internal_enum_case) {
+    // An enum case of an internal class is materialised on first access, so
+    // reading the constants table directly hands back a value that is not a
+    // usable object yet.
+    auto *ce = getClassEntrySafe("RoundingMode");
+    ASSERT_NE(ce, nullptr);
+
+    auto by_entry = constant(ce, "HalfEven");
+    ASSERT_TRUE(by_entry.isObject());
+    ASSERT_STREQ(ZSTR_VAL(by_entry.ce()->name), "RoundingMode");
+    ASSERT_STREQ(Object(by_entry).get("name").toCString(), "HalfEven");
+
+    auto by_name = constant("RoundingMode", "HalfEven");
+    ASSERT_TRUE(by_name.isObject());
+    ASSERT_STREQ(ZSTR_VAL(by_name.ce()->name), "RoundingMode");
+    ASSERT_EQ(by_entry.object(), by_name.object());
+
+    // The evaluated enum case is cached in the class constants table and
+    // remains the same singleton object on subsequent entry-based reads.
+    auto repeated = constant(ce, "HalfEven");
+    ASSERT_TRUE(repeated.isObject());
+    ASSERT_EQ(by_entry.object(), repeated.object());
+}
+
+TEST(base, constant_by_entry_missing) {
+    auto *ce = getClassEntrySafe("RoundingMode");
+    ASSERT_NE(ce, nullptr);
+
+    bool threw = false;
+    try {
+        (void) constant(ce, "PHPX_MISSING_CASE");
+    } catch (zend_object *) {
+        threw = true;
+        auto exception = catchException();
+        ASSERT_STREQ(exception.call("getMessage").toCString(), "Undefined constant RoundingMode::PHPX_MISSING_CASE");
+    }
+    ASSERT_TRUE(threw);
+}
+
 TEST(base, constant_namespace_fallback) {
     define("PHPX_GLOBAL_FALLBACK_ONLY", "global");
     define("PhpX\\Runtime\\PHPX_NAMESPACE_VALUE", "namespaced");
@@ -377,7 +416,7 @@ TEST(base, is_callable_ex) {
 TEST(base, call) {
     auto fn1 = getFunction("php_uname");
     auto rt1 = call(fn1, {"m"});
-    ASSERT_STREQ(rt1.toCString(), "x86_64");
+    ASSERT_STREQ(rt1.toCString(), get_machine_architecture().toCString());
 
     auto fn2 = getFunction("posix_getpid");
     auto rt2 = call(fn2);

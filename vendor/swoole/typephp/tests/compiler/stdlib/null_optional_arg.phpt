@@ -1,52 +1,70 @@
 --TEST--
-Passing null to optional parameters should use C++ default values
+Nullable and non-nullable builtin parameters preserve strict null semantics
 --FILE--
 <?php
-error_reporting(E_ALL & ~E_DEPRECATED);
+declare(strict_types=1);
 
-// substr: null length should take rest of string, not return empty
-$s = 'hello world';
-var_dump(substr($s, 6, null));
-var_dump(substr($s, 6) === substr($s, 6, null));
-var_dump(substr($s, 0, null) === $s);
-var_dump(substr($s, null) === $s);
+function main()
+{
+    $s = 'hello world';
+    var_dump(substr($s, 6, null));
+    var_dump(substr($s, 6) === substr($s, 6, null));
+    var_dump(substr($s, 0, null) === $s);
 
-// strpos: null offset should default to 0
-var_dump(strpos($s, 'o', null));
-var_dump(strpos($s, 'o', null) === strpos($s, 'o'));
+    try {
+        substr($s, null);
+        echo "substr-offset-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "substr-offset-null=TypeError\n";
+    }
 
-// stripos: null offset should default to 0
-var_dump(stripos($s, 'O', null));
-var_dump(stripos($s, 'O', null) === stripos($s, 'O'));
+    try {
+        strpos($s, 'o', null);
+        echo "strpos-offset-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "strpos-offset-null=TypeError\n";
+    }
 
-// strrpos: null offset should default to 0 (search from end)
-var_dump(strrpos('hello hello', 'o', null));
-var_dump(strrpos('hello hello', 'o', null) === strrpos('hello hello', 'o'));
+    try {
+        stripos($s, 'O', null);
+        echo "stripos-offset-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "stripos-offset-null=TypeError\n";
+    }
 
-// strstr: null before_needle should default to false
-var_dump(strstr($s, 'o', null));
-var_dump(strstr($s, 'o', null) === strstr($s, 'o'));
+    try {
+        strrpos('hello hello', 'o', null);
+        echo "strrpos-offset-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "strrpos-offset-null=TypeError\n";
+    }
 
-// str_repeat: ensure non-null still works
-var_dump(str_repeat('ab', 3));
+    try {
+        strstr($s, 'o', null);
+        echo "strstr-before-needle-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "strstr-before-needle-null=TypeError\n";
+    }
 
-// explode with null limit: null coerces to 0 (limit=0: whole string as single element)
-$arr = explode(' ', 'a b c d', null);
-var_dump(count($arr));
+    var_dump(str_repeat('ab', 3));
+
+    try {
+        explode(' ', 'a b c d', null);
+        echo "explode-limit-null=missing TypeError\n";
+    } catch (TypeError $error) {
+        echo "explode-limit-null=TypeError\n";
+    }
+}
 
 ?>
 --EXPECT--
 string(5) "world"
 bool(true)
 bool(true)
-bool(true)
-int(4)
-bool(true)
-int(4)
-bool(true)
-int(10)
-bool(true)
-string(7) "o world"
-bool(true)
+substr-offset-null=TypeError
+strpos-offset-null=TypeError
+stripos-offset-null=TypeError
+strrpos-offset-null=TypeError
+strstr-before-needle-null=TypeError
 string(6) "ababab"
-int(1)
+explode-limit-null=TypeError

@@ -37,9 +37,13 @@ while ($i < 3) {
 }
 echo "break-2-while: done\n";
 
-// continue 2 from nested while
+// continue 2 from nested while. The counter must advance before the
+// inner loop: continue 2 jumps straight to the outer condition, so a
+// trailing $i++ would never run and the loop would never terminate
+// (PHP itself loops forever on that variant).
 $i = 0;
 while ($i < 3) {
+    $i++;
     $j = 0;
     while ($j < 3) {
         $j++;
@@ -47,7 +51,6 @@ while ($i < 3) {
             continue 2;
         }
     }
-    $i++;
 }
 echo "continue-2-while: done\n";
 

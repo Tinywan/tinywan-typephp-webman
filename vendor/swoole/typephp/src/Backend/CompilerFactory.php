@@ -8,24 +8,24 @@ use TypePhp\Platform\Linux;
 use TypePhp\Platform\Macos;
 
 /**
- * 编译器工厂类
- * 根据平台自动创建合适的编译器后端
+ * Compiler factory.
+ * Automatically creates the appropriate compiler backend based on the platform.
  */
 class CompilerFactory
 {
     /**
-     * 创建默认编译器后端
+     * Create the default compiler backend.
      */
     public static function create(PlatformBase $platform): CompilerBackend
     {
         if ($platform instanceof Windows) {
-            // Windows 默认使用 MSVC
+            // Windows uses MSVC by default.
             return new Msvc($platform, $platform->getDefaultCompiler());
         } elseif ($platform instanceof Linux) {
-            // Linux 默认使用 GCC
+            // Linux uses GCC by default.
             return new Gcc($platform, $platform->getDefaultCompiler());
         } elseif ($platform instanceof Macos) {
-            // macOS 默认使用 Clang
+            // macOS uses Clang by default.
             return new Clang($platform, $platform->getDefaultCompiler());
         } else {
             throw new \RuntimeException("Unsupported platform: " . $platform->getName());
@@ -33,31 +33,15 @@ class CompilerFactory
     }
 
     /**
-     * 根据配置、环境变量和平台默认值解析编译器命令
+     * Resolve the compiler command from an explicit selection, falling back to the platform default.
      */
     public static function detectCompilerName(PlatformBase $platform, string $configuredCompiler = ''): string
     {
-        if ($configuredCompiler !== '') {
-            return $configuredCompiler;
-        }
-
-        $compilerEnv = getenv('PHPX_CC');
-        if ($compilerEnv) {
-            return $compilerEnv;
-        }
-
-        if (!$platform instanceof Windows) {
-            $cxxEnv = getenv('CXX');
-            if ($cxxEnv) {
-                return $cxxEnv;
-            }
-        }
-
-        return $platform->getDefaultCompiler();
+        return $configuredCompiler !== '' ? $configuredCompiler : $platform->getDefaultCompiler();
     }
 
     /**
-     * 创建指定类型的编译器后端
+     * Create a compiler backend of the specified type.
      */
     public static function createByName(string $compilerName, PlatformBase $platform): CompilerBackend
     {
@@ -93,17 +77,17 @@ class CompilerFactory
     }
 
     /**
-     * 自动检测并创建编译器和平台
+     * Auto-detect and create the compiler and platform.
      */
     public static function autoDetect(string $compilerName = '', ?PlatformBase $platform = null): array
     {
-        // 创建平台
+        // Create the platform.
         $platform ??= \TypePhp\Platform\PlatformFactory::create();
-        
-        // 创建编译器
+
+        // Create the compiler.
         $compilerName = self::detectCompilerName($platform, $compilerName);
         $compiler = self::createByName($compilerName, $platform);
-        
+
         return [
             'platform' => $platform,
             'compiler' => $compiler,
@@ -148,6 +132,47 @@ class CompilerFactory
         }
 
         return false;
+    }
+
+    /**
+     * Whether a compiler can actually build code for the given target triple.
+     *
+     * gcc rejects --target outright, and a wasm-only clang (wasi-sdk is often
+     * first on PATH in this project) accepts the flag but only fails once it
+     * has to create a target machine, so the probe must reach code generation.
+     */
+    public static function supportsTarget(string $compilerName, string $target): bool
+    {
+        if (!self::isCommandExecutable($compilerName)) {
+            return false;
+        }
+
+        $token = @tempnam(sys_get_temp_dir(), 'tpc_target_probe');
+        if ($token === false) {
+            return false;
+        }
+        $source = $token . '.c';
+        $object = $token . '.o';
+        if (@file_put_contents($source, "int main(void) { return 0; }\n") === false) {
+            @unlink($token);
+            return false;
+        }
+
+        $nullDevice = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+        $command = escapeshellcmd($compilerName)
+            . ' ' . escapeshellarg('--target=' . $target)
+            . ' -c ' . escapeshellarg($source)
+            . ' -o ' . escapeshellarg($object)
+            . ' >' . $nullDevice . ' 2>&1';
+
+        $status = 0;
+        @exec($command, $output, $status);
+
+        @unlink($source);
+        @unlink($object);
+        @unlink($token);
+
+        return $status === 0;
     }
 
     public static function getCommandProgram(string $command): string

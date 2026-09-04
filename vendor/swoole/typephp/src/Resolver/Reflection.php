@@ -188,8 +188,8 @@ class Reflection
     }
 
     /**
-     * 当参数索引超出声明范围时，尝试将最后一个参数作为变长参数（...$rest）获取。
-     * 返回变长参数对象或 null。
+     * When the parameter index exceeds the declared range, try to obtain the last parameter as a variadic parameter (...$rest).
+     * Returns the variadic parameter object, or null.
      */
     public static function getVariadicParameter(string $funcName, string $className = ''): ?\ReflectionParameter
     {

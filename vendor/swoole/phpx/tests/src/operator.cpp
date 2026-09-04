@@ -2,9 +2,27 @@
 #include "phpx_func.h"
 #include "phpx_helper.h"
 
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <type_traits>
+#include <vector>
 
 using namespace php;
+
+static bool zend_ordered_compare(const Variant &left, const Variant &right, bool inclusive) {
+    zval result;
+    const auto op = inclusive ? is_smaller_or_equal_function : is_smaller_function;
+    EXPECT_EQ(op(&result, NO_CONST_V(left), NO_CONST_V(right)), SUCCESS);
+    return Z_TYPE(result) == IS_TRUE;
+}
+
+static void expect_relational_operators_match_zend(const Variant &left, const Variant &right) {
+    EXPECT_EQ(left < right, zend_ordered_compare(left, right, false));
+    EXPECT_EQ(left <= right, zend_ordered_compare(left, right, true));
+    EXPECT_EQ(left > right, zend_ordered_compare(right, left, false));
+    EXPECT_EQ(left >= right, zend_ordered_compare(right, left, true));
+}
 
 // Test all arithmetic operators (+, -, *, /, %)
 TEST(operator_arithmetic, all_operators) {
@@ -133,6 +151,144 @@ TEST(operator_arithmetic, signed_overflow_detection_uses_signed_semantics) {
     Variant minimum(ZEND_LONG_MIN);
     ASSERT_TRUE((maximum + positive_one).isFloat());
     ASSERT_TRUE((minimum - positive_one).isFloat());
+}
+
+TEST(operator_arithmetic, increment_decrement_overflow_to_float) {
+    // ++ on ZEND_LONG_MAX should overflow to double
+    Variant max_plus(ZEND_LONG_MAX);
+    ++max_plus;
+    ASSERT_TRUE(max_plus.isFloat());
+    ASSERT_DOUBLE_EQ(max_plus.toFloat(), static_cast<double>(ZEND_LONG_MAX) + 1.0);
+
+    // -- on ZEND_LONG_MIN should underflow to double
+    Variant min_minus(ZEND_LONG_MIN);
+    --min_minus;
+    ASSERT_TRUE(min_minus.isFloat());
+    ASSERT_DOUBLE_EQ(min_minus.toFloat(), static_cast<double>(ZEND_LONG_MIN) - 1.0);
+
+    // postfix ++ overflow
+    Variant max_post(ZEND_LONG_MAX);
+    Variant before = max_post++;
+    ASSERT_TRUE(before.isInt());
+    ASSERT_EQ(before.toInt(), ZEND_LONG_MAX);
+    ASSERT_TRUE(max_post.isFloat());
+    ASSERT_DOUBLE_EQ(max_post.toFloat(), static_cast<double>(ZEND_LONG_MAX) + 1.0);
+
+    // postfix -- underflow
+    Variant min_post(ZEND_LONG_MIN);
+    Variant before2 = min_post--;
+    ASSERT_TRUE(before2.isInt());
+    ASSERT_EQ(before2.toInt(), ZEND_LONG_MIN);
+    ASSERT_TRUE(min_post.isFloat());
+    ASSERT_DOUBLE_EQ(min_post.toFloat(), static_cast<double>(ZEND_LONG_MIN) - 1.0);
+}
+
+TEST(operator_arithmetic, increment_decrement_normal_paths) {
+    // IS_LONG normal increment
+    Variant a(41);
+    ++a;
+    ASSERT_TRUE(a.isInt());
+    ASSERT_EQ(a.toInt(), 42);
+
+    // IS_LONG normal decrement
+    Variant b(43);
+    --b;
+    ASSERT_TRUE(b.isInt());
+    ASSERT_EQ(b.toInt(), 42);
+
+    // IS_DOUBLE increment
+    Variant c(1.5);
+    ++c;
+    ASSERT_TRUE(c.isFloat());
+    ASSERT_DOUBLE_EQ(c.toFloat(), 2.5);
+
+    // IS_DOUBLE decrement
+    Variant d(3.5);
+    --d;
+    ASSERT_TRUE(d.isFloat());
+    ASSERT_DOUBLE_EQ(d.toFloat(), 2.5);
+
+    // chained increment
+    Variant e(10);
+    ++(++e);
+    ASSERT_TRUE(e.isInt());
+    ASSERT_EQ(e.toInt(), 12);
+}
+
+TEST(operator_arithmetic, inline_integral_fast_paths_preserve_dynamic_semantics) {
+    Variant sum(10);
+    sum += 5L;
+    ASSERT_TRUE(sum.isInt());
+    ASSERT_EQ(sum.toInt(), 15);
+
+    Variant difference(10);
+    difference -= 3L;
+    ASSERT_TRUE(difference.isInt());
+    ASSERT_EQ(difference.toInt(), 7);
+
+    Variant product(10);
+    product *= 4L;
+    ASSERT_TRUE(product.isInt());
+    ASSERT_EQ(product.toInt(), 40);
+
+    Variant maximum(ZEND_LONG_MAX);
+    maximum += 1L;
+    ASSERT_TRUE(maximum.isFloat());
+
+    Variant minimum(ZEND_LONG_MIN);
+    minimum -= 1L;
+    ASSERT_TRUE(minimum.isFloat());
+
+    Variant multiply_overflow(ZEND_LONG_MAX);
+    multiply_overflow *= 2L;
+    ASSERT_TRUE(multiply_overflow.isFloat());
+
+    Variant fractional(10);
+    fractional += 2.5;
+    ASSERT_TRUE(fractional.isFloat());
+    ASSERT_DOUBLE_EQ(fractional.toFloat(), 12.5);
+
+    Variant numeric_string("10");
+    numeric_string += 2L;
+    ASSERT_TRUE(numeric_string.isInt());
+    ASSERT_EQ(numeric_string.toInt(), 12);
+
+    Variant left(7);
+    Variant added = left + 5L;
+    Variant subtracted = left - 2L;
+    Variant multiplied = left * 3L;
+    Variant divided_exact = Variant(12) / 3L;
+    Variant divided_fractional = Variant(10) / 4L;
+    ASSERT_EQ(added.toInt(), 12);
+    ASSERT_EQ(subtracted.toInt(), 5);
+    ASSERT_EQ(multiplied.toInt(), 21);
+    ASSERT_TRUE(divided_exact.isInt());
+    ASSERT_EQ(divided_exact.toInt(), 4);
+    ASSERT_TRUE(divided_fractional.isFloat());
+    ASSERT_DOUBLE_EQ(divided_fractional.toFloat(), 2.5);
+    ASSERT_TRUE((Variant(ZEND_LONG_MAX) + 1L).isFloat());
+    ASSERT_TRUE((Variant(ZEND_LONG_MIN) - 1L).isFloat());
+    ASSERT_TRUE((Variant(ZEND_LONG_MAX) * 2L).isFloat());
+    ASSERT_TRUE((Variant(ZEND_LONG_MIN) / -1L).isFloat());
+
+    Variant divide_assign_exact(12);
+    divide_assign_exact /= 3L;
+    ASSERT_TRUE(divide_assign_exact.isInt());
+    ASSERT_EQ(divide_assign_exact.toInt(), 4);
+
+    Variant divide_assign_fractional(10);
+    divide_assign_fractional /= 4L;
+    ASSERT_TRUE(divide_assign_fractional.isFloat());
+    ASSERT_DOUBLE_EQ(divide_assign_fractional.toFloat(), 2.5);
+
+    bool division_by_zero_caught = false;
+    try {
+        Variant result = Variant(10) / 0L;
+    } catch (zend_object *) {
+        division_by_zero_caught = true;
+        catchException();
+    }
+    ASSERT_TRUE(division_by_zero_caught);
 }
 
 // Test all bitwise operators (<<, >>, &, |, ^)
@@ -323,6 +479,242 @@ TEST(operator_comparison, all_operators) {
         ASSERT_TRUE(3.14 == v3);
         ASSERT_FALSE(3.15 == v3);
     }
+}
+
+TEST(operator_comparison, integral_fast_paths) {
+    {
+        Variant a(10);
+        Variant b(20);
+        ASSERT_TRUE(a < b);
+        ASSERT_FALSE(b < a);
+        ASSERT_FALSE(a < a);
+        ASSERT_TRUE(a <= b);
+        ASSERT_TRUE(a <= a);
+        ASSERT_FALSE(b <= a);
+        ASSERT_FALSE(a > b);
+        ASSERT_TRUE(b > a);
+        ASSERT_FALSE(a > a);
+        ASSERT_FALSE(a >= b);
+        ASSERT_TRUE(b >= a);
+        ASSERT_TRUE(a >= a);
+    }
+    {
+        Variant neg(-5);
+        Variant pos(5);
+        ASSERT_TRUE(neg < pos);
+        ASSERT_FALSE(pos < neg);
+        ASSERT_TRUE(neg <= pos);
+        ASSERT_FALSE(pos <= neg);
+        ASSERT_FALSE(neg > pos);
+        ASSERT_TRUE(pos > neg);
+        ASSERT_FALSE(neg >= pos);
+        ASSERT_TRUE(pos >= neg);
+    }
+    {
+        Variant max_val(ZEND_LONG_MAX);
+        Variant min_val(ZEND_LONG_MIN);
+        Variant zero(0);
+        ASSERT_TRUE(min_val < max_val);
+        ASSERT_FALSE(max_val < min_val);
+        ASSERT_TRUE(min_val <= max_val);
+        ASSERT_FALSE(max_val <= min_val);
+        ASSERT_FALSE(min_val > max_val);
+        ASSERT_TRUE(max_val > min_val);
+        ASSERT_FALSE(min_val >= max_val);
+        ASSERT_TRUE(max_val >= min_val);
+        ASSERT_TRUE(zero >= min_val);
+        ASSERT_TRUE(zero <= max_val);
+    }
+    {
+        Variant int_val(10);
+        Variant float_val(10.5);
+        ASSERT_TRUE(int_val < float_val);
+        ASSERT_FALSE(float_val < int_val);
+        ASSERT_TRUE(int_val <= float_val);
+        ASSERT_FALSE(float_val <= int_val);
+        ASSERT_FALSE(int_val > float_val);
+        ASSERT_TRUE(float_val > int_val);
+        ASSERT_FALSE(int_val >= float_val);
+        ASSERT_TRUE(float_val >= int_val);
+    }
+    {
+        Variant int_val(10);
+        Variant str_val("15");
+        ASSERT_TRUE(int_val < str_val);
+        ASSERT_FALSE(str_val < int_val);
+    }
+}
+
+TEST(operator_comparison, mixed_type_fast_paths) {
+    {
+        Variant float_val(3.14);
+        Variant int_val(5);
+        ASSERT_TRUE(float_val < int_val);
+        ASSERT_FALSE(int_val < float_val);
+        ASSERT_TRUE(float_val <= int_val);
+        ASSERT_FALSE(int_val <= float_val);
+        ASSERT_FALSE(float_val > int_val);
+        ASSERT_TRUE(int_val > float_val);
+        ASSERT_FALSE(float_val >= int_val);
+        ASSERT_TRUE(int_val >= float_val);
+    }
+    {
+        Variant int_val(5);
+        Variant float_val(3.14);
+        ASSERT_FALSE(int_val < float_val);
+        ASSERT_TRUE(float_val < int_val);
+        ASSERT_FALSE(int_val <= float_val);
+        ASSERT_TRUE(float_val <= int_val);
+        ASSERT_TRUE(int_val > float_val);
+        ASSERT_FALSE(float_val > int_val);
+        ASSERT_TRUE(int_val >= float_val);
+        ASSERT_FALSE(float_val >= int_val);
+    }
+    {
+        Variant a(5.0);
+        Variant b(5.0);
+        ASSERT_FALSE(a < b);
+        ASSERT_TRUE(a <= b);
+        ASSERT_FALSE(a > b);
+        ASSERT_TRUE(a >= b);
+    }
+    {
+        Variant neg_float(-1.5);
+        Variant pos_int(1);
+        ASSERT_TRUE(neg_float < pos_int);
+        ASSERT_FALSE(pos_int < neg_float);
+        ASSERT_TRUE(neg_float <= pos_int);
+        ASSERT_FALSE(pos_int <= neg_float);
+    }
+}
+
+TEST(operator_comparison, primitive_overloads) {
+    {
+        Variant v(10);
+        ASSERT_TRUE(v < 20L);
+        ASSERT_FALSE(v < 10L);
+        ASSERT_FALSE(v < 5L);
+        ASSERT_TRUE(v > 5L);
+        ASSERT_FALSE(v > 10L);
+        ASSERT_FALSE(v > 20L);
+        ASSERT_TRUE(v <= 10L);
+        ASSERT_TRUE(v <= 20L);
+        ASSERT_FALSE(v <= 5L);
+        ASSERT_TRUE(v >= 10L);
+        ASSERT_TRUE(v >= 5L);
+        ASSERT_FALSE(v >= 20L);
+    }
+    {
+        Variant v(3.14);
+        ASSERT_TRUE(v < 5.0);
+        ASSERT_FALSE(v < 3.14);
+        ASSERT_FALSE(v < 2.0);
+        ASSERT_TRUE(v > 2.0);
+        ASSERT_FALSE(v > 3.14);
+        ASSERT_FALSE(v > 5.0);
+        ASSERT_TRUE(v <= 3.14);
+        ASSERT_TRUE(v <= 5.0);
+        ASSERT_FALSE(v <= 2.0);
+        ASSERT_TRUE(v >= 3.14);
+        ASSERT_TRUE(v >= 2.0);
+        ASSERT_FALSE(v >= 5.0);
+    }
+    {
+        Variant neg(-5);
+        ASSERT_TRUE(neg < 0L);
+        ASSERT_TRUE(neg < -1L);
+        ASSERT_FALSE(neg < -10L);
+        ASSERT_TRUE(neg > -10L);
+        ASSERT_FALSE(neg > 0L);
+    }
+}
+
+TEST(operator_comparison, fast_paths_match_zend_at_numeric_boundaries) {
+    std::vector<Variant> values = {
+        Variant(ZEND_LONG_MIN),
+        Variant(-1),
+        Variant(0),
+        Variant(1),
+        Variant(ZEND_LONG_MAX),
+        Variant(-std::numeric_limits<double>::infinity()),
+        Variant(-0.0),
+        Variant(0.0),
+        Variant(0.5),
+        Variant(std::numeric_limits<double>::infinity()),
+        Variant(std::numeric_limits<double>::quiet_NaN()),
+    };
+    if constexpr (sizeof(Int) >= sizeof(int64_t)) {
+        values.emplace_back(static_cast<Int>(INT64_C(9007199254740991)));
+        values.emplace_back(static_cast<Int>(INT64_C(9007199254740992)));
+        values.emplace_back(static_cast<Int>(INT64_C(9007199254740993)));
+        values.emplace_back(9007199254740992.0);
+    }
+
+    for (const auto &left : values) {
+        for (const auto &right : values) {
+            expect_relational_operators_match_zend(left, right);
+        }
+    }
+}
+
+TEST(operator_comparison, references_indirect_values_and_fallback_match_zend) {
+    Variant referenced_value(42);
+    Reference reference = referenced_value.toReference();
+    Variant other(42.5);
+    expect_relational_operators_match_zend(reference, other);
+    expect_relational_operators_match_zend(other, reference);
+
+    Array values;
+    values.appendValue(42);
+    Variant indirect = values.item(0);
+    ASSERT_TRUE(indirect.isIndirect());
+    expect_relational_operators_match_zend(indirect, other);
+    expect_relational_operators_match_zend(other, indirect);
+
+    const std::vector<Variant> fallback_values = {
+        Variant(nullptr),
+        Variant(false),
+        Variant(true),
+        Variant("0"),
+        Variant("10.5"),
+        Variant("text"),
+    };
+    for (const auto &left : fallback_values) {
+        for (const auto &right : fallback_values) {
+            expect_relational_operators_match_zend(left, right);
+        }
+    }
+}
+
+TEST(operator_comparison, primitive_overloads_preserve_variant_conversion_semantics) {
+    const std::vector<Variant> left_values = {
+        Variant(10),
+        Variant(10.5),
+        Variant("10"),
+    };
+    const auto check = [&left_values](auto raw) {
+        const Variant boxed(raw);
+        for (const auto &left : left_values) {
+            EXPECT_EQ(left < raw, left < boxed);
+            EXPECT_EQ(left <= raw, left <= boxed);
+            EXPECT_EQ(left > raw, left > boxed);
+            EXPECT_EQ(left >= raw, left >= boxed);
+            EXPECT_EQ((raw < left).toBool(), boxed < left);
+            EXPECT_EQ((raw <= left).toBool(), boxed <= left);
+            EXPECT_EQ((raw > left).toBool(), boxed > left);
+            EXPECT_EQ((raw >= left).toBool(), boxed >= left);
+        }
+    };
+
+    check(int8_t{-1});
+    check(int32_t{10});
+    check(int64_t{11});
+    check(uint32_t{12});
+    check(std::numeric_limits<uint64_t>::max());
+    check(9.5F);
+    check(10.5);
+    check(11.5L);
+    check(std::numeric_limits<double>::quiet_NaN());
 }
 
 // Test mixed type operations
@@ -517,5 +909,113 @@ TEST(operator_precedence, precedence_and_associativity) {
         Variant result2 = 100 / v1 / v2;
         ASSERT_TRUE(result2.isInt());
         ASSERT_EQ(result2.toInt(), 5);
+    }
+}
+
+TEST(operator_comparison, equality_fast_paths) {
+    // IS_LONG × IS_LONG
+    {
+        Variant a(42);
+        Variant b(42);
+        Variant c(43);
+        EXPECT_TRUE(a == b);
+        EXPECT_FALSE(a == c);
+        EXPECT_FALSE(a != b);
+        EXPECT_TRUE(a != c);
+    }
+
+    // IS_DOUBLE × IS_DOUBLE
+    {
+        Variant a(3.14);
+        Variant b(3.14);
+        Variant c(2.71);
+        EXPECT_TRUE(a == b);
+        EXPECT_FALSE(a == c);
+        EXPECT_FALSE(a != b);
+        EXPECT_TRUE(a != c);
+    }
+
+    // Mixed IS_LONG × IS_DOUBLE
+    {
+        Variant a(2);
+        Variant b(2.0);
+        Variant c(2.1);
+        EXPECT_TRUE(a == b);
+        EXPECT_FALSE(a == c);
+        EXPECT_FALSE(a != b);
+        EXPECT_TRUE(a != c);
+
+        // Loose equality allows mixed numeric types, but strict equality does not.
+        EXPECT_FALSE(a.same(b));
+        EXPECT_FALSE(b.same(a));
+        EXPECT_TRUE(a.same(Variant(2)));
+        EXPECT_TRUE(b.same(Variant(2.0)));
+    }
+
+    // Primitive type overloads: Variant == int
+    {
+        Variant a(42);
+        EXPECT_TRUE(a == 42);
+        EXPECT_FALSE(a == 43);
+        EXPECT_FALSE(a != 42);
+        EXPECT_TRUE(a != 43);
+    }
+
+    // Primitive type overloads: Variant == float
+    {
+        Variant a(3.14);
+        EXPECT_TRUE(a == 3.14);
+        EXPECT_FALSE(a == 2.71);
+        EXPECT_FALSE(a != 3.14);
+        EXPECT_TRUE(a != 2.71);
+    }
+
+    // Reverse: primitive == Variant (int == Variant)
+    {
+        Variant a(42);
+        EXPECT_TRUE(42 == a);
+        EXPECT_FALSE(43 == a);
+        EXPECT_FALSE(42 != a);
+        EXPECT_TRUE(43 != a);
+    }
+
+    // Reverse: primitive == Variant (float == Variant)
+    {
+        Variant a(3.14);
+        EXPECT_TRUE(3.14 == a);
+        EXPECT_FALSE(2.71 == a);
+        EXPECT_FALSE(3.14 != a);
+        EXPECT_TRUE(2.71 != a);
+    }
+
+    // String fallback
+    {
+        Variant a("hello");
+        Variant b("hello");
+        Variant c("world");
+        EXPECT_TRUE(a == b);
+        EXPECT_FALSE(a == c);
+        EXPECT_TRUE(a != c);
+    }
+
+    // php::equals free function
+    {
+        Variant a(42);
+        Variant b(42);
+        Variant c(43);
+        EXPECT_TRUE(php::equals(a, b));
+        EXPECT_FALSE(php::equals(a, c));
+    }
+
+    // References are transparent to both loose and strict comparison.
+    {
+        Variant value(42);
+        Reference reference = value.toReference();
+        Variant same_int(42);
+        Variant same_float(42.0);
+        EXPECT_TRUE(reference == same_int);
+        EXPECT_TRUE(reference.same(same_int));
+        EXPECT_TRUE(reference == same_float);
+        EXPECT_FALSE(reference.same(same_float));
     }
 }

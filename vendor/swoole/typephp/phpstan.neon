@@ -1,0 +1,16 @@
+parameters:
+  level: 5
+
+  paths:
+    - src
+    - bin
+
+  # Reuse the same constants and Composer autoloader setup as the CLI tools.
+  bootstrapFiles:
+    - bin/bootstrap.php
+
+  # gen_stub.php is maintained as a namespaced copy of php-src's generator.
+  # Analyze TypePHP-owned compiler code independently from upstream diagnostics.
+  excludePaths:
+    analyse:
+      - src/gen_stub.php

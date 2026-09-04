@@ -127,16 +127,29 @@ trait NativeCommandOptionsTrait
         }
         $libraries = array_merge($libraries, $this->linkLibs);
 
+        $ldflags = $this->ldflags;
+        $targetPlatform = $this->targetPlatform;
+        if ($this->fullStatic) {
+            // The bundled libphp.a carries musl libc, so the link must use musl's
+            // C runtime instead of glibc's. -B points the driver at the musl
+            // startup files; -static keeps the result free of NEEDED entries.
+            // Only the link step switches target: the translation units are still
+            // compiled against the host libstdc++ headers, which is fine because
+            // TLS relocations are resolved here rather than at compile time.
+            $targetPlatform = $this->getFullStaticTargetTriple();
+            $ldflags = trim('-static -B ' . escapeshellarg($this->getFullStaticMuslDir()) . ' ' . $ldflags);
+        }
+
         $options = [
             'library_paths' => $libraryPaths,
             'libraries' => $libraries,
-            'ldflags' => $this->ldflags,
+            'ldflags' => $ldflags,
             'debug' => $this->debug,
             'no_console' => $this->noConsole,
             'build_mode' => $this->buildMode,
             'sanitize' => $this->sanitize,
             'lto' => $this->enableLto,
-            'target_platform' => $this->targetPlatform,
+            'target_platform' => $targetPlatform,
         ];
 
         $rpaths = $this->getPlatform()->getDefaultRpaths($this->getPhpxDir(), $this->getPhpDir());

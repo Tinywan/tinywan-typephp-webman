@@ -315,6 +315,90 @@ class PlatformTest extends TestCase
         $this->assertSame('', $platform->getCrtConfig());
     }
 
+    public function testLinuxPhpHomeSelectsMatchingVersionedPhpConfig(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix php-config lookup test');
+        }
+
+        $root = sys_get_temp_dir() . '/typephp-php-home-' . bin2hex(random_bytes(6));
+        $phpHome = $root . '/php';
+        $rightInclude = $phpHome . '/include/right';
+        $wrongInclude = $phpHome . '/include/wrong';
+        mkdir($phpHome . '/bin', 0755, true);
+        mkdir($rightInclude, 0755, true);
+        mkdir($wrongInclude, 0755, true);
+
+        $versionedConfig = $phpHome . '/bin/php-config' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        $wrongMinor = PHP_MINOR_VERSION === 4 ? 5 : 4;
+        $this->writePhpConfig($versionedConfig, PHP_VERSION, $phpHome, $rightInclude);
+        $this->writePhpConfig(
+            $phpHome . '/bin/php-config',
+            PHP_MAJOR_VERSION . '.' . $wrongMinor . '.0',
+            $phpHome,
+            $wrongInclude,
+        );
+
+        $previousPhpHome = getenv('PHP_HOME');
+        try {
+            putenv('PHP_HOME=' . $phpHome);
+            $platform = new Linux();
+
+            $this->assertSame($phpHome, $platform->getPhpDir());
+            $this->assertSame([$rightInclude], $platform->buildPhpIncludePaths($phpHome));
+        } finally {
+            $previousPhpHome === false
+                ? putenv('PHP_HOME')
+                : putenv('PHP_HOME=' . $previousPhpHome);
+            unlink($versionedConfig);
+            unlink($phpHome . '/bin/php-config');
+            rmdir($rightInclude);
+            rmdir($wrongInclude);
+            rmdir($phpHome . '/include');
+            rmdir($phpHome . '/bin');
+            rmdir($phpHome);
+            rmdir($root);
+        }
+    }
+
+    public function testLinuxPhpHomeDoesNotFallBackToPathPhpConfig(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix php-config lookup test');
+        }
+
+        $root = sys_get_temp_dir() . '/typephp-php-home-missing-' . bin2hex(random_bytes(6));
+        $phpHome = $root . '/php';
+        mkdir($phpHome . '/bin', 0755, true);
+        $previousPhpHome = getenv('PHP_HOME');
+
+        try {
+            putenv('PHP_HOME=' . $phpHome);
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('PHP_HOME does not provide an executable bin/php-config');
+            (new Linux())->buildPhpIncludePaths($phpHome);
+        } finally {
+            $previousPhpHome === false
+                ? putenv('PHP_HOME')
+                : putenv('PHP_HOME=' . $previousPhpHome);
+            rmdir($phpHome . '/bin');
+            rmdir($phpHome);
+            rmdir($root);
+        }
+    }
+
+    private function writePhpConfig(string $path, string $version, string $prefix, string $include): void
+    {
+        $script = sprintf(
+            "#!/bin/sh\ncase \"\$1\" in\n  --version) printf '%%s\\n' %s ;;\n  --prefix) printf '%%s\\n' %s ;;\n  --includes) printf '%%s\\n' %s ;;\nesac\n",
+            escapeshellarg($version),
+            escapeshellarg($prefix),
+            escapeshellarg('-I' . $include),
+        );
+        file_put_contents($path, $script);
+        chmod($path, 0755);
+    }
+
     /**
      * 测试 macOS 平台基本功能
      */

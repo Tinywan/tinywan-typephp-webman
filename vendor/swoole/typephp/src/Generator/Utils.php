@@ -25,13 +25,29 @@ trait Utils
         return $value . $this->getPlatform()->getIntegerLiteralSuffix();
     }
 
+    public function genFloatLiteral(float $value): string
+    {
+        if (is_nan($value)) {
+            return self::VALUE_NAN;
+        }
+        if (is_infinite($value)) {
+            return $value > 0 ? self::VALUE_INF : '-' . self::VALUE_INF;
+        }
+        $text = sprintf('%.17h', $value);
+        // Make sure the literal is parsed as a C++ double.
+        if (!str_contains($text, '.') && !str_contains(strtolower($text), 'e')) {
+            $text .= '.0';
+        }
+        return $text;
+    }
+
     protected function genCValue(mixed $value): string
     {
         if (is_int($value)) {
             return $this->genIntegerLiteral($value);
         }
         if (is_float($value)) {
-            return (string) $value;
+            return $this->genFloatLiteral($value);
         }
         if (is_bool($value)) {
             return $value ? '1' : '0';

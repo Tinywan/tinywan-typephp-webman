@@ -13,7 +13,7 @@ function main(int $argc, array $argv): void
     ini_set('memory_limit', '-1');
 
     if (!defined('TYPEPHP_ROOT_PATH')) {
-        define('TYPEPHP_ROOT_PATH', getcwd());
+        define('TYPEPHP_ROOT_PATH', getenv("TYPEPHP_HOME") ?: getcwd());
     }
     if (!defined('TYPEPHP_DEBUG')) {
         define('TYPEPHP_DEBUG', true);
@@ -47,19 +47,17 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    // .prof 文件分析模式：./tpc app.prof
+    // .prof file analysis mode: ./tpc app.prof
     if ($argc >= 2 && str_ends_with($argv[1], '.prof')) {
         profileAnalyze($argc, $argv);
         return;
     }
 
-    global $translator;
-
-    $translator = new Translator(TYPEPHP_ROOT_PATH);
+    $translator = Translator::getInstance();
     $translator->setIndent('    ');
-    // 扫描所有 PHP 文件，预处理
+    // Scan all PHP files and preprocess them.
     $files = $translator->prepare($translator->parseArgv($argv));
-    // 生成 C++ 文件
+    // Generate the C++ source files.
     $sourceFiles = $translator->convert($files);
 
     $wasmManifest = getenv('TYPEPHP_WASM_INTERFACE_MANIFEST');
@@ -87,7 +85,7 @@ function main(int $argc, array $argv): void
         $sourceFiles[] = $wasmAdapter;
     }
 
-    // --dry 模式：仅生成 C++ 代码，不执行编译
+    // --dry mode: only generate the C++ code, without compiling.
     if ($translator->isDryRun()) {
         $buildDir = $translator->getBuildDir();
         $count = count($sourceFiles);
@@ -105,11 +103,11 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    // 编译所有 C++ 文件
+    // Compile all C++ source files.
     $objectFiles = $translator->compile($sourceFiles);
-    // 连接所有目标文件，生成可执行文件
+    // Link all object files to produce the executable.
     $binaryFile = $translator->build($objectFiles);
-    // 如果指定了 --run / -r，编译完成后立即执行
+    // If --run / -r was specified, execute immediately after compilation.
     if ($translator->isRunRequested()) {
         $translator->run($binaryFile); // never returns
     }
@@ -310,7 +308,7 @@ function profileAnalyze(int $argc, array $argv): void
         exit(1);
     }
 
-    // 从 prof 文件名推导二进制文件名（app.prof → app）
+    // Derive the binary name from the prof file name (app.prof → app).
     $binary = basename($profFile, '.prof');
     if (!file_exists($binary) && file_exists('./' . $binary)) {
         $binary = './' . $binary;

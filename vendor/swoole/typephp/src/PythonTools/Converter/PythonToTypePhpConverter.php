@@ -15,7 +15,7 @@ final class PythonToTypePhpConverter
     /** @var array<string, true> */
     private array $definedFunctions = [];
 
-    /** @var array<string, true> 被装饰的函数：调用点必须经变量间接调用装饰结果 */
+    /** @var array<string, true> Decorated functions: call sites must invoke the decorator result indirectly through a variable */
     private array $decoratedFunctions = [];
 
     /** @var array<string, true> */
@@ -53,12 +53,12 @@ final class PythonToTypePhpConverter
 
         foreach ($tree['body'] ?? [] as $node) {
             if (in_array($node['_type'] ?? '', ['Assign', 'AnnAssign', 'AugAssign'], true)) {
-                // 纯注解声明没有运行期值，不登记为模块全局变量
+                // An annotation-only declaration has no runtime value, so it is not registered as a module global.
                 $annotationOnly = ($node['_type'] ?? '') === 'AnnAssign' && ($node['value'] ?? null) === null;
                 if (!$annotationOnly) {
                     $targets = ($node['_type'] ?? '') === 'Assign' ? ($node['targets'] ?? []) : [$node['target'] ?? []];
                     foreach ($targets as $target) {
-                        // 解构赋值展开为其中的名称元素
+                        // A destructuring assignment expands into its individual name elements.
                         $elements = in_array($target['_type'] ?? '', ['Tuple', 'List'], true)
                             ? ($target['elts'] ?? [])
                             : [$target];
@@ -77,7 +77,7 @@ final class PythonToTypePhpConverter
                 $name = (string) $node['name'];
                 $this->definedFunctions[$name] = true;
                 if (($node['decorator_list'] ?? []) !== []) {
-                    // 装饰结果绑定到模块级变量，函数内调用需要 global 注入
+                    // The decorator result is bound to a module-level variable, so calls inside functions need a global injection.
                     $this->decoratedFunctions[$name] = true;
                     $this->moduleGlobals[$name] = true;
                 }
@@ -108,7 +108,7 @@ final class PythonToTypePhpConverter
         if ($this->moduleGlobals !== []) {
             $lines[] = $this->line('global ' . implode(', ', $this->variables(array_keys($this->moduleGlobals))) . ';');
         }
-        // 装饰器重绑定先于其他顶层语句执行，使后续调用拿到装饰结果
+        // Decorator rebinding runs before other top-level statements so that subsequent calls observe the decorated result.
         foreach ($functions as $function) {
             foreach ($this->decoratorRebindings($function) as $rebinding) {
                 $lines[] = $this->line($rebinding);
@@ -202,7 +202,7 @@ final class PythonToTypePhpConverter
     }
 
     /**
-     * Python 的 main 函数与 TypePHP 入口点冲突，重命名为 main_。
+     * Python's main function conflicts with the TypePHP entry point, so it is renamed to main_.
      */
     private function functionName(string $name): string
     {
@@ -210,8 +210,8 @@ final class PythonToTypePhpConverter
     }
 
     /**
-     * 生成装饰器的重绑定语句（Python 自底向上应用装饰器）。
-     * 装饰结果存入同名模块变量，调用点经变量间接调用。
+     * Generate the rebinding statements for a function's decorators (Python applies decorators bottom-up).
+     * The decorated result is stored in a module variable of the same name, and call sites invoke it indirectly through that variable.
      *
      * @param array<string, mixed> $function @return list<string>
      */
@@ -233,7 +233,7 @@ final class PythonToTypePhpConverter
     /** @param array<string, mixed> $node */
     private function decoratorCallable(array $node): string
     {
-        // @dec(args)：装饰器工厂，先求值再调用其返回值
+        // @dec(args): a decorator factory; evaluate it first, then call its return value.
         if (($node['_type'] ?? '') === 'Call') {
             return $this->call($node);
         }
@@ -312,7 +312,7 @@ final class PythonToTypePhpConverter
             $parts[] = match ($element['_type'] ?? '') {
                 'Name' => $this->variable((string) $element['id']),
                 'Attribute', 'Subscript' => $this->target($element),
-                // PHP 的 list 赋值不支持展开，嵌套元组的元素仍是 PyObject 无法直接解构
+                // PHP list assignment does not support spreading, and nested tuple elements remain PyObject and cannot be destructured directly.
                 'Starred' => $this->unsupported($owner, 'starred destructuring is not supported'),
                 default => $this->unsupported($owner, 'nested destructuring is not supported'),
             };
@@ -337,7 +337,7 @@ final class PythonToTypePhpConverter
     {
         $target = $this->target($node['target']);
         $operator = $node['op']['_type'] ?? '';
-        // PHP 没有 //= 与 @=，展开为对应的运算符函数调用
+        // PHP has no //= or @= operators, so these expand into the corresponding operator function calls.
         if ($operator === 'FloorDiv' || $operator === 'MatMult') {
             $function = $operator === 'FloorDiv' ? 'python\\operator\\floordiv' : 'python\\operator\\matmul';
             return [$this->line($target . ' = ' . $function . '(' . $target . ', ' . $this->expression($node['value']) . ');')];
@@ -530,7 +530,7 @@ final class PythonToTypePhpConverter
     {
         $targets = [];
         $walk = function (array $target) use (&$walk, &$targets, $node): void {
-            // del (a, b) / del [a, b] 逐项展开
+            // del (a, b) / del [a, b] expands element by element.
             if (in_array($target['_type'] ?? '', ['Tuple', 'List'], true)) {
                 foreach ($target['elts'] ?? [] as $element) {
                     $walk($element);
@@ -585,7 +585,7 @@ final class PythonToTypePhpConverter
         if (($function['_type'] ?? '') === 'Name') {
             $name = (string) $function['id'];
             if (isset($this->decoratedFunctions[$name])) {
-                // 装饰结果绑定在同名变量上，必须经变量间接调用
+                // The decorator result is bound to a variable of the same name, so it must be invoked indirectly through that variable.
                 $callable = $this->variable($name);
             } elseif (isset($this->importedSymbols[$name])) {
                 $symbol = $this->importedSymbols[$name];

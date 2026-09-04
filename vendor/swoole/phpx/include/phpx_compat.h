@@ -1,9 +1,4 @@
-#if defined(WIN32) || defined(_WIN32)
-
-#include <io.h>
-#include <sys/stat.h>
-#include <stdlib.h>
-#include <corecrt_wio.h>
+#ifdef WIN32
 
 #define PATH_MAX _MAX_PATH
 

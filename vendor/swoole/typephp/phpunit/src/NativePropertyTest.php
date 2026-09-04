@@ -53,11 +53,12 @@ class NativePropertyTest extends \BaseTest
         }
 
         $code = file_get_contents($outputFile);
-        $this->assertStringContainsString('typephp_static_int_ref(this_.attr(', $code);
-        $this->assertStringContainsString('typephp_static_int_ref(box.attr(', $code);
-        $this->assertSame(2, substr_count($code, 'typephp_static_int_ref('));
-        $this->assertStringNotContainsString('this_.attr(get_persistent_prop(0, get_str(0), 0, get_str(1)), true) +=', $code);
-        $this->assertStringNotContainsString('box.attr(get_persistent_prop(0, get_str(0), 0, get_str(1)), true) +=', $code);
+        $this->assertStringContainsString('php::Int &_object_prop_this___value = Z_LVAL_P(this_.attr(', $code);
+        $this->assertStringContainsString('php::Int &_object_prop_box__value = Z_LVAL_P(box.attr(', $code);
+        $this->assertStringContainsString('_object_prop_this___value += (2L);', $code);
+        $this->assertStringContainsString('_object_prop_box__value += (2L);', $code);
+        $this->assertSame(2, substr_count($code, 'Z_LVAL_P('));
+        $this->assertStringNotContainsString('typephp_write_property_scoped(', $code);
     }
 
     public function testReadonlyPropertiesDoNotUseNativeScalarReferences(): void
@@ -85,10 +86,10 @@ class NativePropertyTest extends \BaseTest
         }
 
         $code = file_get_contents($outputFile);
-        $this->assertStringContainsString('typephp_static_int_ref(this_.attr(', $code);
+        $this->assertStringContainsString('php::Int &_object_prop_this___flags = Z_LVAL_P(this_.attr(', $code);
         // A TypePHP class constant is available during conversion and is
         // folded before the native property operation is emitted.
-        $this->assertStringContainsString('&= (~php::toInt(1L));', $code);
+        $this->assertStringContainsString('_object_prop_this___flags &= (~php::toInt(1L));', $code);
     }
 
     public function testNativePropertyWriteConvertsOnlyWhenTypesDiffer(): void

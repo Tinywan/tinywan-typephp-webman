@@ -252,7 +252,7 @@ trait MethodCallTrait
         }
 
         $nativeFunc = $this->getNativeMethod($expr, $class, $method);
-        // 存在 Native 类，但是没有找到方法，可能是动态调用
+        // A Native class exists but the method was not found; this may be a dynamic call
         if (!$nativeFunc) {
             if ($this->hasClass($class) and $this->getNativeMethod($expr, $class, '__call', false)) {
                 throw new DynamicCall();
@@ -261,7 +261,7 @@ trait MethodCallTrait
 
         $fullMethodName = $this->getOverrideMethodName($class, $method);
 
-        // 存在子类同名方法，尝试去虚化
+        // A subclass declares a method with the same name, so try to devirtualize
         if ($this->isOverrideMethod($fullMethodName)) {
             if (!$this->canDevirtualize($object, $class, $method)) {
                 return false;
@@ -281,6 +281,84 @@ trait MethodCallTrait
             }
         }
         return false;
+    }
+
+    /**
+     * Directly invoke a TypePHP-compiled __call() only when the receiver's
+     * exact runtime class is statically proven. A declared class is not enough:
+     * a subclass may provide the requested real method instead of invoking the
+     * parent's __call().
+     */
+    protected function parseDirectNativeMagicCall(
+        Expr\MethodCall $expr,
+        string $object,
+        string $class,
+        string $method,
+    ): ?string {
+        if ($class === '' || !$this->hasClass($class)) {
+            return null;
+        }
+
+        $exactClass = null;
+        if ($object === 'this_' && $this->isCurrentClassFinal()) {
+            $exactClass = $this->getFullClassName();
+        } elseif (isset($this->context->exactObjects[$object])) {
+            $exactClass = $this->context->exactObjects[$object];
+        } elseif ($this->isFinalClass($class)) {
+            $exactClass = $class;
+        }
+
+        if ($exactClass === null || strcasecmp(ltrim($exactClass, '\\'), ltrim($class, '\\')) !== 0) {
+            return null;
+        }
+
+        // A DynamicCall is also used for real methods inherited from an
+        // internal Zend class. Only attempt __call devirtualization when the
+        // TypePHP class hierarchy actually provides a compiled __call method;
+        // otherwise getNativeMethod() would continue into the internal parent
+        // and incorrectly diagnose the absent magic method.
+        $currentClass = $exactClass;
+        while (true) {
+            if (!$this->hasClass($currentClass)) {
+                return null;
+            }
+            $currentDef = $this->getClass($currentClass);
+            if ($currentDef->hasMethod('__call')) {
+                break;
+            }
+            if ($currentDef->extends === '' || !$this->hasClass($currentDef->extends)) {
+                return null;
+            }
+            $currentClass = $currentDef->extends;
+        }
+
+        // Start from the class that actually declares the compiled method.
+        // This keeps getNativeMethod() out of an internal Zend parent: a real
+        // inherited internal method also uses DynamicCall, but an internal
+        // parent without __call must not be diagnosed while probing this
+        // optimization.
+        $nativeFunc = $this->getNativeMethod($expr, $currentClass, '__call', false);
+        if ($nativeFunc === false || !$this->hasFunction($nativeFunc)) {
+            return null;
+        }
+        $this->checkFunction($nativeFunc);
+
+        if ($this->getVarType($object) !== Type::OBJECT) {
+            $tmpObject = $this->genTmpVarName();
+            $this->context->beforeStmtLines[] = Type::OBJECT . ' ' . $tmpObject . ' = ' . $object . ';';
+            $object = $tmpObject;
+        }
+
+        // __call receives one PHP array containing positional and named
+        // arguments. Reuse the dynamic call argument builder so evaluation
+        // order, unpacking and named keys remain identical to the Zend path.
+        $arguments = $this->parseCallArgs(
+            $expr->args,
+            separateNamedArgs: false,
+            forceArrayArgs: true,
+        );
+
+        return self::PREFIX . $nativeFunc . '(' . $object . ', ' . $method . ', ' . $arguments . ')';
     }
 
     protected function parseNativeMethodCall(string $object, string $nativeFunc, array $args): string
@@ -414,7 +492,7 @@ trait MethodCallTrait
         if (empty($expr->args)) {
             return 'this_.call(' . $methodPtr . ')';
         }
-        // 传入方法名与父类名，以便在按引用参数检测时解析方法签名
+        // Pass the method name and parent class so the method signature can be resolved when detecting by-reference arguments
         return 'this_.call(' . $methodPtr . ', ' . $this->parseCallArgs($expr->args, $method, $parentClass) . ')';
     }
 
@@ -457,6 +535,13 @@ trait MethodCallTrait
             $object = empty($expr->args)
                 ? $this->parseIdentifier($expr->var)
                 : $this->parseOrderedOperand($expr->var, false);
+            // Preserve the receiver expression boundary for no-argument
+            // calls. Without these parentheses, C++ member access binds more
+            // tightly than assignment, so `($b = $a)->method()` was emitted
+            // as `b = a.call(...)` instead of `(b = a).call(...)`.
+            if (empty($expr->args) && !$this->isVarExpr($expr->var)) {
+                $object = '(' . $object . ')';
+            }
         }
         if ($this->isVarExpr($expr->var)) {
             if (!$this->hasVar($object)) {
@@ -465,10 +550,10 @@ trait MethodCallTrait
             if ($this->isTypedObject($object)) {
                 $class = $this->getObjectType($object);
             } elseif ($object === 'this_') {
-                // $this 在构造函数/方法中静态类型为当前类，便于解析抽象方法等按引用参数签名
+                // $this is statically typed as the current class inside a constructor/method, so abstract methods and other by-reference parameter signatures can be resolved
                 $class = $this->classDef !== null ? $this->classDef->getNamespacedName(false) : $this->class;
             } else {
-                // 接口和抽象类类型的变量没有具体对象类型，仍可从声明签名解析按引用参数。
+                // Variables of interface or abstract-class type have no concrete object type, but by-reference parameters can still be resolved from the declared signature.
                 $class = $this->getDeclaredObjectType($object);
             }
         }
@@ -591,7 +676,7 @@ trait MethodCallTrait
                 . $this->parseCallArgs($expr->args) . ')';
         }
 
-        // 可转为原生调用的 MethodCall
+        // Method calls that can be lowered to a native call
         if (($this->isVarExpr($expr->var) || $materializedNativeReceiver) and $this->isNamedMethod($expr->name)) {
             $type = $this->getVarType($object);
             if ($class !== '' && $this->isNativeObjectClass($class)) {
@@ -647,9 +732,9 @@ trait MethodCallTrait
                 return self::PREFIX . $nativeFunc . '(' . $receiver . ', '
                     . $this->parseNativeCallArgs($expr->args, $nativeFunc) . ')';
             }
-            // 引用参数允许方法调用：有class信息走原生调用，无class信息走动态调用
+            // Method calls are allowed on references: use a native call when class info is available, otherwise a dynamic call
             if (!$this->checkArgType($type, Type::OBJECT) and $type !== Type::REF) {
-                // 非对象类型可使用内置方法
+                // Non-object types can use built-in methods
                 $fn = $this->findUniversalMethodAnyType($type, $methodName);
                 if ($fn) {
                     if ($type === Type::STREAM) {
@@ -688,6 +773,14 @@ trait MethodCallTrait
                 if ($extension !== null) {
                     return $this->parseUniversalMethodCall($expr, $object, $methodName, $extension);
                 }
+                try {
+                    $directMagicCall = $this->parseDirectNativeMagicCall($expr, $object, $class, $method);
+                    if ($directMagicCall !== null) {
+                        return $directMagicCall;
+                    }
+                } catch (PlaceHolder) {
+                    return $this->genPlaceHolder($this->genArray([$object, $method]));
+                }
                 $magicMethod = true;
             }
             if (!$nativeFunc) {
@@ -705,7 +798,7 @@ trait MethodCallTrait
             }
         }
 
-        // 表达式返回值也可使用内置方法：fn()->method(), $obj->fn()->method(), Foo::fn()->method(), $obj->prop->method()
+        // Expression results can also use built-in methods: fn()->method(), $obj->fn()->method(), Foo::fn()->method(), $obj->prop->method()
         if (!$this->isVarExpr($expr->var) and $this->isNamedMethod($expr->name)) {
             $type = $this->detectTypeOfExpr($expr->var);
             if ($type === Type::VOID) {
@@ -764,10 +857,18 @@ trait MethodCallTrait
             if ($requiresDynamicScope && $this->methodDef) {
                 return 'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')';
             }
+            if (!$this->isNamedMethod($expr->name)) {
+                return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
+                    . $this->getMethodCallCache() . ')';
+            }
             return $object . '.call(' . $methodPtr . ')';
         }
         try {
             $class = empty($class) ? self::DYNAMIC_CALLED_CLASS : $class;
+            if (!$this->isNamedMethod($expr->name) && !($requiresDynamicScope && $this->methodDef)) {
+                return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
+                    . $this->getMethodCallCache() . ', ' . $this->parseCallArgs($expr->args) . ')';
+            }
             return $this->genRuntimeObjectMethodCall(
                 $object,
                 $methodPtr,
@@ -830,6 +931,24 @@ trait MethodCallTrait
         return false;
     }
 
+    /**
+     * Materialize a dynamic static-call target exactly once and normalize it
+     * to the runtime class name accepted by PHP callbacks.
+     *
+     * PHP permits both an object and a class-name string before `::`. A
+     * declared object type is only an upper bound, so using it directly would
+     * lose late static binding when the runtime object is a subclass.
+     */
+    private function materializeDynamicStaticCallClassName(Expr $target): string
+    {
+        [$value, $beforeStmts, $afterStmts] = $this->parseExprWithCapturedStmts($target);
+        $this->appendCapturedStmtLinesToContext($beforeStmts);
+        $classVar = $this->addTmpVar(Type::VAR);
+        $this->context->beforeStmtLines[] = $classVar . ' = ' . $value . ';';
+        $this->appendCapturedStmtLinesToContext($afterStmts);
+
+        return '(' . $classVar . '.isObject() ? php::fn::get_class(' . $classVar . ') : php::toString(' . $classVar . '))';
+    }
 
     protected function parseStaticCall(Expr\StaticCall $expr): string
     {
@@ -850,7 +969,10 @@ trait MethodCallTrait
         $callScope = [];
         $rtFunc = '';
         $rtClass = '';
-        $class = $this->parseIdentifier($expr->class);
+        $canUseDirectCallScope = $this->isNameExpr($expr->class) && $this->isIdExpr($expr->name);
+        $class = ($this->isNameExpr($expr->class) || $this->isVarExpr($expr->class))
+            ? $this->parseIdentifier($expr->class)
+            : '';
 
         if ($this->isNameExpr($expr->class)
             && $this->isIdExpr($expr->name)
@@ -870,19 +992,28 @@ trait MethodCallTrait
             return $this->parseParentMethodCall($expr);
         }
 
-        if ($this->isVarExpr($expr->class) or $this->isVarExpr($expr->name)) {
-            $var = $class;
-            if ($this->isTypedObject($var)) {
-                $class = $this->getObjectType($var);
+        if (!$this->isNameExpr($expr->class)) {
+            if ($this->isVarExpr($expr->class) && $this->isStableObject($class)) {
+                $class = $this->getObjectType($class);
                 goto _do_call;
             }
-            if ($this->getVarType($var) == Type::OBJECT) {
-                $fn = 'php::concat({' . $var . '.getClassName(), "::", ' . $this->methodNameToStr($expr->name) . '})';
-            } else {
-                $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $this->methodNameToStr($expr->name) . '})';
+            $className = $this->materializeDynamicStaticCallClassName($expr->class);
+            $fn = 'php::concat({' . $className . ', "::", ' . $this->methodNameToStr($expr->name) . '})';
+            if ($this->isVarExpr($expr->class) && $this->isIdExpr($expr->name)) {
+                $declaredClass = $this->getDeclaredObjectType($class);
+                if ($declaredClass !== '') {
+                    // Dispatch remains runtime-bound, but PHP requires an
+                    // overriding method to keep the reference signature
+                    // compatible with the declared base method.
+                    $rtFunc = $this->parseIdentifier($expr->name);
+                    $rtClass = $declaredClass;
+                }
             }
             $placeHolder = $fn;
-        } elseif ($this->isNameExpr($expr->class) and $class === 'static') {
+        } elseif ($this->isVarExpr($expr->name)) {
+            $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $this->methodNameToStr($expr->name) . '})';
+            $placeHolder = $fn;
+        } elseif ($class === 'static') {
             if ($this->classDef?->nativeObject) {
                 $this->fatalError(
                     $expr,
@@ -899,17 +1030,18 @@ trait MethodCallTrait
                 );
             }
             $placeHolder = $this->genArray([Symbol::getCalledClass(), $methodPtr]);
-            // 用于在按引用参数检测时解析方法签名（late static binding 在当前类层级中解析）
+            // Used to resolve the method signature when detecting by-reference arguments (late static binding is resolved within the current class hierarchy)
             $rtFunc = $method;
-            $rtClass = $this->getNamespacedClassName($this->class);
-        } elseif ($this->isNameExpr($expr->class)) {
+            $rtClass = $this->getFullClassName();
+        } else {
             if ($class === 'self') {
-                $class = $this->class;
+                $class = $this->getFullClassName();
                 $self = true;
             } elseif ($class === 'std') {
                 return $this->parseStdCall($expr);
+            } else {
+                $class = $this->getNamespacedClassName($class);
             }
-            $class = $this->getNamespacedClassName($class);
 
             _do_call:
             $method = $this->parseIdentifier($expr->name);
@@ -922,7 +1054,7 @@ trait MethodCallTrait
                 );
             }
 
-            if ($this->isNameExpr($expr->class) and $this->isIdExpr($expr->name)) {
+            if ($canUseDirectCallScope) {
                 $callScope = [$this->genCharPtr($class, true), $this->genCharPtr($method)];
             }
 
@@ -943,7 +1075,7 @@ trait MethodCallTrait
                     } catch (PlaceHolder) {
                         return $this->genPlaceHolder($this->genArray($callScope));
                     }
-                    // 在方法定义中使用了当前类的方法 self::method()，依然应该传递 this_ 指针
+                    // When a method definition calls a current-class method via self::method(), the this_ pointer must still be passed
                     if ($this->methodDef and $self) {
                         $object = 'this_';
                     } else {
@@ -963,9 +1095,6 @@ trait MethodCallTrait
             // reusable handlers and never stores transient trampolines.
             $fn = $this->getLiteralString($class . '::' . $method);
             $placeHolder = $this->genArray($callScope);
-        } else {
-            $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $this->methodNameToStr($expr->name) . '})';
-            $placeHolder = $fn;
         }
 
         $call = 'php::call';

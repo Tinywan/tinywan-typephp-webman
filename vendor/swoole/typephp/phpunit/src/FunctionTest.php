@@ -120,12 +120,12 @@ class FunctionTest extends \BaseTest
 
     public function testClosureReferenceParameter()
     {
-        $this->exec('Closure cannot use reference parameter', 'closure-ref-param.php');
+        $this->compile('closure-ref-param.php');
     }
 
     public function testVariadicReferenceParameter()
     {
-        $this->exec('Variadic parameters cannot be passed by reference', 'variadic-ref-param.php');
+        $this->compile('variadic-ref-param.php');
     }
 
     public function testOptionalParameterBeforeRequiredParameter()

@@ -71,6 +71,38 @@ final class BashCompletionTest extends TestCase
         );
     }
 
+    /**
+     * --compiler must complete commands, not the default *.php/*.yml file set.
+     *
+     * Prefixes are chosen to exist on any POSIX box: "ec" matches the bash
+     * builtin `echo`, and /usr/bin/ always holds executables.
+     */
+    public function testCompilerOptionCompletesCommandsAndExecutablePaths(): void
+    {
+        $script = TYPEPHP_ROOT_PATH . '/completions/tpc.bash';
+
+        $names = $this->complete($script, ['tpc', '--compiler', 'ec']);
+        self::assertNotSame('', $names);
+        self::assertStringContainsString('echo', $names);
+        foreach (explode("\n", trim($names)) as $candidate) {
+            self::assertDoesNotMatchRegularExpression('/\.(php|yml|yaml|prof)$/', $candidate);
+        }
+
+        // Once the word contains a slash, completion switches to that directory.
+        $paths = $this->complete($script, ['tpc', '--compiler', '/usr/bin/']);
+        self::assertNotSame('', $paths);
+        foreach (explode("\n", trim($paths)) as $candidate) {
+            self::assertStringStartsWith('/usr/bin/', $candidate);
+        }
+
+        // The --compiler= form keeps the prefix on every candidate.
+        $equals = $this->complete($script, ['tpc', '--compiler=ec']);
+        self::assertNotSame('', $equals);
+        foreach (explode("\n", trim($equals)) as $candidate) {
+            self::assertStringStartsWith('--compiler=', $candidate);
+        }
+    }
+
     /** @param list<string> $words */
     private function complete(string $script, array $words): string
     {

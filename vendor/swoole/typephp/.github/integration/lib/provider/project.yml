@@ -1,0 +1,5 @@
+name: integration_provider
+mode: lib
+cxx-std: c++17
+sources:
+  - src

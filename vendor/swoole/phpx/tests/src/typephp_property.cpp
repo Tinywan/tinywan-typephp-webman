@@ -7,6 +7,22 @@ namespace {
 
 zend_object_handlers property_handlers;
 
+zend_class_entry *property_reference_class() {
+    static zend_class_entry *class_entry = nullptr;
+    if (class_entry != nullptr) {
+        return class_entry;
+    }
+
+    eval(R"PHP(
+        class PhpxPropertyReferenceCoverage {
+            public ?array $value = null;
+        }
+    )PHP");
+
+    class_entry = getClassEntrySafe("PhpxPropertyReferenceCoverage");
+    return class_entry;
+}
+
 zend_class_entry *property_hook_class() {
     static zend_class_entry *class_entry = nullptr;
     if (class_entry != nullptr) {
@@ -59,6 +75,29 @@ zend_class_entry *property_hook_class() {
     return class_entry;
 }
 
+zend_class_entry *magic_property_class(const char *name, const char *prefix) {
+    if (auto *class_entry = getClassEntry(name)) {
+        return class_entry;
+    }
+    eval(String::format(R"PHP(
+        #[AllowDynamicProperties]
+        class %s {
+            private array $values = [];
+            public int $setCalls = 0;
+            public function __get(string $name): mixed {
+                return $this->values[$name] ?? null;
+            }
+            public function __set(string $name, mixed $value): void {
+                $this->setCalls++;
+                $this->values[$name] = '%s:' . $value;
+            }
+        }
+    )PHP",
+                        name,
+                        prefix));
+    return getClassEntrySafe(name);
+}
+
 Object new_property_hook_object() {
     return newObject(property_hook_class());
 }
@@ -75,6 +114,56 @@ TEST(typephp_property, scoped_read_and_write_use_hooks) {
 
     typephp_write_property_scoped(object, "plain", 8, scope);
     ASSERT_EQ(typephp_read_property_scoped(object, "plain", scope, AttrMode::Get).toInt(), 8);
+}
+
+TEST(typephp_property, scoped_write_borrows_string_names_and_dereferences_values) {
+    auto object = new_property_hook_object();
+    auto *scope = property_hook_class();
+
+    Variant property_name{"plain"};
+    auto property_name_reference = property_name.toReference();
+    Variant source{19};
+    auto source_reference = source.toReference();
+
+    typephp_write_property_scoped(object, property_name_reference, source_reference, scope);
+    source_reference = 20;
+
+    ASSERT_EQ(typephp_read_property_scoped(object, "plain", scope, AttrMode::Get).toInt(), 19);
+    ASSERT_EQ(source.toInt(), 20);
+
+    Variant indirect_reference{source_reference.ptr(), Ctor::Indirect};
+    typephp_write_property_scoped(object, property_name_reference, indirect_reference, scope);
+    source_reference = 21;
+
+    ASSERT_EQ(typephp_read_property_scoped(object, "plain", scope, AttrMode::Get).toInt(), 20);
+    ASSERT_EQ(source.toInt(), 21);
+}
+
+TEST(typephp_property, named_cache_uses_handlers_and_revalidates_runtime_class) {
+    auto first = newObject(magic_property_class("PhpxCachedMagicFirst", "first"));
+    auto second = newObject(magic_property_class("PhpxCachedMagicSecond", "second"));
+    String member{"value"};
+    PropertyCacheSlot read_cache;
+    PropertyCacheSlot write_cache;
+
+    typephp_write_property_cached(first, member, 1, nullptr, write_cache);
+    typephp_write_property_cached(second, member, 2, nullptr, write_cache);
+    typephp_write_property_cached(first, member, 3, nullptr, write_cache);
+
+    ASSERT_STREQ(typephp_read_property_cached(first, member, AttrMode::Get, read_cache).toCString(), "first:3");
+    ASSERT_STREQ(typephp_read_property_cached(second, member, AttrMode::Get, read_cache).toCString(), "second:2");
+    ASSERT_STREQ(typephp_read_property_cached(first, member, AttrMode::Get, read_cache).toCString(), "first:3");
+    ASSERT_EQ(first.attr("setCalls").toInt(), 2);
+    ASSERT_EQ(second.attr("setCalls").toInt(), 1);
+}
+
+TEST(typephp_property, named_cache_rejects_non_objects) {
+    String member{"value"};
+    PropertyCacheSlot cache;
+    try_call([&]() { (void) typephp_read_property_cached(42, member, AttrMode::Get, cache); },
+             "Attempt to read property `value` on int");
+    try_call([&]() { typephp_write_property_cached(42, member, 1, nullptr, cache); },
+             "Attempt to write property `value` on int");
 }
 
 TEST(typephp_property, getter_without_setter_is_read_only) {
@@ -134,5 +223,41 @@ TEST(typephp_property, scoped_helpers_reject_non_objects) {
     try_call([]() { (void) typephp_read_property_scoped(42, "value", nullptr, AttrMode::Get); },
              "Attempt to read property `value` on int");
     try_call([]() { typephp_write_property_scoped(42, "value", 1, nullptr); },
+             "Attempt to write property `value` on int");
+}
+
+TEST(typephp_property, property_reference_rebind_preserves_typed_sources) {
+    auto *scope = property_reference_class();
+    auto object = newObject(scope);
+
+    Array original;
+    auto original_reference = original.toReference();
+    typephp_rebind_property_reference(object, "value", original_reference, scope);
+
+    original.set("first", 1);
+    ASSERT_EQ(object.attr("value").toArray().get("first").toInt(), 1);
+
+    Variant invalid{"invalid"};
+    auto invalid_reference = invalid.toReference();
+    try_call([&]() { typephp_rebind_property_reference(object, "value", invalid_reference, scope); },
+             "Cannot assign string to property PhpxPropertyReferenceCoverage::$value of type ?array");
+    ASSERT_EQ(object.attr("value").toArray().get("first").toInt(), 1);
+
+    Array replacement;
+    auto replacement_reference = replacement.toReference();
+    typephp_rebind_property_reference(object, "value", replacement_reference, scope);
+
+    original_reference = Variant{"detached"};
+    ASSERT_STREQ(original_reference.toCString(), "detached");
+
+    try_call([&]() { replacement_reference = Variant{"invalid"}; },
+             "Cannot assign string to reference held by property PhpxPropertyReferenceCoverage::$value of type ?array");
+    ASSERT_TRUE(object.attr("value").isArray());
+}
+
+TEST(typephp_property, property_reference_rebind_rejects_non_objects) {
+    Array value;
+    auto reference = value.toReference();
+    try_call([&]() { typephp_rebind_property_reference(42, "value", reference, nullptr); },
              "Attempt to write property `value` on int");
 }

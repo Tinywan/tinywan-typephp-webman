@@ -64,7 +64,7 @@ class FunctionDef
     public string $displayName = '';
 
     /**
-     * @var string 必须是带有命名空间的完整类名
+     * @var string Must be a fully qualified class name including the namespace
      */
     public string $returnClass = '';
     /** Whether a Native object return may be represented by nullptr. */

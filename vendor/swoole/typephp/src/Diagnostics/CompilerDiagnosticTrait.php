@@ -10,7 +10,6 @@ namespace TypePhp\Diagnostics;
 
 use PhpParser\Node;
 use PhpParser\Node\Expr\Variable;
-use PhpParser\NodeAbstract;
 
 trait CompilerDiagnosticTrait
 {
@@ -22,7 +21,7 @@ trait CompilerDiagnosticTrait
         $this->getDiagnosticReporter()->fatal($msg);
     }
 
-    public function fatalError(NodeAbstract $node, string $msg): never
+    public function fatalError(Node $node, string $msg): never
     {
         $this->error("{$msg} in {$this->file}:{$node->getStartLine()}");
     }
@@ -56,12 +55,12 @@ trait CompilerDiagnosticTrait
         $this->fatalError($node, "The variable `\${$node->name}` is undefined");
     }
 
-    protected function warningUndefinedBehavior(NodeAbstract $expr): void
+    protected function warningUndefinedBehavior(Node $expr): void
     {
         $this->warning($expr, 'Use this expression carefully, which may be inconsistent with the dynamic execution behavior');
     }
 
-    protected function dump(NodeAbstract $node): void
+    protected function dump(Node $node): void
     {
         if ($this->debugLine == $node->getStartLine()) {
             var_dump($node);

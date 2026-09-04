@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include "phpx_compat.h"
-
 /**
  * Do not trust any header files of PHP, its internal implementation is very chaotic,
  * which must be wrapped in extern "C" {}
@@ -32,70 +30,8 @@ extern "C" {
 #include <ext/standard/php_standard.h>
 }
 
-// PHP's Windows compatibility headers may define C-style function macros
-// after phpx_compat.h has been included. They collide with PHPX method names
-// such as SplFileObject::ftruncate() and mysqli_result::free().
-#if defined(WIN32) || defined(_WIN32)
-#ifdef ftruncate
-#undef ftruncate
-#endif
-#ifdef free
-#undef free
-#endif
-#ifdef IGNORE
-#undef IGNORE
-#endif
-#ifdef DELETE
-#undef DELETE
-#endif
-#ifdef IPC_NOWAIT
-#undef IPC_NOWAIT
-#endif
-#ifdef getuid
-#undef getuid
-#endif
-#ifdef ERROR
-#undef ERROR
-#endif
-#ifdef getcwd
-#undef getcwd
-#endif
-#ifdef rmdir
-#undef rmdir
-#endif
-#ifdef mkdir
-#undef mkdir
-#endif
-#ifdef lstat
-#undef lstat
-#endif
-#ifdef tempnam
-#undef tempnam
-#endif
-#ifdef MSG_OOB
-#undef MSG_OOB
-#endif
-#ifdef MSG_WAITALL
-#undef MSG_WAITALL
-#endif
-#ifdef MSG_PEEK
-#undef MSG_PEEK
-#endif
-#ifdef MSG_DONTWAIT
-#undef MSG_DONTWAIT
-#endif
-#ifdef SHUT_RDWR
-#undef SHUT_RDWR
-#endif
-#ifdef SHUT_RD
-#undef SHUT_RD
-#endif
-#ifdef SHUT_WR
-#undef SHUT_WR
-#endif
-#endif
-
 #include "phpx_types.h"
+#include "phpx_compat.h"
 
 #if PHP_VERSION_ID < 80400
 #error "PHPX requires PHP 8.4 or later."
@@ -118,15 +54,7 @@ extern "C" {
 /**
  * All API names must be in lowercase camel case.
  */
-#if defined(WIN32) || defined(_WIN32)
-#if defined(PHPX_EXPORTS)
-#define PHPX_API __declspec(dllexport)
-#else
-#define PHPX_API __declspec(dllimport)
-#endif
-#else
 #define PHPX_API PHPAPI
-#endif
 #define PHPX_UNSAFE
 
 #include "phpx_native_gc.h"
@@ -979,6 +907,88 @@ using enable_if_floating_point = std::enable_if_t<is_floating_point_v<T>, Ret>;
 template <typename T, typename Ret = int>
 using enable_if_arithmetic_non_bool = std::enable_if_t<is_arithmetic_non_bool_v<T>, Ret>;
 
+namespace detail {
+
+enum class CompareRelation : uint8_t {
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+};
+
+template <CompareRelation Relation>
+inline constexpr bool compare_relation_is_reverse_v =
+    Relation == CompareRelation::Greater || Relation == CompareRelation::GreaterOrEqual;
+
+template <CompareRelation Relation>
+inline constexpr bool compare_relation_is_inclusive_v =
+    Relation == CompareRelation::LessOrEqual || Relation == CompareRelation::GreaterOrEqual;
+
+template <bool Inclusive, typename L, typename R>
+static zend_always_inline bool compareOrdered(L left, R right) {
+    if constexpr (Inclusive) {
+        return left <= right;
+    } else {
+        return left < right;
+    }
+}
+
+template <CompareRelation Relation, typename L, typename R>
+static zend_always_inline bool compareRelation(L left, R right) {
+    if constexpr (compare_relation_is_reverse_v<Relation>) {
+        return compareOrdered<compare_relation_is_inclusive_v<Relation>>(right, left);
+    } else {
+        return compareOrdered<compare_relation_is_inclusive_v<Relation>>(left, right);
+    }
+}
+
+// Checked PHP integer arithmetic. GCC/Clang lower these builtins to a native
+// arithmetic instruction plus the overflow branch; the portable paths avoid
+// signed C++ overflow and are used by MSVC.
+static inline bool intAddOverflow(zend_long a, zend_long b, zend_long *result) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_add_overflow(a, b, result);
+#else
+    if (UNEXPECTED((b > 0 && a > ZEND_LONG_MAX - b) || (b < 0 && a < ZEND_LONG_MIN - b))) {
+        return true;
+    }
+    *result = a + b;
+    return false;
+#endif
+}
+
+static inline bool intSubOverflow(zend_long a, zend_long b, zend_long *result) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_sub_overflow(a, b, result);
+#else
+    if (UNEXPECTED((b < 0 && a > ZEND_LONG_MAX + b) || (b > 0 && a < ZEND_LONG_MIN + b))) {
+        return true;
+    }
+    *result = a - b;
+    return false;
+#endif
+}
+
+static inline bool intMulOverflow(zend_long a, zend_long b, zend_long *result) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_mul_overflow(a, b, result);
+#else
+    if (a == ZEND_LONG_MIN && b == -1) return true;
+    if (b == ZEND_LONG_MIN && a == -1) return true;
+    if (a > 0) {
+        if (b > 0 && a > ZEND_LONG_MAX / b) return true;
+        if (b < 0 && b < ZEND_LONG_MIN / a) return true;
+    } else if (a < 0) {
+        if (b > 0 && a < ZEND_LONG_MIN / b) return true;
+        if (b < 0 && a < ZEND_LONG_MAX / b) return true;
+    }
+    *result = a * b;
+    return false;
+#endif
+}
+
+}  // namespace detail
+
 class Variant {
   protected:
     zval val;
@@ -1407,6 +1417,8 @@ class Variant {
     Reference itemRef(const Variant &key);
     Variant newItem();
     Reference attrRef(const String &name);
+    Variant attr(const char *name, AttrMode mode = AttrMode::Get) const;
+    Variant attr(const String &name, AttrMode mode = AttrMode::Get) const;
     Variant attr(const Variant &name, AttrMode mode = AttrMode::Get) const;
     Variant attr(uintptr_t offset, AttrMode mode = AttrMode::Get) const {
         auto member_p = OBJ_PROP(checkedObject("Attempt to read property"), offset);
@@ -1447,6 +1459,96 @@ class Variant {
     bool operator<=(const Variant &v) const;
     bool operator>=(const Variant &v) const;
 
+  private:
+    template <detail::CompareRelation Relation>
+    bool comparePrimitiveFallback(const Variant &right) const {
+        if constexpr (Relation == detail::CompareRelation::Less) {
+            return operator<(right);
+        } else if constexpr (Relation == detail::CompareRelation::LessOrEqual) {
+            return operator<=(right);
+        } else if constexpr (Relation == detail::CompareRelation::Greater) {
+            return operator>(right);
+        } else {
+            return operator>=(right);
+        }
+    }
+
+    template <detail::CompareRelation Relation, typename T>
+    bool comparePrimitive(T raw) const {
+        const zval *left = unwrap_ptr();
+        const uint8_t left_type = Z_TYPE_P(left);
+        if constexpr (is_integral_non_bool_v<T>) {
+            const Int right = static_cast<Int>(raw);
+            if (EXPECTED(left_type == IS_LONG)) {
+                return detail::compareRelation<Relation>(Z_LVAL_P(left), right);
+            }
+            if (EXPECTED(left_type == IS_DOUBLE)) {
+                return detail::compareRelation<Relation>(Z_DVAL_P(left), static_cast<double>(right));
+            }
+            return comparePrimitiveFallback<Relation>(Variant(right));
+        } else {
+            const double right = static_cast<double>(raw);
+            if (EXPECTED(left_type == IS_DOUBLE)) {
+                return detail::compareRelation<Relation>(Z_DVAL_P(left), right);
+            }
+            if (EXPECTED(left_type == IS_LONG)) {
+                return detail::compareRelation<Relation>(static_cast<double>(Z_LVAL_P(left)), right);
+            }
+            return comparePrimitiveFallback<Relation>(Variant(right));
+        }
+    }
+
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool equalsPrimitive(T raw) const {
+        const zval *left = unwrap_ptr();
+        const uint8_t left_type = Z_TYPE_P(left);
+        if constexpr (is_integral_non_bool_v<T>) {
+            const Int right = static_cast<Int>(raw);
+            if (EXPECTED(left_type == IS_LONG)) {
+                return Z_LVAL_P(left) == right;
+            }
+            if (EXPECTED(left_type == IS_DOUBLE)) {
+                return Z_DVAL_P(left) == static_cast<double>(right);
+            }
+            return equals(Variant(right));
+        } else {
+            const double right = static_cast<double>(raw);
+            if (EXPECTED(left_type == IS_DOUBLE)) {
+                return Z_DVAL_P(left) == right;
+            }
+            if (EXPECTED(left_type == IS_LONG)) {
+                return static_cast<double>(Z_LVAL_P(left)) == right;
+            }
+            return equals(Variant(right));
+        }
+    }
+
+  public:
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator<(T raw) const {
+        return comparePrimitive<detail::CompareRelation::Less>(raw);
+    }
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator>(T raw) const {
+        return comparePrimitive<detail::CompareRelation::Greater>(raw);
+    }
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator<=(T raw) const {
+        return comparePrimitive<detail::CompareRelation::LessOrEqual>(raw);
+    }
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator>=(T raw) const {
+        return comparePrimitive<detail::CompareRelation::GreaterOrEqual>(raw);
+    }
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator==(T raw) const {
+        return equalsPrimitive(raw);
+    }
+    template <typename T, enable_if_arithmetic_non_bool<T> = 0>
+    bool operator!=(T raw) const {
+        return !equalsPrimitive(raw);
+    }
+
     bool equals(const Variant &v, bool strict = false) const;
     bool almostEquals(const Variant &v, double eps = 1e-9) const {
         return std::fabs(toFloat() - v.toFloat()) <= eps;
@@ -1465,6 +1567,91 @@ class Variant {
     Variant operator++(int);
     Variant operator--(int);
     // Binary operators
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator+=(T raw) {
+        const Int v = static_cast<Int>(raw);
+        zval *target = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(target) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(target);
+            zend_long result;
+            if (UNEXPECTED(detail::intAddOverflow(a, v, &result))) {
+                ZVAL_DOUBLE(target, (double) a + (double) v);
+            } else {
+                ZVAL_LONG(target, result);
+            }
+            return *this;
+        }
+        return *this += Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator-=(T raw) {
+        const Int v = static_cast<Int>(raw);
+        zval *target = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(target) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(target);
+            zend_long result;
+            if (UNEXPECTED(detail::intSubOverflow(a, v, &result))) {
+                ZVAL_DOUBLE(target, (double) a - (double) v);
+            } else {
+                ZVAL_LONG(target, result);
+            }
+            return *this;
+        }
+        return *this -= Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator*=(T raw) {
+        const Int v = static_cast<Int>(raw);
+        zval *target = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(target) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(target);
+            zend_long result;
+            if (UNEXPECTED(detail::intMulOverflow(a, v, &result))) {
+                ZVAL_DOUBLE(target, (double) a * (double) v);
+            } else {
+                ZVAL_LONG(target, result);
+            }
+            return *this;
+        }
+        return *this *= Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant &operator/=(T raw) {
+        const Int v = static_cast<Int>(raw);
+        zval *target = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(target) == IS_LONG) && EXPECTED(v != 0)) {
+            const zend_long a = Z_LVAL_P(target);
+            if (UNEXPECTED(a == ZEND_LONG_MIN && v == -1)) {
+                ZVAL_DOUBLE(target, (double) a / (double) v);
+            } else if (a % v == 0) {
+                ZVAL_LONG(target, a / v);
+            } else {
+                ZVAL_DOUBLE(target, (double) a / (double) v);
+            }
+            return *this;
+        }
+        // Preserve PHP's dynamic coercion and DivisionByZeroError behavior on
+        // the uncommon non-integer/zero-divisor path.
+        return *this /= Variant(v);
+    }
+    Variant &addAssign(const Variant &v) {
+        zval *target = unwrap_ptr();
+        const zval *right = v.unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(target) == IS_LONG && Z_TYPE_P(right) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(target);
+            const zend_long b = Z_LVAL_P(right);
+            zend_long result;
+            if (UNEXPECTED(detail::intAddOverflow(a, b, &result))) {
+                ZVAL_DOUBLE(target, (double) a + (double) b);
+            } else {
+                ZVAL_LONG(target, result);
+            }
+            return *this;
+        }
+        add_function(target, target, const_cast<zval *>(right));
+        throwErrorIfOccurred();
+        return *this;
+    }
     Variant &operator+=(const Variant &);
     Variant &operator-=(const Variant &);
     Variant &operator/=(const Variant &);
@@ -1475,6 +1662,55 @@ class Variant {
     Variant &operator&=(const Variant &);
     Variant &operator|=(const Variant &);
     Variant &operator^=(const Variant &);
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant operator+(T raw) const {
+        const Int v = static_cast<Int>(raw);
+        const zval *left = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(left) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(left);
+            zend_long result;
+            return UNEXPECTED(detail::intAddOverflow(a, v, &result)) ? Variant((double) a + (double) v)
+                                                                     : Variant(result);
+        }
+        return *this + Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant operator-(T raw) const {
+        const Int v = static_cast<Int>(raw);
+        const zval *left = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(left) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(left);
+            zend_long result;
+            return UNEXPECTED(detail::intSubOverflow(a, v, &result)) ? Variant((double) a - (double) v)
+                                                                     : Variant(result);
+        }
+        return *this - Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant operator*(T raw) const {
+        const Int v = static_cast<Int>(raw);
+        const zval *left = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(left) == IS_LONG)) {
+            const zend_long a = Z_LVAL_P(left);
+            zend_long result;
+            return UNEXPECTED(detail::intMulOverflow(a, v, &result)) ? Variant((double) a * (double) v)
+                                                                     : Variant(result);
+        }
+        return *this * Variant(v);
+    }
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    Variant operator/(T raw) const {
+        const Int v = static_cast<Int>(raw);
+        const zval *left = unwrap_ptr();
+        if (EXPECTED(Z_TYPE_P(left) == IS_LONG) && EXPECTED(v != 0)) {
+            const zend_long a = Z_LVAL_P(left);
+            if (UNEXPECTED(a == ZEND_LONG_MIN && v == -1)) {
+                return Variant((double) a / (double) v);
+            }
+            return a % v == 0 ? Variant(a / v) : Variant((double) a / (double) v);
+        }
+        return *this / Variant(v);
+    }
     Variant operator+(const Variant &) const;
     Variant operator-(const Variant &) const;
     Variant operator*(const Variant &) const;
@@ -1665,6 +1901,14 @@ class String : public Variant {
     String dirname() const;
     void print() const;
 };
+
+inline Variant Variant::attr(const char *name, AttrMode mode) const {
+    return attr(String{name}, mode);
+}
+
+inline Variant Variant::attr(const Variant &name, AttrMode mode) const {
+    return attr(name.toString(), mode);
+}
 
 inline bool StdStringLess::operator()(const String &a, const String &b) const {
     return zend_binary_strcmp(a.data(), a.length(), b.data(), b.length()) < 0;
@@ -1981,6 +2225,28 @@ class Array : public Variant {
     // PHP's ordinary array writes dereference the source zval. The lower-level
     // set()/append() APIs deliberately preserve references for explicit =& use.
     void setValue(const Variant &key, const Variant &v);
+    template <typename T, enable_if_integral_non_bool<T> = 0>
+    void appendValue(T value) {
+        zval *target = unwrap_ptr();
+        SEPARATE_ARRAY(target);
+        add_next_index_long(target, static_cast<zend_long>(value));
+    }
+    template <typename T, enable_if_floating_point<T> = 0>
+    void appendValue(T value) {
+        zval *target = unwrap_ptr();
+        SEPARATE_ARRAY(target);
+        add_next_index_double(target, static_cast<double>(value));
+    }
+    void appendValue(bool value) {
+        zval *target = unwrap_ptr();
+        SEPARATE_ARRAY(target);
+        add_next_index_bool(target, value);
+    }
+    void appendValue(std::nullptr_t) {
+        zval *target = unwrap_ptr();
+        SEPARATE_ARRAY(target);
+        add_next_index_null(target);
+    }
     void appendValue(const Variant &v);
     void appendValue(Variant &&v);
     void append(const Variant &v);
@@ -2055,6 +2321,16 @@ class Array : public Variant {
     bool contains(const Variant &_other_var, bool strict = false) const;
     String join(const String &delim);
     void merge(const Array &source);
+    /**
+     * Append source elements using PHP argument-unpacking semantics for a
+     * by-reference variadic parameter. The source array is separated before
+     * its elements are converted to references, so ordinary COW aliases keep
+     * their values while assignments in the callee write back to source.
+     */
+    void mergeReferences(Array &source);
+    void mergeReferences(Array &&source) {
+        mergeReferences(source);
+    }
     void sort(bool renumber = true);
     Array slice(Int offset, Int length = -1, bool preserve_keys = false);
 };
@@ -2162,6 +2438,17 @@ class Args {
 PHPX_API extern zend_function *getFunction(const String &name);
 PHPX_API extern zend_function *getMethod(const String &class_name, const String &name);
 PHPX_API extern zend_function *getMethod(zend_class_entry *ce, const String &name);
+
+/**
+ * Resolve an internal class during module initialization.
+ *
+ * Internal classes and classes supplied by extension dependencies are stored
+ * in CG(class_table). Do not use these APIs for PHP-script classes: those
+ * belong to the request class table and may be loaded only after request
+ * startup. The Safe variant raises E_CORE_ERROR when the class is missing.
+ */
+PHPX_API zend_class_entry *getInternalClassEntry(const String &name);
+PHPX_API zend_class_entry *getInternalClassEntrySafe(const String &name);
 
 static inline Variant call(const Variant &func) {
     return call_impl(nullptr, func.const_ptr());
@@ -2309,6 +2596,21 @@ template <typename T,
 static inline T takeValue(T &source) {
     T result;
     static_cast<Variant &>(result) = std::move(static_cast<Variant &>(source));
+    return result;
+}
+
+/**
+ * Copy a PHP value into independent storage.
+ *
+ * This is the non-consuming counterpart of takeValue(). In particular, an
+ * indirect array item or object property is materialized instead of keeping a
+ * writable alias to its storage, and a Reference is copied by value. Keeping
+ * this operation explicit avoids accidental aliasing caused by constructing a
+ * wrapper directly from an indirect temporary.
+ */
+static inline Variant copyValue(const Variant &source) {
+    Variant result;
+    result = source;
     return result;
 }
 
@@ -2484,11 +2786,34 @@ extern PHPX_API Int zero;
 extern PHPX_API Variant true_;
 extern PHPX_API Variant false_;
 
+struct ClosureParameter {
+    const char *name;
+    bool by_ref;
+    bool variadic;
+    bool required;
+};
+
+enum class ClosureStrictTypes : uint8_t {
+    Disabled,
+    Enabled,
+};
+
 extern Object newClosure(const ClosureFn &fn,
                          const ArgList &uses = {},
                          const Object &_this = {},
                          zend_class_entry *scope = nullptr,
                          std::initializer_list<const char *> parameter_names = {});
+extern Object newClosureWithParameters(const ClosureFn &fn,
+                                       const ArgList &uses,
+                                       const Object &_this,
+                                       zend_class_entry *scope,
+                                       std::initializer_list<ClosureParameter> parameters);
+extern Object newClosureWithParameters(const ClosureFn &fn,
+                                       const ArgList &uses,
+                                       const Object &_this,
+                                       zend_class_entry *scope,
+                                       std::initializer_list<ClosureParameter> parameters,
+                                       ClosureStrictTypes strict_types);
 extern PHPX_API Variant prepareScopedCallback(const Variant &callable, const CallableScope &scope);
 extern PHPX_API Object makeScopedCallable(const Variant &callable, const CallableScope &scope);
 extern PHPX_API Variant normalizeCallableClass(const Variant &callable, const CallableScope &scope);

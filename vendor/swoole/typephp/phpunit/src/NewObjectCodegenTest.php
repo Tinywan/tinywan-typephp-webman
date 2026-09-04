@@ -119,6 +119,40 @@ final class NewObjectCodegenTest extends \BaseTest
         );
     }
 
+    public function testOrdinaryClassesKeepNativeReadAndWritePropertyHandlers(): void
+    {
+        [, $extension] = $this->compileFixtureAndExtension();
+
+        self::assertStringContainsString(
+            'property_handlers_KnownNewObjectCodegen.read_property = '
+            . 'base_property_handlers_KnownNewObjectCodegen->read_property;',
+            $extension,
+        );
+        self::assertStringContainsString(
+            'property_handlers_KnownNewObjectCodegen.write_property = '
+            . 'base_property_handlers_KnownNewObjectCodegen->write_property;',
+            $extension,
+        );
+    }
+
+    public function testHookAndAsymmetricClassesKeepOnlyRequiredDispatchHandlers(): void
+    {
+        [, $extension] = $this->compileFixtureAndExtension();
+
+        self::assertStringNotContainsString('base_property_handlers_HookOnlyDefaultCodegen', $extension);
+        self::assertStringNotContainsString('base_property_handlers_GetterOnlyDefaultCodegen', $extension);
+        self::assertStringContainsString(
+            'property_handlers_AsymmetricOnlyDefaultCodegen.read_property = '
+            . 'base_property_handlers_AsymmetricOnlyDefaultCodegen->read_property;',
+            $extension,
+        );
+        self::assertStringNotContainsString(
+            'property_handlers_AsymmetricOnlyDefaultCodegen.write_property = '
+            . 'base_property_handlers_AsymmetricOnlyDefaultCodegen->write_property;',
+            $extension,
+        );
+    }
+
     private function compileFixture(): string
     {
         return $this->compileFixtureAndExtension()[0];

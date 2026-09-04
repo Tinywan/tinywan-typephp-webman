@@ -30,14 +30,18 @@ trait LoopVarOptimizer
         'mb_substr_count' => true,
     ];
 
-    protected function optimizeLoopVars(SsaBuilder $ssa): void
+    /**
+     * @return array<string, string> Escaped local name => narrowed C++ type.
+     */
+    protected function optimizeLoopVars(SsaBuilder $ssa): array
     {
         $stmts = $ssa->getStmts();
         if (!$stmts) {
-            return;
+            return [];
         }
 
         $candidates = [];
+        $optimized = [];
         $this->collectLoopVarCandidates($stmts, [], $candidates);
 
         foreach ($candidates as $varName => $candidate) {
@@ -65,7 +69,10 @@ trait LoopVarOptimizer
                 continue;
             }
             $this->context->localVars[$escapedName] = Type::INT;
+            $optimized[$escapedName] = Type::INT;
         }
+
+        return $optimized;
     }
 
     /**
@@ -363,7 +370,24 @@ trait LoopVarOptimizer
         }
 
         if ($expr instanceof Expr\Variable && is_string($expr->name)) {
-            return $safeVars[$expr->name] ?? null;
+            if (isset($safeVars[$expr->name])) {
+                return $safeVars[$expr->name];
+            }
+
+            // Typed parameters already use a native php::Int slot. They are
+            // safe as exclusive loop bounds: `for ($i = 0; $i < $n; $i++)`
+            // cannot increment past PHP_INT_MAX. Their sign and distance from
+            // the integer limits are unknown, so do not accept them for the
+            // non-negative post-decrement or inclusive-bound cases.
+            $argumentName = $this->escapeVarName($expr->name);
+            if (($this->context->arguments[$argumentName] ?? null) === Type::INT) {
+                return [
+                    'nonNegative' => false,
+                    'inclusiveSafe' => false,
+                ];
+            }
+
+            return null;
         }
 
         if ($this->isLoopIntCall($expr)) {
@@ -385,6 +409,17 @@ trait LoopVarOptimizer
             && !$expr instanceof Expr\MethodCall
             && !$expr instanceof Expr\StaticCall
             && !$expr instanceof Expr\NullsafeMethodCall) {
+            return false;
+        }
+
+        // This pass runs before statement conversion has populated all local
+        // variable types. Avoid asking the general expression detector to
+        // resolve chained/dynamic receivers here: apart from being needlessly
+        // expensive for unrelated assignments, that can report an undefined
+        // receiver before its preceding assignment has been converted. Direct
+        // calls such as `$object->toInt()` remain eligible.
+        if (($expr instanceof Expr\MethodCall || $expr instanceof Expr\NullsafeMethodCall)
+            && (!$expr->var instanceof Expr\Variable || !is_string($expr->var->name))) {
             return false;
         }
 
@@ -652,7 +687,15 @@ trait LoopVarOptimizer
         }
 
         if ($expr instanceof Expr\BinaryOp) {
-            if (isset(self::SAFE_INT_BINARY_OPS[$expr->getType()])) {
+            if (isset(self::SAFE_INT_BINARY_OPS[$expr->getType()])
+                || $expr instanceof Expr\BinaryOp\Plus
+                || $expr instanceof Expr\BinaryOp\Minus
+                || $expr instanceof Expr\BinaryOp\Mul) {
+                // In ordinary PHP mode BinaryOpTrait routes native Int
+                // addition/subtraction/multiplication through php::Var's
+                // checked operators, preserving overflow-to-float semantics.
+                // Narrowing the loop counter therefore does not make these
+                // read-only expression uses native C++ arithmetic.
                 return $this->loopExprHasIntHazard($expr->left, $varName, $allowedNodes)
                     || $this->loopExprHasIntHazard($expr->right, $varName, $allowedNodes);
             }
@@ -712,6 +755,17 @@ trait LoopVarOptimizer
                 if ($this->isVarNamed($var, $varName)) {
                     return true;
                 }
+            }
+        }
+
+        if ($expr instanceof Stmt\Foreach_) {
+            // Foreach key/value variables are assigned implicitly on every
+            // iteration. A name that is also used by a range-proven `for`
+            // counter cannot share a function-scoped php::Int slot with an
+            // arbitrary key or value (including list destructuring targets).
+            if (($expr->keyVar instanceof Node && $this->exprUsesVar($expr->keyVar, $varName))
+                || $this->exprUsesVar($expr->valueVar, $varName)) {
+                return true;
             }
         }
 

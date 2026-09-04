@@ -49,7 +49,8 @@ class UtilsTest extends TestCase
     public function testGenCValueFloat(): void
     {
         $result = $this->invokeMethod('genCValue', 3.14);
-        $this->assertSame((string) 3.14, $result);
+        $this->assertSame(3.14, (float) $result);
+        $this->assertMatchesRegularExpression('/[.E]/i', $result);
     }
 
     public function testGenCValueBool(): void

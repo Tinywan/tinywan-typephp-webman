@@ -48,7 +48,8 @@ class ArgInfo
     public bool $immutable = false;
 
     /**
-     * Each element: ['kind' => 'isInt'|'isFloat'|...|'instanceof', 'class' => '']
+     * Each element: ['kind' => 'isInt'|'isFloat'|...|'instanceof', 'class' => '',
+     * optional 'lateBound' => 'self'|'static'|'parent'].
      * Null means no runtime type check needed.
      */
     public ?array $typeCheck = null;

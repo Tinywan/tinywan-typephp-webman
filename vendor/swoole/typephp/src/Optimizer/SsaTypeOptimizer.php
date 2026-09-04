@@ -318,7 +318,7 @@ trait SsaTypeOptimizer
      */
     protected function exprCanOverflowInt(NodeAbstract $expr): bool
     {
-        // Division always produces float in PHP when operands are int
+        // Runtime division may produce float even when both operands are int.
         if ($expr instanceof Node\Expr\BinaryOp\Div) {
             return true;
         }

@@ -61,14 +61,26 @@ void Variant::copyFrom(const zval *src) {
 }
 
 void Variant::copyRef(Variant *v) {
-    auto zv = v->direct_ptr();
+    zval *source = v->direct_ptr();
+    zval replacement;
     if (v->isReference()) {
-        zval_copy_value(direct_ptr(), zv);
+        zval_copy(&replacement, source);
     } else {
-        ZVAL_NEW_REF(direct_ptr(), zv);
-        zval_copy_value(zv, direct_ptr());
+        ZVAL_NEW_REF(&replacement, source);
+        zval_copy_value(source, &replacement);
+        zval_try_add_ref(source);
     }
-    zval_try_add_ref(zv);
+
+    // Reference assignment rebinds the destination slot. It must release the
+    // old reference wrapper itself rather than destroy only its dereferenced
+    // value. ZVAL_COPY_VALUE preserves HashTable bucket metadata when target
+    // is an indirect array element and also makes self-rebinding safe.
+    zval *target = direct_ptr();
+    zval old;
+    ZVAL_COPY_VALUE(&old, target);
+    ZVAL_COPY_VALUE(target, &replacement);
+    zval_ptr_dtor(&old);
+    throwErrorIfOccurred();
 }
 
 Variant &Variant::operator=(const zval *v) {
@@ -107,7 +119,6 @@ Variant &Variant::operator=(Variant &&v) {
 }
 
 Variant &Variant::operator=(Variant *v) {
-    destroy();
     copyRef(v);
     return *this;
 }
@@ -387,6 +398,8 @@ void Variant::offsetSet(zend_long offset, const Variant &value) {
     } else if (zval_is_string(zvar)) {
         String tmp(zvar, Ctor::Indirect);
         tmp.offsetSet(offset, value);
+    } else {
+        throwError("Only array/object/string support the offsetSet() method, type `%s` given", typeStr());
     }
 }
 
@@ -409,6 +422,8 @@ void Variant::offsetSet(const Variant &key, const Variant &value) {
         }
         String tmp(zvar, Ctor::Indirect);
         tmp.offsetSet(key.toInt(), value);
+    } else {
+        throwError("Only array/object/string support the offsetSet() method, type `%s` given", typeStr());
     }
 }
 
@@ -532,20 +547,71 @@ static inline Variant calc_op(const binary_op_type op, const zval *op1, const zv
     return result;
 }
 
-static zend_result ZEND_FASTCALL is_greater_function(zval *result, zval *op1, zval *op2) {
-    return is_smaller_function(result, op2, op1);
+template <detail::CompareRelation Relation>
+static bool compare_fast_impl(const Variant &a, const Variant &b) {
+    const zval *left = a.unwrap_ptr();
+    const zval *right = b.unwrap_ptr();
+    const uint8_t left_type = Z_TYPE_P(left);
+    const uint8_t right_type = Z_TYPE_P(right);
+
+    if (EXPECTED(left_type == IS_LONG)) {
+        if (EXPECTED(right_type == IS_LONG)) {
+            return detail::compareRelation<Relation>(Z_LVAL_P(left), Z_LVAL_P(right));
+        }
+        if (EXPECTED(right_type == IS_DOUBLE)) {
+            return detail::compareRelation<Relation>(static_cast<double>(Z_LVAL_P(left)), Z_DVAL_P(right));
+        }
+    } else if (EXPECTED(left_type == IS_DOUBLE)) {
+        if (EXPECTED(right_type == IS_DOUBLE)) {
+            return detail::compareRelation<Relation>(Z_DVAL_P(left), Z_DVAL_P(right));
+        }
+        if (EXPECTED(right_type == IS_LONG)) {
+            return detail::compareRelation<Relation>(Z_DVAL_P(left), static_cast<double>(Z_LVAL_P(right)));
+        }
+    }
+
+    constexpr binary_op_type op =
+        detail::compare_relation_is_inclusive_v<Relation> ? is_smaller_or_equal_function : is_smaller_function;
+    if constexpr (detail::compare_relation_is_reverse_v<Relation>) {
+        return compare_op(op, right, left);
+    } else {
+        return compare_op(op, left, right);
+    }
 }
 
-static zend_result ZEND_FASTCALL is_greater_or_equal_function(zval *result, zval *op1, zval *op2) {
-    return is_smaller_or_equal_function(result, op2, op1);
+// Fast path for == and ===: skip Zend API when both operands are numeric.
+// Strict comparison must not use the mixed int/float paths because PHP requires
+// identical zval types for ===.
+static bool equals_fast_impl(const Variant &a, const Variant &b, bool strict) {
+    const zval *left = a.unwrap_ptr();
+    const zval *right = b.unwrap_ptr();
+    const uint8_t left_type = Z_TYPE_P(left);
+    const uint8_t right_type = Z_TYPE_P(right);
+
+    if (EXPECTED(left_type == IS_LONG)) {
+        if (EXPECTED(right_type == IS_LONG)) {
+            return Z_LVAL_P(left) == Z_LVAL_P(right);
+        }
+        if (EXPECTED(right_type == IS_DOUBLE)) {
+            return !strict && static_cast<double>(Z_LVAL_P(left)) == Z_DVAL_P(right);
+        }
+    } else if (EXPECTED(left_type == IS_DOUBLE)) {
+        if (EXPECTED(right_type == IS_DOUBLE)) {
+            return Z_DVAL_P(left) == Z_DVAL_P(right);
+        }
+        if (EXPECTED(right_type == IS_LONG)) {
+            return !strict && Z_DVAL_P(left) == static_cast<double>(Z_LVAL_P(right));
+        }
+    }
+
+    if (strict) {
+        return compare_op(is_identical_function, left, right);
+    }
+    return compare_op(is_equal_function, left, right);
 }
 
 bool Variant::equals(const Variant &v, bool strict) const {
-    if (strict) {
-        return compare_op(is_identical_function, const_ptr(), v.const_ptr());
-    } else {
-        return compare_op(is_equal_function, const_ptr(), v.const_ptr());
-    }
+    return equals_fast_impl(*this, v, strict);
 }
 
 Variant Variant::serialize() {
@@ -570,101 +636,62 @@ Variant Variant::serialize() {
     return retval;
 }
 
-// Fast integer arithmetic with overflow detection.
-// GCC/Clang: __builtin_*_overflow — compile to single add+jo / sub+jo / mul+jo.
-// MSVC/other compilers: portable signed boundary checks. Unsigned carry and
-// borrow intrinsics cannot detect signed overflow (for example, -1 + 1 has an
-// unsigned carry but does not overflow as a signed integer).
-#if defined(__GNUC__) || defined(__clang__)
-#define PHPX_HAS_BUILTIN_OVERFLOW 1
-#else
-#define PHPX_HAS_BUILTIN_OVERFLOW 0
-#endif
-
-static inline bool fast_add_overflow(zend_long a, zend_long b, zend_long *result) {
-#if PHPX_HAS_BUILTIN_OVERFLOW
-    return __builtin_add_overflow(a, b, result);
-#else
-    if (UNEXPECTED((b > 0 && a > ZEND_LONG_MAX - b) || (b < 0 && a < ZEND_LONG_MIN - b))) {
-        return true;
-    }
-    *result = a + b;
-    return false;
-#endif
-}
-
-static inline bool fast_sub_overflow(zend_long a, zend_long b, zend_long *result) {
-#if PHPX_HAS_BUILTIN_OVERFLOW
-    return __builtin_sub_overflow(a, b, result);
-#else
-    if (UNEXPECTED((b < 0 && a > ZEND_LONG_MAX + b) || (b > 0 && a < ZEND_LONG_MIN + b))) {
-        return true;
-    }
-    *result = a - b;
-    return false;
-#endif
-}
-
-static inline bool fast_mul_overflow(zend_long a, zend_long b, zend_long *result) {
-#if PHPX_HAS_BUILTIN_OVERFLOW
-    return __builtin_mul_overflow(a, b, result);
-#else
-    // MSVC _mul128 is x64-only; portable division-based check is fine for mul.
-    if (a == ZEND_LONG_MIN && b == -1) return true;
-    if (b == ZEND_LONG_MIN && a == -1) return true;
-    if (a > 0) {
-        if (b > 0 && a > ZEND_LONG_MAX / b) return true;
-        if (b < 0 && b < ZEND_LONG_MIN / a) return true;
-    } else if (a < 0) {
-        if (b > 0 && a < ZEND_LONG_MIN / b) return true;
-        if (b < 0 && a < ZEND_LONG_MAX / b) return true;
-    }
-    *result = a * b;
-    return false;
-#endif
-}
-
 Variant &Variant::operator++() {
-    increment_function(unwrap_ptr());
+    zval *p = unwrap_ptr();
+    if (EXPECTED(Z_TYPE_P(p) == IS_LONG)) {
+        const zend_long val = Z_LVAL_P(p);
+        zend_long result;
+        if (UNEXPECTED(detail::intAddOverflow(val, 1, &result))) {
+            ZVAL_DOUBLE(p, static_cast<double>(val) + 1.0);
+        } else {
+            ZVAL_LONG(p, result);
+        }
+        return *this;
+    }
+    if (EXPECTED(Z_TYPE_P(p) == IS_DOUBLE)) {
+        Z_DVAL_P(p) += 1.0;
+        return *this;
+    }
+    increment_function(p);
     throwErrorIfOccurred();
     return *this;
 }
 
 Variant &Variant::operator--() {
-    decrement_function(unwrap_ptr());
+    zval *p = unwrap_ptr();
+    if (EXPECTED(Z_TYPE_P(p) == IS_LONG)) {
+        const zend_long val = Z_LVAL_P(p);
+        zend_long result;
+        if (UNEXPECTED(detail::intSubOverflow(val, 1, &result))) {
+            ZVAL_DOUBLE(p, static_cast<double>(val) - 1.0);
+        } else {
+            ZVAL_LONG(p, result);
+        }
+        return *this;
+    }
+    if (EXPECTED(Z_TYPE_P(p) == IS_DOUBLE)) {
+        Z_DVAL_P(p) -= 1.0;
+        return *this;
+    }
+    decrement_function(p);
     throwErrorIfOccurred();
     return *this;
 }
 
 Variant Variant::operator++(int) {
     auto original = *this;
-    increment_function(unwrap_ptr());
-    throwErrorIfOccurred();
+    ++(*this);
     return original;
 }
 
 Variant Variant::operator--(int) {
     auto original = *this;
-    decrement_function(unwrap_ptr());
-    throwErrorIfOccurred();
+    --(*this);
     return original;
 }
 
 Variant &Variant::operator+=(const Variant &v) {
-    if (isInt() && v.isInt()) {
-        zend_long a = Z_LVAL_P(unwrap_ptr());
-        zend_long b = Z_LVAL_P(v.unwrap_ptr());
-        zend_long result;
-        if (fast_add_overflow(a, b, &result)) {
-            ZVAL_DOUBLE(unwrap_ptr(), (double) a + (double) b);
-        } else {
-            ZVAL_LONG(unwrap_ptr(), result);
-        }
-        return *this;
-    }
-    add_function(unwrap_ptr(), unwrap_ptr(), NO_CONST_V(v));
-    throwErrorIfOccurred();
-    return *this;
+    return addAssign(v);
 }
 
 Variant &Variant::operator-=(const Variant &v) {
@@ -672,7 +699,7 @@ Variant &Variant::operator-=(const Variant &v) {
         zend_long a = Z_LVAL_P(unwrap_ptr());
         zend_long b = Z_LVAL_P(v.unwrap_ptr());
         zend_long result;
-        if (fast_sub_overflow(a, b, &result)) {
+        if (detail::intSubOverflow(a, b, &result)) {
             ZVAL_DOUBLE(unwrap_ptr(), (double) a - (double) b);
         } else {
             ZVAL_LONG(unwrap_ptr(), result);
@@ -712,7 +739,7 @@ Variant &Variant::operator*=(const Variant &v) {
         zend_long a = Z_LVAL_P(unwrap_ptr());
         zend_long b = Z_LVAL_P(v.unwrap_ptr());
         zend_long result;
-        if (fast_mul_overflow(a, b, &result)) {
+        if (detail::intMulOverflow(a, b, &result)) {
             ZVAL_DOUBLE(unwrap_ptr(), (double) a * (double) b);
         } else {
             ZVAL_LONG(unwrap_ptr(), result);
@@ -780,7 +807,7 @@ Variant Variant::operator+(const Variant &v) const {
         zend_long a = Z_LVAL_P(unwrap_ptr());
         zend_long b = Z_LVAL_P(v.unwrap_ptr());
         zend_long result;
-        if (fast_add_overflow(a, b, &result)) {
+        if (detail::intAddOverflow(a, b, &result)) {
             return Variant((double) a + (double) b);
         }
         return Variant(result);
@@ -793,7 +820,7 @@ Variant Variant::operator-(const Variant &v) const {
         zend_long a = Z_LVAL_P(unwrap_ptr());
         zend_long b = Z_LVAL_P(v.unwrap_ptr());
         zend_long result;
-        if (fast_sub_overflow(a, b, &result)) {
+        if (detail::intSubOverflow(a, b, &result)) {
             return Variant((double) a - (double) b);
         }
         return Variant(result);
@@ -806,7 +833,7 @@ Variant Variant::operator*(const Variant &v) const {
         zend_long a = Z_LVAL_P(unwrap_ptr());
         zend_long b = Z_LVAL_P(v.unwrap_ptr());
         zend_long result;
-        if (fast_mul_overflow(a, b, &result)) {
+        if (detail::intMulOverflow(a, b, &result)) {
             return Variant((double) a * (double) b);
         }
         return Variant(result);
@@ -907,19 +934,19 @@ void Variant::append(const Variant &v) {
 }
 
 bool Variant::operator<(const Variant &v) const {
-    return compare_op(is_smaller_function, const_ptr(), v.const_ptr());
+    return compare_fast_impl<detail::CompareRelation::Less>(*this, v);
 }
 
 bool Variant::operator<=(const Variant &v) const {
-    return compare_op(is_smaller_or_equal_function, const_ptr(), v.const_ptr());
+    return compare_fast_impl<detail::CompareRelation::LessOrEqual>(*this, v);
 }
 
 bool Variant::operator>(const Variant &v) const {
-    return compare_op(is_greater_function, const_ptr(), v.const_ptr());
+    return compare_fast_impl<detail::CompareRelation::Greater>(*this, v);
 }
 
 bool Variant::operator>=(const Variant &v) const {
-    return compare_op(is_greater_or_equal_function, const_ptr(), v.const_ptr());
+    return compare_fast_impl<detail::CompareRelation::GreaterOrEqual>(*this, v);
 }
 
 Variant Variant::operator()() const {
@@ -1137,13 +1164,13 @@ Reference Variant::attrRef(const String &prop_name) {
     return ref;
 }
 
-Variant Variant::attr(const Variant &name, AttrMode mode) const {
+Variant Variant::attr(const String &name, AttrMode mode) const {
     if (UNEXPECTED(!isObject())) {
         throwError("Attempt to read property `%s` on %s", name.toCString(), typeStr());
         return {};
     }
 
-    auto prop_name = name.toString();
+    auto prop_name = name.str();
     zval rv;
     zval *member_p;
     if (mode == AttrMode::Update) {
@@ -1152,24 +1179,24 @@ Variant Variant::attr(const Variant &name, AttrMode mode) const {
         // __get() directly and can return a writable reference.
         do {
             FakeScopeGuard fake_scope_guard{ce()};
-            member_p = object()->handlers->read_property(object(), prop_name.str(), BP_VAR_RW, nullptr, &rv);
+            member_p = object()->handlers->read_property(object(), prop_name, BP_VAR_RW, nullptr, &rv);
         } while (0);
     } else {
         // BP_VAR_IS is needed by empty() and by intermediate property reads in
         // an isset() chain. A final isset() uses has_property() instead.
-        member_p = zend_read_property_ex(ce(), object(), prop_name.str(), mode == AttrMode::Isset, &rv);
+        member_p = zend_read_property_ex(ce(), object(), prop_name, mode == AttrMode::Isset, &rv);
     }
     throwErrorIfOccurred();
 
     if (zval_is_null(member_p) && mode == AttrMode::Update) {
         do {
             FakeScopeGuard fake_scope_guard{ce()};
-            member_p = object()->handlers->write_property(object(), prop_name.str(), undef(), NULL);
+            member_p = object()->handlers->write_property(object(), prop_name, undef(), NULL);
         } while (0);
         throwErrorIfOccurred();
 
         if (member_p == undef()) {
-            throwError("Dynamic property `%s` assignment is not supported", name.toCString());
+            throwError("Dynamic property `%s` assignment is not supported", ZSTR_VAL(prop_name));
         }
     }
 
@@ -1306,6 +1333,13 @@ Reference &Reference::operator=(Reference *v) {
 Reference &Reference::operator=(const Variant &v) {
     if (&v != this) {
         if (v.isReference()) {
+            // Two wrappers may already point at the same zend_reference (for
+            // example, a typed by-reference variadic element normalized from
+            // int to float). Destroying the destination value before copying
+            // that same reference would turn the shared value into UNDEF.
+            if (isReference() && Z_REF_P(ptr()) == Z_REF_P(v.direct_ptr())) {
+                return *this;
+            }
             destroy();
             copyRef(v.direct_ptr());
         } else {

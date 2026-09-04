@@ -36,7 +36,7 @@ TypePHP **完全由 PHP 语言编写**，并且**完全自举**：`tpc` 编译�
 
 TypePHP 仍在积极开发中。它提供的是边界明确、可测试的 PHP 子集，而不是宣称可以
 无修改替代所有高度动态的 PHP 程序。在将现有项目迁移到 TypePHP 前，请先阅读
-[兼容性模型](#兼容性模型)和[不兼容特性清单](docs/INCOMPATIBLE_PHP_FEATURES.md)。
+[兼容性模型](#兼容性模型)和[不兼容特性清单](docs/zh-cn/INCOMPATIBLE_PHP_FEATURES.md)。
 
 ## 工作原理
 
@@ -184,7 +184,7 @@ embed 安装前缀；在类 Unix 系统中，该目录应包含 `bin/php-config`
 
 二进制和共享库构建需要 PHP 的 `embed` SAPI。如果 Linux 上缺少 `libphp.so`，
 `tpc.php` 可以交互式下载 PHP 源码并自动构建。PHP 扩展构建从宿主 SAPI 解析 Zend
-符号，不能再加载第二份 `libphp`。详见[自动构建 libphp.so](docs/LIBPHP_INSTALLER.md)。
+符号，不能再加载第二份 `libphp`。详见[自动构建 libphp.so](docs/zh-cn/LIBPHP_INSTALLER.md)。
 
 ## 快速开始
 
@@ -241,7 +241,7 @@ bin/tpc.php extension/ -m ext -o my_extension
 bin/tpc.php lib/ -m lib -o mylib
 ```
 
-详见[编译模式](docs/COMPILATION_MODES.md)。
+详见[编译模式](docs/zh-cn/COMPILATION_MODES.md)。
 
 ## 项目配置
 
@@ -291,7 +291,7 @@ ext-deps:
 构建目录保存生成的 C++、依赖对象和预编译头缓存。复用同一个构建目录可以显著加快
 增量构建；仅在确实需要重编 PHPX 公共对象时使用 `--force`。
 
-全部项目配置项及命令行优先级详见[编译器命令行](docs/COMPILER_CLI.md)。
+全部项目配置项及命令行优先级详见[编译器命令行](docs/zh-cn/COMPILER_CLI.md)。
 
 ## 兼容性模型
 
@@ -307,7 +307,7 @@ TypePHP 会在适合 AOT 编译的范围内保持 PHP 语法和运行行为，�
 - 部分高度动态的引用、声明、闭包和反射模式仍明确不支持。
 
 兼容性边界属于公共契约，同时有正向和负向测试保护。请以
-[不兼容 PHP 特性清单](docs/INCOMPATIBLE_PHP_FEATURES.md)为当前准确列表，不要把
+[不兼容 PHP 特性清单](docs/zh-cn/INCOMPATIBLE_PHP_FEATURES.md)为当前准确列表，不要把
 README 未提及的行为默认理解为已支持。
 
 ## 编译期 Attribute 与代码生成
@@ -419,7 +419,7 @@ function main(): void
 }
 ```
 
-详见[高精度类型](docs/HIGH_PRECISION_TYPES.md)和[原生类型](docs/NATIVE_TYPES.md)。
+详见[高精度类型](docs/zh-cn/HIGH_PRECISION_TYPES.md)和[原生类型](docs/zh-cn/NATIVE_TYPES.md)。
 
 ### 3. 强类型容器
 
@@ -450,7 +450,7 @@ function main(): void
 }
 ```
 
-详见 [Std 容器](docs/STD_CONTAINERS.md)。
+详见 [Std 容器](docs/zh-cn/STD_CONTAINERS.md)。
 
 ### 4. 通用方法
 
@@ -474,7 +474,7 @@ function main(): void
 ```
 
 原生类型上的方法调用在编译期被解析为直接的 C/C++ 函数调用——没有虚表查找、
-没有反射、没有运行时派发。详见[通用方法](docs/UNIVERSAL_METHODS.md)。
+没有反射、没有运行时派发。详见[通用方法](docs/zh-cn/UNIVERSAL_METHODS.md)。
 
 ### 5. 混合 C++ / PHP
 
@@ -509,7 +509,7 @@ function main(): void
 C++ 符号的 `php_` 前缀属于 TypePHP callable ABI；stub 函数只提供类型元数据，
 不能包含实际实现。
 
-详见[混合 C++/PHP](docs/MIXED_CPP_PHP.md)。
+详见[混合 C++/PHP](docs/zh-cn/MIXED_CPP_PHP.md)。
 
 ## 基准测试
 
@@ -524,9 +524,9 @@ TypePHP 使用 `-O3` 运行 PHP 源码树自带的官方 `bench.php` 与
 | `micro_bench.php`（总计） | 13.045 秒 | **2.021 秒** | 约 6.5× |
 
 两项基准覆盖 PHP 语言核心性能——函数调用、对象属性访问、数组/哈希访问、
-字符串处理、控制流等。仓库内的测试源码为
-[`examples/bench.php`](examples/bench.php)和
-[`examples/micro_bench.php`](examples/micro_bench.php)。
+字符串处理、控制流等。测试代码见 [`benchmark/bench.php`](benchmark/bench.php) 和
+[`benchmark/micro_bench.php`](benchmark/micro_bench.php)。其他专项性能回归测试
+统一放置在 [`benchmark/`](benchmark/) 目录中。
 
 这些数字是项目测量快照，不是性能保证。PHP 版本、编译器、CPU、优化参数和已启用
 扩展都会影响结果；在用于部署决策前，应在同一机器上使用相同 workload 自行对比。
@@ -543,7 +543,7 @@ TypePHP 使用 `-O3` 运行 PHP 源码树自带的官方 `bench.php` 与
 | C++ `std::vector` | 6.2 秒 |
 
 在该 workload 中，`std::array` 比 PHP 数组快约 **10 倍**，并接近手写 C++ 结果。
-完整基准测试见 [Std 容器](docs/STD_CONTAINERS.md)。
+完整基准测试见 [Std 容器](docs/zh-cn/STD_CONTAINERS.md)。
 
 ## 命令行
 
@@ -602,7 +602,7 @@ bin/tpc.php --wasm=browser app.php
 | `-I`, `-D`, `-L`, `-l` | 可重复指定的原生 include、define、库路径和链接库参数 |
 
 运行 `bin/tpc.php --help` 查看权威的最新参数列表。详见
-[编译器命令行](docs/COMPILER_CLI.md)，包括 Bash 补全：
+[编译器命令行](docs/zh-cn/COMPILER_CLI.md)，包括 Bash 补全：
 
 ```bash
 source <(./tpc --generate-completion=bash)
@@ -635,7 +635,7 @@ TypePHP 内置一个 Python 工具子模块，复用 `tpc` 入口：
 ./tpc --convert-python-to-php script.py > script.php
 ```
 
-详见 [Python 工具子模块](docs/python/tools.md)。
+详见 [Python 工具子模块](docs/zh-cn/python/tools.md)。
 
 ## 开发与测试
 
@@ -665,30 +665,36 @@ php bin/analyze-test-coverage.php \
 
 覆盖工具分别报告 PHP 版本 × 特性 × 正向编译 × 运行语义 × 负向诊断，并列出实际
 出现的 php-parser AST 节点。它不会给出分母不明确的单一百分比。详见
-[测试覆盖分析工具](docs/TEST_COVERAGE_ANALYZER.md)。
+[测试覆盖分析工具](docs/zh-cn/TEST_COVERAGE_ANALYZER.md)。
 
 GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。修改编译器
 内部规则或代码生成时应增加聚焦的 PHPUnit；运行输出或诊断可观察时还应增加 PHPT。
 
 ## 文档
 
-- [快速入门](docs/QUICKSTART.md) —— 最小编译流程
-- [编译模式](docs/COMPILATION_MODES.md) —— `bin`、`ext`、`lib`
-- [编译器命令行](docs/COMPILER_CLI.md) —— CLI 参数与项目配置
-- [不兼容 PHP 特性清单](docs/INCOMPATIBLE_PHP_FEATURES.md) —— 当前限制
-- [原生类型](docs/NATIVE_TYPES.md) —— 原生标量类型
-- [高精度类型](docs/HIGH_PRECISION_TYPES.md) —— BigInt / Decimal / BigFloat
-- [Std 容器](docs/STD_CONTAINERS.md) —— 强类型容器
-- [通用方法](docs/UNIVERSAL_METHODS.md) —— 编译期方法解析
-- [编译期函数](docs/COMPILE_TIME_FUNCTIONS.md) —— `any()`、`refval()`、`objval()` 等
-- [混合 C++/PHP](docs/MIXED_CPP_PHP.md) —— C++/PHP 互操作
-- [`#[Immutable]`](docs/IMMUTABLE.md) —— 编译期只读契约
-- [`#[ArrayDef]`](docs/ARRAY_DEF.md) —— 强类型数组属性契约
-- [Property hooks](docs/PROPERTY_HOOKS.md) —— PHP 8.4 hook 降级和运行时元数据
-- [对象存储模型](docs/OBJECT_STORAGE_AND_PASSING_MODELS.md) —— Zend object、Box 与 Native class 边界
-- [Generator](docs/YIELD_GENERATOR.md) —— 生成器降级与生命周期
-- [测试覆盖分析工具](docs/TEST_COVERAGE_ANALYZER.md) —— AST 与特性证据矩阵
-- [WASI 构建](docs/WASI_BUILD.md) —— WASI 目标
+- [快速入门](docs/zh-cn/QUICKSTART.md) —— 最小编译流程
+- [编译模式](docs/zh-cn/COMPILATION_MODES.md) —— `bin`、`ext`、`lib`
+- [编译器命令行](docs/zh-cn/COMPILER_CLI.md) —— CLI 参数与项目配置
+- [不兼容 PHP 特性清单](docs/zh-cn/INCOMPATIBLE_PHP_FEATURES.md) —— 当前限制
+- [原生类型](docs/zh-cn/NATIVE_TYPES.md) —— 原生标量类型
+- [高精度类型](docs/zh-cn/HIGH_PRECISION_TYPES.md) —— BigInt / Decimal / BigFloat
+- [Std 容器](docs/zh-cn/STD_CONTAINERS.md) —— 强类型容器
+- [通用方法](docs/zh-cn/UNIVERSAL_METHODS.md) —— 编译期方法解析
+- [编译期函数](docs/zh-cn/COMPILE_TIME_FUNCTIONS.md) —— `any()`、`refval()`、`objval()` 等
+- [混合 C++/PHP](docs/zh-cn/MIXED_CPP_PHP.md) —— C++/PHP 互操作
+- [`#[Immutable]`](docs/zh-cn/IMMUTABLE.md) —— 编译期只读契约
+- [`#[ArrayDef]`](docs/zh-cn/ARRAY_DEF.md) —— 强类型数组属性契约
+- [Property hooks](docs/zh-cn/PROPERTY_HOOKS.md) —— PHP 8.4 hook 降级和运行时元数据
+- [对象存储模型](docs/zh-cn/OBJECT_STORAGE_AND_PASSING_MODELS.md) —— Zend object、Box 与 Native class 边界
+- [Generator](docs/zh-cn/YIELD_GENERATOR.md) —— 生成器降级与生命周期
+- [测试覆盖分析工具](docs/zh-cn/TEST_COVERAGE_ANALYZER.md) —— AST 与特性证据矩阵
+- [WASI 构建](docs/zh-cn/WASI_BUILD.md) —— WASI 目标
+
+## 致谢
+
+TypePHP 感谢每一位参与项目建设的开发者和贡献者。项目的实现同样离不开 GCC、
+Clang/LLVM、MSVC、ISO C++（WG21）、PHP、PHP-Parser 以及众多辅助开源社区的
+长期工作。完整名单与说明请参阅[致谢](docs/zh-cn/ACKNOWLEDGEMENTS.md)。
 
 ## 授权协议
 

@@ -68,6 +68,7 @@ final readonly class LinuxPackageManager
             'apt-get' => ['build-essential', 'cmake', 'pkg-config'],
             'dnf' => ['gcc', 'gcc-c++', 'make', 'cmake', 'pkgconf-pkg-config'],
             'yum' => ['gcc', 'gcc-c++', 'make', 'cmake', 'pkgconfig'],
+            default => throw new \LogicException("Unsupported package manager: {$this->command}"),
         };
     }
 
@@ -78,6 +79,7 @@ final readonly class LinuxPackageManager
             'apt-get' => ['apt-get', 'install', '-y'],
             'dnf' => ['dnf', 'install', '-y'],
             'yum' => ['yum', 'install', '-y'],
+            default => throw new \LogicException("Unsupported package manager: {$this->command}"),
         };
         return [...$prefix, ...$args, ...$packages];
     }

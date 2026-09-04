@@ -25,6 +25,67 @@ final class PhpBuildConfigurationTest extends TestCase
         self::assertNotContains('--enable-fpm', $options);
     }
 
+    public function testParseShellWordsRemovesQuotesAroundAssignmentValues(): void
+    {
+        self::assertSame(
+            ['CFLAGS=-g -O2', 'CPPFLAGS=-DNAME="Type PHP"', '--with-zlib=/opt/php libs'],
+            PhpBuildConfiguration::parseShellWords(
+                'CFLAGS=\'-g -O2\' CPPFLAGS="-DNAME=\"Type PHP\"" --with-zlib=/opt/php\ libs'
+            )
+        );
+        self::assertSame(
+            ['CFLAGS=-g -O2'],
+            PhpBuildConfiguration::parseShellWords('CFLAGS="-g -O2"')
+        );
+    }
+
+    public function testDeriveDropsUnquotedBuildFlagsFromPhpConfig(): void
+    {
+        $parsed = PhpBuildConfiguration::parsePhpConfigOptions(
+            '--includedir=/usr/include --disable-all --with-zlib=/usr ' .
+            'build_alias=x86_64-linux-gnu host_alias=x86_64-linux-gnu ' .
+            'CFLAGS=-g -O2 -Werror=implicit-function-declaration -fno-omit-frame-pointer ' .
+            '-fstack-protector-strong --param=ssp-buffer-size=4 -O2 -Wall -pedantic -g ' .
+            'PHP_BUILD_PROVIDER=Ubuntu'
+        );
+        $options = PhpBuildConfiguration::derive(
+            $parsed,
+            '/home/test/.typephp'
+        );
+
+        self::assertSame(
+            ['--includedir=/usr/include', '--disable-all', '--with-zlib=/usr'],
+            $parsed
+        );
+        self::assertContains('--includedir=/usr/include', $options);
+        self::assertContains('--disable-all', $options);
+        self::assertContains('--with-zlib=/usr', $options);
+        self::assertNotContains('CFLAGS=-g', $options);
+        self::assertNotContains('-O2', $options);
+        self::assertNotContains('--param=ssp-buffer-size=4', $options);
+        self::assertNotContains('PHP_BUILD_PROVIDER=Ubuntu', $options);
+    }
+
+    public function testDeriveDropsConfigureExecutableAndQuotedBuildAssignments(): void
+    {
+        $options = PhpBuildConfiguration::derive(
+            "../configure '--enable-cli' CFLAGS='-g -O2' PHP_BUILD_PROVIDER=Ubuntu",
+            '/home/test/.typephp'
+        );
+
+        self::assertNotContains('../configure', $options);
+        self::assertNotContains('CFLAGS=-g -O2', $options);
+        self::assertContains('--enable-cli', $options);
+    }
+
+    public function testParseShellWordsRejectsIncompleteInput(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unterminated quote');
+
+        PhpBuildConfiguration::parseShellWords("CFLAGS='-g -O2");
+    }
+
     public function testDetectPackageManagerUsesSupportedPriority(): void
     {
         $manager = LinuxPackageManager::detect(static fn(string $command): bool => in_array($command, ['dnf', 'yum'], true));

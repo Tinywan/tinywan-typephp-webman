@@ -4,7 +4,6 @@ Readonly Classes (PHP 8.2+)
 <?php
 
 // Test basic readonly class
-#[\AllowDynamicProperties]
 readonly class Point {
     public int $x;
     public int $y;

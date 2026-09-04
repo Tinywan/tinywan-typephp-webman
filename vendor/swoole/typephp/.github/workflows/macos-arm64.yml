@@ -1,4 +1,4 @@
-name: macOS ARM64
+name: macOS arm64
 
 on:
   push:

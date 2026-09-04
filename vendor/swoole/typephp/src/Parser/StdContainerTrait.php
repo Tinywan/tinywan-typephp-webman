@@ -811,6 +811,7 @@ trait StdContainerTrait
             'toStdVector'       => 'vector',
             'toStdMap'          => 'map',
             'toStdOrderedMap'   => 'ordered_map',
+            default => $this->fatalError($expr, "Unknown std conversion method: {$methodName}"),
         };
 
         if (!$this->isVarExpr($expr->var)) {
