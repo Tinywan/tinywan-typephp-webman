@@ -290,10 +290,26 @@ jobs:
             Write-Host "[CI] Successfully placed .lib files in $phpDir\SDK\lib and $phpDir"
             Get-ChildItem "$phpDir\SDK\lib" | Select-Object Name
 
-            # phpx_compat.h includes the UCRT declaration before PHP headers.
-            # Do not inject a second _wchmod declaration into ioutil.h: newer
-            # Windows SDKs already declare it in corecrt_wio.h.
-            Write-Host "[CI] Using the UCRT _wchmod declaration from corecrt_wio.h."
+            # PHP 8.4 Devpack's win32/ioutil.h calls _wchmod(), but omits <corecrt_wio.h>.
+            # Ensure <corecrt_wio.h> is present at the top of ioutil.h.
+            $ioutilHeader = Join-Path $phpDir "SDK\include\win32\ioutil.h"
+            if (Test-Path $ioutilHeader) {
+              $content = Get-Content $ioutilHeader -Raw
+              if ($content -notmatch 'corecrt_wio\.h') {
+                $content = "#include <corecrt_wio.h>`r`n" + $content
+                Set-Content -Path $ioutilHeader -Value $content -NoNewline -Encoding utf8
+                Write-Host "[CI] Patched $ioutilHeader with corecrt_wio.h."
+              }
+            }
+            $ioutilHeader2 = Join-Path $phpDir "include\win32\ioutil.h"
+            if (Test-Path $ioutilHeader2) {
+              $content2 = Get-Content $ioutilHeader2 -Raw
+              if ($content2 -notmatch 'corecrt_wio\.h') {
+                $content2 = "#include <corecrt_wio.h>`r`n" + $content2
+                Set-Content -Path $ioutilHeader2 -Value $content2 -NoNewline -Encoding utf8
+                Write-Host "[CI] Patched $ioutilHeader2 with corecrt_wio.h."
+              }
+            }
           }
           "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
@@ -316,6 +332,31 @@ jobs:
           Copy-Item (Join-Path $cacheRoot 'lib\gmp.lib'), (Join-Path $cacheRoot 'lib\gmpxx.lib'), (Join-Path $cacheRoot 'lib\mpfr.lib') (Join-Path $phpDir 'SDK\lib') -Force
           Copy-Item (Join-Path $cacheRoot 'bin\*.dll') $phpDir -Force
           Write-Host "[CI] Staged GMP/MPFR into $phpDir\SDK (include + lib) and DLLs beside php.exe"
+
+      - name: Patch PHPX headers for MSVC C++ compatibility
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $phpxHeader = Join-Path $env:GITHUB_WORKSPACE "vendor\swoole\phpx\include\phpx.h"
+          if (Test-Path $phpxHeader) {
+            $content = Get-Content $phpxHeader -Raw
+            if ($content -notmatch 'corecrt_wio\.h') {
+              $prelude = @'
+#if defined(WIN32) || defined(_WIN32)
+#include <corecrt.h>
+#include <cstdlib>
+#include <cmath>
+#include <stdlib.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <corecrt_wio.h>
+#endif
+'@
+              $content = $content -replace '(#pragma once\r?\n)', "`$1`r`n$prelude`r`n"
+              Set-Content -Path $phpxHeader -Value $content -NoNewline -Encoding utf8
+              Write-Host "[CI] Patched $phpxHeader with MSVC CRT prelude."
+            }
+          }
 
       # phpx 2.7.0 consumes prebuilt mpdecimal import libraries on Windows
       # instead of compiling thirdparty/mpdecimal from source, so the bundled

@@ -16,6 +16,16 @@
 
 #pragma once
 
+#if defined(WIN32) || defined(_WIN32)
+#include <corecrt.h>
+#include <cstdlib>
+#include <cmath>
+#include <stdlib.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <corecrt_wio.h>
+#endif
+
 /**
  * Do not trust any header files of PHP, its internal implementation is very chaotic,
  * which must be wrapped in extern "C" {}

@@ -1,4 +1,4 @@
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
 
 #define PATH_MAX _MAX_PATH
 
