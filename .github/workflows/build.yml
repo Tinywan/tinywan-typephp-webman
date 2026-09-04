@@ -527,22 +527,6 @@ jobs:
         with:
           files: ${{ matrix.archive_name }}
           name: "Release ${{ github.ref_name }}"
-          body: |
-            ### 🚀 TypePHP Webman 发行版 (${{ github.ref_name }})
-
-            基于 **TypePHP (Swoole AOT 编译器)** 将 **Webman** 预编译为原生机器码发行版。
-
-            #### 📦 发布包资产
-            - **`typephp-webman-linux-x64.tar.gz`**：Linux x64 自包含完整运行版
-            - **`typephp-webman-linux-x64-static.tar.gz`**：Linux x64 独立运行版
-            - **`typephp-webman-windows-x64.zip`**：Windows x64 独立运行版
-
-            #### 💡 快速运行
-            ```bash
-            # Linux 解压运行
-            tar -zxvf typephp-webman-linux-x64.tar.gz
-            ./start.sh start
-            ./start.sh status
-            ```
+          body: "基于 TypePHP (Swoole AOT 编译器) 将 Webman 预编译为原生机器码发行版。"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
