@@ -54,6 +54,10 @@ class UidProcessor implements ProcessorInterface, ResettableInterface
 
     private function generateUid(int $length): string
     {
-        return substr(bin2hex(random_bytes((int) ceil($length / 2))), 0, $length);
+        // TypePHP 0.7.0 mis-types the random_bytes() result temp as int when the
+        // (int) cast is inlined into its argument; hoisting the cast avoids it.
+        $bytes = (int) ceil($length / 2);
+
+        return substr(bin2hex(random_bytes($bytes)), 0, $length);
     }
 }

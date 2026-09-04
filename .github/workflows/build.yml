@@ -297,6 +297,41 @@ jobs:
           }
           "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # phpx 2.7.0 consumes prebuilt mpdecimal import libraries on Windows
+      # instead of compiling thirdparty/mpdecimal from source, so the bundled
+      # vcbuild recipe has to run before the phpx CMake configure step.
+      - name: Build mpdecimal on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Push-Location (Join-Path $env:GITHUB_WORKSPACE 'vendor\swoole\phpx\thirdparty\mpdecimal\vcbuild')
+          try {
+              & cmd.exe /d /s /c vcbuild64.bat
+              if ($LASTEXITCODE -ne 0) {
+                  throw "mpdecimal build failed with exit code $LASTEXITCODE"
+              }
+          } finally {
+              Pop-Location
+          }
+
+      - name: Stage mpdecimal into PHP SDK
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'vendor\swoole\phpx\thirdparty\mpdecimal\vcbuild\dist64'
+          $sdkInclude = Join-Path $env:PHP_HOME 'SDK\include'
+          $sdkLib = Join-Path $env:PHP_HOME 'SDK\lib'
+
+          Copy-Item (Join-Path $dist '*.lib') $sdkLib -Force
+          Copy-Item (Join-Path $dist '*.dll') $sdkLib -Force
+          Copy-Item (Join-Path $dist '*.dll') $env:PHP_HOME -Force
+          Copy-Item (Join-Path $dist 'mpdecimal.h') $sdkInclude -Force
+          Copy-Item (Join-Path $dist 'decimal.hh') $sdkInclude -Force
+
       - name: Build PHPX Library on Windows
         if: runner.os == 'Windows'
         shell: cmd
@@ -304,7 +339,8 @@ jobs:
           cd "%GITHUB_WORKSPACE%\vendor\swoole\phpx"
           if not exist "build" mkdir "build"
           cd build
-          cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
+          rem find_library(NAMES mpdec-4.0.1) cannot match the ".dll.lib" double suffix, so both import libraries are passed explicitly.
+          cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX" -DMPDECIMAL_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec-4.0.1.dll.lib" -DMPDECIMALXX_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec++-4.0.1.dll.lib"
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
           nmake phpx
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\build\phpx.dll" (

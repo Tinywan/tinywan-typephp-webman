@@ -31,12 +31,16 @@ if not exist "%PHPX_HOME%\build\phpx.dll" (
     exit /b 1
 )
 copy /y "%PHPX_HOME%\build\phpx.dll" "%~dp0dist\" >nul
+rem phpx 2.7.0 stages the mpdecimal runtime DLLs next to phpx.dll in build\, not lib\.
 for %%F in (libmpdec-4.0.1.dll libmpdec++-4.0.1.dll) do (
-    if not exist "%PHPX_HOME%\lib\%%F" (
-        echo [ERROR] Required PHPX runtime DLL not found: %PHPX_HOME%\lib\%%F
+    if exist "%PHPX_HOME%\build\%%F" (
+        copy /y "%PHPX_HOME%\build\%%F" "%~dp0dist\" >nul
+    ) else if exist "%PHPX_HOME%\lib\%%F" (
+        copy /y "%PHPX_HOME%\lib\%%F" "%~dp0dist\" >nul
+    ) else (
+        echo [ERROR] Required mpdecimal runtime DLL not found: %PHPX_HOME%\build\%%F
         exit /b 1
     )
-    copy /y "%PHPX_HOME%\lib\%%F" "%~dp0dist\" >nul
 )
 rem GMP/MPFR are installed by the Windows CI job through vcpkg. Keep their
 rem runtime DLLs beside webman-server when the dynamic x64-windows triplet is used.
