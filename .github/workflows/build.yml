@@ -302,22 +302,15 @@ jobs:
         shell: bash
         run: |
           chmod +x package.sh start.sh
-          if ./package.sh --full-static; then
-            echo "=== Verify Static ELF Linkage ==="
-            file dist/webman-server || true
-            ldd dist/webman-server || true
-            echo "=== Static Smoke Test: running dist/webman-server status ==="
-            ./dist/webman-server status || true
-          else
-            echo "[CI Warning] Full-static compilation requires pre-linked libphp.a from swoole-cli SDK."
-            echo "[CI Warning] Falling back to building portable bundle so static release asset is available."
-            ./package.sh
-            if [ -f dist/webman-server.bin ] && [ ! -f dist/webman-server ]; then
-              cp -f dist/webman-server.bin dist/webman-server
-            fi
-          fi
-          # 清理非目标文件，确保发布包干净
-          rm -f dist/*.tar.gz dist/*.zip
+          ./package.sh --full-static
+          echo "=== Verify Static ELF Linkage ==="
+          file dist/webman-server
+          ldd dist/webman-server || true
+          echo "=== Verify dist contains NO dynamic libraries (.so) ==="
+          find dist -name "*.so*"
+          test -z "$(find dist -name "*.so*")"
+          echo "=== Static Smoke Test: running dist/webman-server status ==="
+          ./dist/webman-server status || true
           echo "=== Packaging ${{ matrix.archive_name }} ==="
           tar -czvf ${{ matrix.archive_name }} -C dist .
           ls -lh ${{ matrix.archive_name }}
