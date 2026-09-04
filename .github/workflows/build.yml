@@ -297,6 +297,26 @@ jobs:
           }
           "PHP_HOME=$phpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # phpx 2.7.0 no longer honors GMP_MPFR_ROOT: it resolves gmp/gmpxx/mpfr
+      # through the PHP SDK include/lib directories, so stage them there.
+      - name: Stage Windows GMP and MPFR into PHP SDK
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "typephp-cache\vcpkg-x64-windows"
+          $phpDir = $env:PHP_HOME
+          if (-not $phpDir) {
+            throw "[CI] PHP_HOME is not set; Devpack step must run first"
+          }
+
+          foreach ($h in @('gmp.h', 'gmpxx.h', 'mpfr.h')) {
+            Copy-Item (Join-Path $cacheRoot "include\$h") (Join-Path $phpDir 'SDK\include') -Force
+          }
+          Copy-Item (Join-Path $cacheRoot 'lib\gmp.lib'), (Join-Path $cacheRoot 'lib\gmpxx.lib'), (Join-Path $cacheRoot 'lib\mpfr.lib') (Join-Path $phpDir 'SDK\lib') -Force
+          Copy-Item (Join-Path $cacheRoot 'bin\*.dll') $phpDir -Force
+          Write-Host "[CI] Staged GMP/MPFR into $phpDir\SDK (include + lib) and DLLs beside php.exe"
+
       # phpx 2.7.0 consumes prebuilt mpdecimal import libraries on Windows
       # instead of compiling thirdparty/mpdecimal from source, so the bundled
       # vcbuild recipe has to run before the phpx CMake configure step.
@@ -340,7 +360,7 @@ jobs:
           if not exist "build" mkdir "build"
           cd build
           rem find_library(NAMES mpdec-4.0.1) cannot match the ".dll.lib" double suffix, so both import libraries are passed explicitly.
-          cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DGMP_MPFR_ROOT="%GMP_MPFR_ROOT%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX" -DMPDECIMAL_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec-4.0.1.dll.lib" -DMPDECIMALXX_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec++-4.0.1.dll.lib"
+          cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="%PHP_HOME%" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX" -DMPDECIMAL_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec-4.0.1.dll.lib" -DMPDECIMALXX_LIBRARY="%PHP_HOME%\SDK\lib\libmpdec++-4.0.1.dll.lib"
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib" mkdir "%GITHUB_WORKSPACE%\vendor\swoole\phpx\lib"
           nmake phpx
           if not exist "%GITHUB_WORKSPACE%\vendor\swoole\phpx\build\phpx.dll" (

@@ -323,7 +323,10 @@ class Websocket
         };
 
         $dataLength = strlen($data);
-        $masks = str_repeat($masks, (int)floor($dataLength / 4)) . substr($masks, 0, $dataLength % 4);
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the cast avoids it.
+        $maskRepeat = (int)floor($dataLength / 4);
+        $masks = str_repeat($masks, $maskRepeat) . substr($masks, 0, $dataLength % 4);
         $decoded = $data ^ $masks;
         if ($connection->context->websocketCurrentFrameLength) {
             $connection->context->websocketDataBuffer .= $decoded;

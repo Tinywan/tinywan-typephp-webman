@@ -63,7 +63,10 @@ class StreamHandler extends AbstractProcessingHandler
         if (($phpMemoryLimit = Utils::expandIniShorthandBytes(ini_get('memory_limit'))) !== false) {
             if ($phpMemoryLimit > 0) {
                 // use max 10% of allowed memory for the chunk size, and at least 100KB
-                $this->streamChunkSize = min(static::MAX_CHUNK_SIZE, max((int) ($phpMemoryLimit / 10), 100 * 1024));
+                // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+                // inline cast argument; hoisting the cast avoids it.
+                $memoryChunk = (int) ($phpMemoryLimit / 10);
+                $this->streamChunkSize = min(static::MAX_CHUNK_SIZE, max($memoryChunk, 100 * 1024));
             } else {
                 // memory is unlimited, set to the default 10MB
                 $this->streamChunkSize = static::DEFAULT_CHUNK_SIZE;
@@ -208,7 +211,10 @@ class StreamHandler extends AbstractProcessingHandler
      */
     protected function streamWrite($stream, array $record): void
     {
-        fwrite($stream, (string) $record['formatted']);
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the cast avoids it.
+        $formatted = (string) $record['formatted'];
+        fwrite($stream, $formatted);
     }
 
     private function customErrorHandler(int $code, string $msg): bool
@@ -247,7 +253,10 @@ class StreamHandler extends AbstractProcessingHandler
             });
             $status = mkdir($dir, 0777, true);
             restore_error_handler();
-            if (false === $status && !is_dir($dir) && strpos((string) $this->errorMessage, 'File exists') === false) {
+            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+            // inline cast argument; hoisting the cast avoids it.
+            $errorMessage = (string) $this->errorMessage;
+            if (false === $status && !is_dir($dir) && strpos($errorMessage, 'File exists') === false) {
                 throw new \UnexpectedValueException(sprintf('There is no existing directory at "%s" and it could not be created: '.$this->errorMessage, $dir));
             }
         }

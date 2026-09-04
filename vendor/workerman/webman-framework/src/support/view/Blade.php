@@ -39,7 +39,9 @@ class Blade implements View
     public static function assign(string|array $name, mixed $value = null): void
     {
         $request = request();
-        $request->_view_vars = array_merge((array) $request->_view_vars, is_array($name) ? $name : [$name => $value]);
+        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
+        $viewVars = (array) $request->_view_vars;
+        $request->_view_vars = array_merge($viewVars, is_array($name) ? $name : [$name => $value]);
     }
 
     /**
@@ -77,7 +79,9 @@ class Blade implements View
             }
         }
         if(isset($request->_view_vars)) {
-            $vars = array_merge((array)$request->_view_vars, $vars);
+            // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
+            $requestViewVars = (array)$request->_view_vars;
+            $vars = array_merge($requestViewVars, $vars);
         }
         return $views[$viewPath]->render($template, $vars);
     }

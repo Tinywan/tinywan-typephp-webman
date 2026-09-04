@@ -367,7 +367,10 @@ final class Select implements EventInterface
             $this->selectTimeout = self::MAX_SELECT_TIMOUT_US;
             return;
         }
-        $this->selectTimeout = min(max((int)(($nextTickTime - microtime(true)) * 1000000), 0), self::MAX_SELECT_TIMOUT_US);
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the cast avoids it.
+        $nextTickDelay = (int)(($nextTickTime - microtime(true)) * 1000000);
+        $this->selectTimeout = min(max($nextTickDelay, 0), self::MAX_SELECT_TIMOUT_US);
     }
 
     /**

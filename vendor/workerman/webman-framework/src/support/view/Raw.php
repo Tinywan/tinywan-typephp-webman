@@ -61,16 +61,24 @@ class Raw implements View
         $app = $app === null ? ($request->app ?? '') : $app;
         $baseViewPath = $plugin ? base_path() . "/plugin/$plugin/app" : app_path();
         $__template_path__ = $template[0] === '/' ? base_path() . "$template.$viewSuffix" : ($app === '' ? "$baseViewPath/view/$template.$viewSuffix" : "$baseViewPath/$app/view/$template.$viewSuffix");
-        $mergedVars = isset($request->_view_vars) ? array_merge((array)$request->_view_vars, $vars) : $vars;
+        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
+        $mergedVars = $vars;
+        if (isset($request->_view_vars)) {
+            $requestViewVars = (array)$request->_view_vars;
+            $mergedVars = array_merge($requestViewVars, $vars);
+        }
         if (!is_file($__template_path__)) {
             return '';
         }
         $__content__ = file_get_contents($__template_path__);
         foreach ($mergedVars as $__k__ => $__v__) {
-            $__content__ = str_replace('<?=htmlspecialchars($' . $__k__ . ')?>', htmlspecialchars((string)$__v__), $__content__);
-            $__content__ = str_replace('<?=' . '$' . $__k__ . '?>', (string)$__v__, $__content__);
-            $__content__ = str_replace('<?php echo htmlspecialchars($' . $__k__ . '); ?>', htmlspecialchars((string)$__v__), $__content__);
-            $__content__ = str_replace('<?php echo $' . $__k__ . '; ?>', (string)$__v__, $__content__);
+            // TypePHP 0.7.0: hoist the casts out of the builtin call arguments.
+            $__v_str__ = (string)$__v__;
+            $__v_esc__ = htmlspecialchars($__v_str__);
+            $__content__ = str_replace('<?=htmlspecialchars($' . $__k__ . ')?>', $__v_esc__, $__content__);
+            $__content__ = str_replace('<?=' . '$' . $__k__ . '?>', $__v_str__, $__content__);
+            $__content__ = str_replace('<?php echo htmlspecialchars($' . $__k__ . '); ?>', $__v_esc__, $__content__);
+            $__content__ = str_replace('<?php echo $' . $__k__ . '; ?>', $__v_str__, $__content__);
         }
         return $__content__;
     }

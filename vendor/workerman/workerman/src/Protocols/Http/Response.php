@@ -474,14 +474,19 @@ class Response implements Stringable
         $head = "HTTP/$this->version $this->status $reason\r\n";
         $headers = $this->headers;
         foreach ($headers as $name => $value) {
+            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes
+            // an inline cast argument; hoisting the casts avoids it.
+            $nameStr = (string)$name;
+            $valueStr = (string)$value;
             // Skip unsafe header names
-            if (strpbrk((string)$name, ":\r\n") !== false) {
+            if (strpbrk($nameStr, ":\r\n") !== false) {
                 continue;
             }
             if (is_array($value)) {
                 foreach ($value as $item) {
+                    $itemStr = (string)$item;
                     // Skip unsafe header values
-                    if (strpbrk((string)$item, "\r\n") !== false) {
+                    if (strpbrk($itemStr, "\r\n") !== false) {
                         continue;
                     }
                     $head .= "$name: $item\r\n";
@@ -489,7 +494,7 @@ class Response implements Stringable
                 continue;
             }
             // Skip unsafe header values
-            if (strpbrk((string)$value, "\r\n") !== false) {
+            if (strpbrk($valueStr, "\r\n") !== false) {
                 continue;
             }
             $head .= "$name: $value\r\n";
@@ -544,14 +549,19 @@ class Response implements Stringable
         $head = "HTTP/$this->version $this->status $reason\r\n";
         $headers = $this->headers;
         foreach ($headers as $name => $value) {
+            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes
+            // an inline cast argument; hoisting the casts avoids it.
+            $nameStr = (string)$name;
+            $valueStr = (string)$value;
             // Skip unsafe header names
-            if (strpbrk((string)$name, ":\r\n") !== false) {
+            if (strpbrk($nameStr, ":\r\n") !== false) {
                 continue;
             }
             if (is_array($value)) {
                 foreach ($value as $item) {
+                    $itemStr = (string)$item;
                     // Skip unsafe header values
-                    if (strpbrk((string)$item, "\r\n") !== false) {
+                    if (strpbrk($itemStr, "\r\n") !== false) {
                         continue;
                     }
                     $head .= "$name: $item\r\n";
@@ -559,7 +569,7 @@ class Response implements Stringable
                 continue;
             }
             // Skip unsafe header values
-            if (strpbrk((string)$value, "\r\n") !== false) {
+            if (strpbrk($valueStr, "\r\n") !== false) {
                 continue;
             }
             $head .= "$name: $value\r\n";

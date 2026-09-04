@@ -1051,7 +1051,10 @@ class App
             return false;
         }
 
-        $offsetEnd = $end === '' ? $fileSize - 1 : min((int) $end, $fileSize - 1);
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the cast avoids it.
+        $endOffsetLimit = (int) $end;
+        $offsetEnd = $end === '' ? $fileSize - 1 : min($endOffsetLimit, $fileSize - 1);
         if ($offsetEnd < $offset) {
             return false;
         }

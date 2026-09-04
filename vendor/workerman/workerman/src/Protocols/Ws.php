@@ -247,7 +247,10 @@ class Ws
 
         $frame = $connection->websocketType . $head . $maskKey;
         // append payload to frame:
-        $maskKey = str_repeat($maskKey, (int)floor($length / 4)) . substr($maskKey, 0, $length % 4);
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the cast avoids it.
+        $maskRepeat = (int)floor($length / 4);
+        $maskKey = str_repeat($maskKey, $maskRepeat) . substr($maskKey, 0, $length % 4);
         $frame .= $payload ^ $maskKey;
         if ($connection->context->handshakeStep === 1) {
             // If buffer has already full then discard the current package.
@@ -354,11 +357,15 @@ class Ws
         $userHeaderStr = '';
         if (!empty($userHeader)) {
             foreach ($userHeader as $k => $v) {
+                // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes
+                // an inline cast argument; hoisting the casts avoids it.
+                $kStr = (string)$k;
+                $vStr = (string)$v;
                 // Skip unsafe header names or values containing CR/LF
-                if (strpbrk((string)$k, ":\r\n") !== false) {
+                if (strpbrk($kStr, ":\r\n") !== false) {
                     continue;
                 }
-                if (strpbrk((string)$v, "\r\n") !== false) {
+                if (strpbrk($vStr, "\r\n") !== false) {
                     continue;
                 }
                 $userHeaderStr .= "$k: $v\r\n";

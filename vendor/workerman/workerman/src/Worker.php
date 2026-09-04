@@ -874,7 +874,10 @@ class Worker
             // Get column mapping for UI
             foreach (static::getUiColumns() as $columnName => $prop) {
                 !isset($worker->$prop) && !isset($worker->context->$prop) && $worker->context->$prop = 'NNNN';
-                $propLength = strlen((string)($worker->$prop ?? $worker->context->$prop));
+                // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+                // inline cast argument; hoisting the cast avoids it.
+                $propValue = (string)($worker->$prop ?? $worker->context->$prop);
+                $propLength = strlen($propValue);
                 $key = 'max' . ucfirst(strtolower($columnName)) . 'NameLength';
                 static::$uiLengthData[$key] = max(static::$uiLengthData[$key] ?? 2 * static::UI_SAFE_LENGTH, $propLength);
             }
@@ -1302,9 +1305,12 @@ class Worker
         }
         foreach ($workerInfo as $pid => $info) {
             if (!isset($dataWaitingSort[$pid])) {
+                // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+                // inline cast argument; hoisting the cast avoids it.
+                $infoNameStr = (string)$info['name'];
                 $statusStr .= "$pid\t" . str_pad('N/A', 7) . " "
                     . str_pad($info['listen'], $maxLen1) . " "
-                    . str_pad((string)$info['name'], $maxLen2) . " "
+                    . str_pad($infoNameStr, $maxLen2) . " "
                     . str_pad('N/A', 11) . " " . str_pad('N/A', 9) . " "
                     . str_pad('N/A', 7) . " " . str_pad('N/A', 13) . " N/A    [busy] \n";
                 continue;
@@ -1316,16 +1322,26 @@ class Worker
                 $qps = $currentTotalRequest[$pid] - $totalRequestCache[$pid];
                 $totalQps += $qps;
             }
-            $statusStr .= $dataWaitingSort[$pid] . " " . str_pad((string)$qps, 6) . " [idle]\n";
+            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+            // inline cast argument; hoisting the cast avoids it.
+            $qpsStr = (string)$qps;
+            $statusStr .= $dataWaitingSort[$pid] . " " . str_pad($qpsStr, 6) . " [idle]\n";
         }
         $totalRequestCache = $currentTotalRequest;
         $statusStr .= "---------------------------------------------------PROCESS STATUS--------------------------------------------------------\n";
+        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+        // inline cast argument; hoisting the casts avoids it.
+        $totalConnectionsStr = (string)$totalConnections;
+        $totalFailsStr = (string)$totalFails;
+        $totalTimersStr = (string)$totalTimers;
+        $totalRequestsStr = (string)$totalRequests;
+        $totalQpsStr = (string)$totalQps;
         $statusStr .= "Summary\t" . str_pad($totalMemory . 'M', 7) . " "
             . str_pad('-', $maxLen1) . " "
             . str_pad('-', $maxLen2) . " "
-            . str_pad((string)$totalConnections, 11) . " " . str_pad((string)$totalFails, 9) . " "
-            . str_pad((string)$totalTimers, 7) . " " . str_pad((string)$totalRequests, 13) . " "
-            . str_pad((string)$totalQps, 6) . " [Summary] \n";
+            . str_pad($totalConnectionsStr, 11) . " " . str_pad($totalFailsStr, 9) . " "
+            . str_pad($totalTimersStr, 7) . " " . str_pad($totalRequestsStr, 13) . " "
+            . str_pad($totalQpsStr, 6) . " [Summary] \n";
         return $statusStr;
     }
 
@@ -2186,10 +2202,14 @@ class Worker
                 $worker = static::$workers[$workerId];
                 if (isset(static::$globalStatistics['worker_exit_info'][$workerId])) {
                     foreach (static::$globalStatistics['worker_exit_info'][$workerId] as $workerExitStatus => $workerExitCount) {
+                        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+                        // inline cast argument; hoisting the casts avoids it.
+                        $exitStatusStr = (string)$workerExitStatus;
+                        $exitCountStr = (string)$workerExitCount;
                         file_put_contents(static::$statisticsFile,
                             str_pad($worker->name, static::getUiColumnLength('maxWorkerNameLength')) . "     " .
                             str_pad($worker->context->eventLoopName, 14) . " " .
-                            str_pad((string)$workerExitStatus, 16) . str_pad((string)$workerExitCount, 16) . "\n", FILE_APPEND);
+                            str_pad($exitStatusStr, 16) . str_pad($exitCountStr, 16) . "\n", FILE_APPEND);
                     }
                 } else {
                     file_put_contents(static::$statisticsFile,
@@ -2304,7 +2324,11 @@ class Worker
             if (strlen($workerName) > 14) {
                 $workerName = substr($workerName, 0, 12) . '..';
             }
-            $str .= str_pad((string)$pid, 9) . str_pad($workerName, 16) . str_pad((string)$id, 10) . str_pad($transport, 8)
+            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
+            // inline cast argument; hoisting the casts avoids it.
+            $pidStr = (string)$pid;
+            $idStr = (string)$id;
+            $str .= str_pad($pidStr, 9) . str_pad($workerName, 16) . str_pad($idStr, 10) . str_pad($transport, 8)
                 . str_pad($protocol, 16) . str_pad($ipv4, 7) . str_pad($ipv6, 7) . str_pad($recvQ, 13)
                 . str_pad($sendQ, 13) . str_pad($bytesRead, 13) . str_pad($bytesWritten, 13) . ' '
                 . str_pad($state, 14) . ' ' . str_pad($localAddress, 22) . ' ' . str_pad($remoteAddress, 22) . "\n";
