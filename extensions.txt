@@ -9,6 +9,7 @@ mbstring
 zip
 fileinfo
 igbinary
+msgpack
 redis
 
 # 可按需开启的扩展：

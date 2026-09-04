@@ -166,6 +166,7 @@ extension=curl.so
 extension=fileinfo.so
 extension=zip.so
 extension=igbinary.so
+extension=msgpack.so
 extension=redis.so
 EOF
 
