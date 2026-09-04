@@ -165,6 +165,8 @@ extension=mysqli.so
 extension=curl.so
 extension=fileinfo.so
 extension=zip.so
+extension=igbinary.so
+extension=redis.so
 EOF
 
 # 如果 extensions.txt 中有其他自定义扩展，追加到 php.ini
