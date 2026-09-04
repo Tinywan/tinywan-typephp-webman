@@ -341,17 +341,7 @@ jobs:
           if (Test-Path $phpxHeader) {
             $content = Get-Content $phpxHeader -Raw
             if ($content -notmatch 'corecrt_wio\.h') {
-              $prelude = @'
-#if defined(WIN32) || defined(_WIN32)
-#include <corecrt.h>
-#include <cstdlib>
-#include <cmath>
-#include <stdlib.h>
-#include <io.h>
-#include <sys/stat.h>
-#include <corecrt_wio.h>
-#endif
-'@
+              $prelude = "#if defined(WIN32) || defined(_WIN32)`r`n#include <corecrt.h>`r`n#include <cstdlib>`r`n#include <cmath>`r`n#include <stdlib.h>`r`n#include <io.h>`r`n#include <sys/stat.h>`r`n#include <corecrt_wio.h>`r`n#endif`r`n"
               $content = $content -replace '(#pragma once\r?\n)', "`$1`r`n$prelude`r`n"
               Set-Content -Path $phpxHeader -Value $content -NoNewline -Encoding utf8
               Write-Host "[CI] Patched $phpxHeader with MSVC CRT prelude."
