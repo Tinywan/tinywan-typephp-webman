@@ -248,63 +248,24 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v3
+          key: linux-musl-phpx-full-static-sdk-v4
 
       - name: Prepare Musl Full-Static SDK (if cache miss)
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
         shell: bash
         run: |
           echo "[CI] Assembling musl full-static SDK in Alpine environment..."
-          SDK_DIR="vendor/swoole/phpx/full-static/sdk"
-          mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
-
-          docker run --rm -v "$(pwd):/host" alpine:3.20 sh -c "
-            set -ex
-            apk add --no-cache musl-dev php83-dev php83-embed gmp-dev mpfr-dev build-base cmake binutils
-
-            # 1. 提取 musl 核心 startup 文件
-            cp -f /usr/lib/crt1.o /usr/lib/crti.o /usr/lib/crtn.o /host/$SDK_DIR/lib/musl/
-
-            # 2. 提取 PHP 头文件
-            cp -r /usr/include/php83/* /host/$SDK_DIR/include/php/
-
-            # 3. 提取/构建 libphp.a
-            if [ -f /usr/lib/libphp83.a ]; then
-              cp -f /usr/lib/libphp83.a /host/$SDK_DIR/lib/libphp.a
-            elif [ -f /usr/lib/libphp.a ]; then
-              cp -f /usr/lib/libphp.a /host/$SDK_DIR/lib/libphp.a
-            elif [ -f /usr/lib/libphp83.so ]; then
-              # 创建静态 stub 归档，供静态链接阶段解析
-              ar cr /host/$SDK_DIR/lib/libphp.a
-            fi
-
-            # 4. 在 Alpine 内部编译全静态 libphpx.a（使用 Alpine 纯正 musl + gmp + mpfr）
-            cmake -S /host/vendor/swoole/phpx/full-static -B /tmp/phpx-static-build \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DPHPX_PHP_INCLUDE_DIR=/host/$SDK_DIR/include/php \
-              -DPHPX_GMP_INCLUDE_DIR=/usr/include \
-              -DPHPX_GMP_LIB_DIR=/usr/lib \
-              -DPHPX_MPFR_INCLUDE_DIR=/usr/include \
-              -DPHPX_MPFR_LIB_DIR=/usr/lib
-
-            cmake --build /tmp/phpx-static-build --parallel 4
-            cp -f /tmp/phpx-static-build/libphpx.a /host/$SDK_DIR/lib/libphpx.a
-          "
-
-          # 5. 复制 phpx 头文件及 mpdecimal
-          cp -r vendor/swoole/phpx/include/* "$SDK_DIR/include/phpx/"
-          cp -f vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
-          cp -f vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
-
-          ls -la "$SDK_DIR/lib"
-          ls -la "$SDK_DIR/lib/musl"
+          chmod +x build-static-sdk.sh
+          docker run --rm -v "$(pwd):/host" alpine:edge sh /host/build-static-sdk.sh
+          ls -la vendor/swoole/phpx/full-static/sdk/lib
+          ls -la vendor/swoole/phpx/full-static/sdk/lib/musl
 
       - name: Save Full-Static SDK Cache
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v3
+          key: linux-musl-phpx-full-static-sdk-v4
 
       # ---------------- Linux 全静态版编译与打包 ----------------
       - name: Build and Package on Linux (Full Static)
@@ -521,7 +482,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.archive_name }}
-          name: "Release ${{ github.ref_name }}"
-          body: "基于 TypePHP (Swoole AOT 编译器) 将 Webman 预编译为原生机器码发行版。"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
