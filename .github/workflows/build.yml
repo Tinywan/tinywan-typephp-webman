@@ -108,7 +108,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev patchelf
+          sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev patchelf libevent-dev
 
       - name: Patch php_hash.h for C++ compatibility
         if: runner.os == 'Linux'

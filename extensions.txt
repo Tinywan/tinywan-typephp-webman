@@ -11,6 +11,8 @@ fileinfo
 igbinary
 msgpack
 redis
+sockets
+event
 
 # 可按需开启的扩展：
 # redis
