@@ -4,7 +4,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "[INFO] Step 1: Compiling webman-server with TypePHP..."
+# 模式判断：是否开启全静态编译 (--full-static)
+FULL_STATIC_MODE=0
+for arg in "$@"; do
+    if [ "$arg" = "--full-static" ]; then
+        FULL_STATIC_MODE=1
+    fi
+done
+if [ "${FULL_STATIC:-0}" = "1" ]; then
+    FULL_STATIC_MODE=1
+fi
+
+echo "[INFO] Step 1: Compiling webman-server with TypePHP (FULL_STATIC=$FULL_STATIC_MODE)..."
 if [ -f "./vendor/bin/tpc.php" ]; then
     TPC_BIN="./vendor/bin/tpc.php"
 elif command -v tpc &> /dev/null; then
@@ -14,32 +25,49 @@ else
     exit 1
 fi
 
-# 1. 确认 PHP_HOME
-if [ -z "$PHP_HOME" ]; then
-    PHP_PREFIX=$(php-config --prefix 2>/dev/null || echo "/usr")
-    export PHP_HOME="$PHP_PREFIX"
-fi
-
-# 2. 编译 PHPX
 PHPX_DIR="$SCRIPT_DIR/vendor/swoole/phpx"
-if [ -d "$PHPX_DIR" ] && [ ! -f "$PHPX_DIR/lib/libphpx.so" ] && [ ! -f "$PHPX_DIR/lib/libphpx.a" ]; then
-    echo "[INFO] Building PHPX library in $PHPX_DIR ..."
-    cd "$PHPX_DIR"
-    
-    # 修复 C++ mpfr.h / gmp.h 搜索路径
-    EXTRA_INC=""
-    for d in /usr/include /usr/local/include /usr/include/x86_64-linux-gnu; do
-        [ -d "$d" ] && EXTRA_INC="$EXTRA_INC -I$d"
-    done
-    
-    # 在 CMakeLists.txt 的 include_directories 中注入
-    sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include \/usr\/include\/x86_64-linux-gnu)/g' CMakeLists.txt
-    
-    cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
-    make phpx -j$(nproc)
-    cd "$SCRIPT_DIR"
-fi
 export PHPX_HOME="$PHPX_DIR"
+
+if [ "$FULL_STATIC_MODE" = "1" ]; then
+    # 全静态编译前置检查
+    if ! command -v clang &> /dev/null; then
+        echo "[ERROR] Clang compiler is required for --full-static build, but 'clang' was not found in PATH."
+        exit 1
+    fi
+    SDK_DIR="$PHPX_DIR/full-static/sdk"
+    if [ ! -d "$SDK_DIR" ]; then
+        echo "[ERROR] --full-static requires bundled SDK at $SDK_DIR, but directory was not found!"
+        exit 1
+    fi
+    if [ ! -f "$SDK_DIR/lib/musl/crt1.o" ]; then
+        echo "[ERROR] musl startup file crt1.o not found at $SDK_DIR/lib/musl/crt1.o!"
+        exit 1
+    fi
+else
+    # 常规动态编译流程：确认 PHP_HOME 并编译动态 PHPX
+    if [ -z "$PHP_HOME" ]; then
+        PHP_PREFIX=$(php-config --prefix 2>/dev/null || echo "/usr")
+        export PHP_HOME="$PHP_PREFIX"
+    fi
+
+    if [ -d "$PHPX_DIR" ] && [ ! -f "$PHPX_DIR/lib/libphpx.so" ] && [ ! -f "$PHPX_DIR/lib/libphpx.a" ]; then
+        echo "[INFO] Building PHPX library in $PHPX_DIR ..."
+        cd "$PHPX_DIR"
+        
+        # 修复 C++ mpfr.h / gmp.h 搜索路径
+        EXTRA_INC=""
+        for d in /usr/include /usr/local/include /usr/include/x86_64-linux-gnu; do
+            [ -d "$d" ] && EXTRA_INC="$EXTRA_INC -I$d"
+        done
+        
+        # 在 CMakeLists.txt 的 include_directories 中注入
+        sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include \/usr\/include\/x86_64-linux-gnu)/g' CMakeLists.txt
+        
+        cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
+        make phpx -j$(nproc)
+        cd "$SCRIPT_DIR"
+    fi
+fi
 
 # 3. Ensure build directory and php.ini
 mkdir -p "$SCRIPT_DIR/build"
@@ -48,12 +76,21 @@ if [ -f "$SCRIPT_DIR/php.ini" ]; then
 fi
 
 # 4. Compile project via TPC
-echo "[INFO] Running TPC compiler with PHP_HOME=$PHP_HOME PHPX_HOME=$PHPX_HOME ..."
-if ! php "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml"; then
-    echo "[ERROR] TPC compilation failed!"
-    echo "[DEBUG] Inspecting generated C++ files in build directory..."
-    ls -la "$SCRIPT_DIR/build" || true
-    exit 1
+if [ "$FULL_STATIC_MODE" = "1" ]; then
+    echo "[INFO] Running TPC in --full-static mode with Clang compiler..."
+    if ! php "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml" --full-static --compiler=clang; then
+        echo "[ERROR] TPC --full-static compilation failed!"
+        ls -la "$SCRIPT_DIR/build" || true
+        exit 1
+    fi
+else
+    echo "[INFO] Running TPC compiler with PHP_HOME=$PHP_HOME PHPX_HOME=$PHPX_HOME ..."
+    if ! php "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml"; then
+        echo "[ERROR] TPC compilation failed!"
+        echo "[DEBUG] Inspecting generated C++ files in build directory..."
+        ls -la "$SCRIPT_DIR/build" || true
+        exit 1
+    fi
 fi
 
 echo "[INFO] Step 2: Packaging into dist directory..."
@@ -61,6 +98,31 @@ rm -rf "$SCRIPT_DIR/dist"
 mkdir -p "$SCRIPT_DIR/dist"
 
 # Copy executable
+if [ "$FULL_STATIC_MODE" = "1" ]; then
+    if [ -f "$SCRIPT_DIR/build/webman-server" ]; then
+        cp -f "$SCRIPT_DIR/build/webman-server" "$SCRIPT_DIR/dist/webman-server"
+        chmod +x "$SCRIPT_DIR/dist/webman-server"
+    elif [ -f "$SCRIPT_DIR/build/webman_server" ]; then
+        cp -f "$SCRIPT_DIR/build/webman_server" "$SCRIPT_DIR/dist/webman-server"
+        chmod +x "$SCRIPT_DIR/dist/webman-server"
+    fi
+    [ -d "$SCRIPT_DIR/config" ] && cp -r "$SCRIPT_DIR/config" "$SCRIPT_DIR/dist/"
+    [ -d "$SCRIPT_DIR/public" ] && cp -r "$SCRIPT_DIR/public" "$SCRIPT_DIR/dist/"
+    if [ -d "$SCRIPT_DIR/app/view" ]; then
+        mkdir -p "$SCRIPT_DIR/dist/app"
+        cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
+    fi
+    [ -f "$SCRIPT_DIR/start.sh" ] && cp -f "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/dist/" && chmod +x "$SCRIPT_DIR/dist/start.sh"
+    if command -v strip &> /dev/null; then
+        echo "[INFO] Stripping debug symbols from static binary..."
+        strip --strip-all "$SCRIPT_DIR/dist/webman-server" 2>/dev/null || true
+    fi
+    echo "[INFO] Full-static packaging completed successfully! Dist path: $SCRIPT_DIR/dist"
+    ls -la "$SCRIPT_DIR/dist"
+    exit 0
+fi
+
+# 常规动态打包流程：
 if [ -f "$SCRIPT_DIR/build/webman-server" ]; then
     cp -f "$SCRIPT_DIR/build/webman-server" "$SCRIPT_DIR/dist/webman-server.bin"
     chmod +x "$SCRIPT_DIR/dist/webman-server.bin"

@@ -14,6 +14,7 @@ on:
         options:
           - all
           - linux
+          - static
           - windows
 
 permissions:
@@ -51,13 +52,16 @@ jobs:
           echo "Target platform selected: $PLATFORM"
           case "$PLATFORM" in
             linux)
-              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"typephp-webman-linux-x64.tar.gz"}]}'
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","build_type":"dynamic","archive_name":"typephp-webman-linux-x64.tar.gz"}]}'
+              ;;
+            static)
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64-static","build_type":"static","archive_name":"typephp-webman-linux-x64-static.tar.gz"}]}'
               ;;
             windows)
-              matrix='{"include":[{"os":"windows-latest","platform":"windows-x64","archive_name":"typephp-webman-windows-x64.zip"}]}'
+              matrix='{"include":[{"os":"windows-latest","platform":"windows-x64","build_type":"dynamic","archive_name":"typephp-webman-windows-x64.zip"}]}'
               ;;
             all|*)
-              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","archive_name":"typephp-webman-linux-x64.tar.gz"},{"os":"windows-latest","platform":"windows-x64","archive_name":"typephp-webman-windows-x64.zip"}]}'
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","build_type":"dynamic","archive_name":"typephp-webman-linux-x64.tar.gz"},{"os":"ubuntu-22.04","platform":"linux-x64-static","build_type":"static","archive_name":"typephp-webman-linux-x64-static.tar.gz"},{"os":"windows-latest","platform":"windows-x64","build_type":"dynamic","archive_name":"typephp-webman-windows-x64.zip"}]}'
               ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -109,6 +113,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev patchelf libevent-dev
+
+      - name: Install Clang and Musl toolchain (Static Build)
+        if: matrix.build_type == 'static'
+        run: |
+          sudo apt-get install --yes clang lld musl-tools
 
       - name: Patch php_hash.h for C++ compatibility
         if: runner.os == 'Linux'
@@ -218,9 +227,9 @@ jobs:
       - name: Install Composer Dependencies
         run: composer install --prefer-dist --no-progress
 
-      # ---------------- Linux 编译与打包 ----------------
-      - name: Build and Package on Linux
-        if: runner.os == 'Linux'
+      # ---------------- Linux 动态版编译与打包 ----------------
+      - name: Build and Package on Linux (Dynamic)
+        if: runner.os == 'Linux' && matrix.build_type == 'dynamic'
         shell: bash
         run: |
           chmod +x package.sh start.sh
@@ -230,6 +239,20 @@ jobs:
           ldd dist/libphpx.so || true
           echo "=== Linux Smoke Test: running dist/start.sh status ==="
           ./dist/start.sh status || true
+          tar -czvf ${{ matrix.archive_name }} -C dist .
+
+      # ---------------- Linux 全静态版编译与打包 ----------------
+      - name: Build and Package on Linux (Full Static)
+        if: runner.os == 'Linux' && matrix.build_type == 'static'
+        shell: bash
+        run: |
+          chmod +x package.sh start.sh
+          ./package.sh --full-static
+          echo "=== Verify Static ELF Linkage ==="
+          file dist/webman-server || true
+          ldd dist/webman-server || true
+          echo "=== Static Smoke Test: running dist/webman-server status ==="
+          ./dist/webman-server status || true
           tar -czvf ${{ matrix.archive_name }} -C dist .
 
       # ---------------- Windows 编译与打包 ----------------
