@@ -54,19 +54,27 @@ make install-headers INSTALL_ROOT=/tmp/php-install
 cp -r /tmp/php-install/usr/include/php/. "$SDK_DIR/include/php/"
 
 echo "[INFO] Merging libphp.a with musl libc, libgmp, libgmpxx, libmpfr, libstdc++ into self-contained static archive..."
-MRI_SCRIPT="/tmp/merge_libphp.mri"
-cat <<EOF > "$MRI_SCRIPT"
-create $SDK_DIR/lib/libphp.a
-addlib $LIBPHP_STATIC_SOURCE
-addlib /usr/lib/libgmp.a
-addlib /usr/lib/libgmpxx.a
-addlib /usr/lib/libmpfr.a
-addlib /usr/lib/libc.a
-addlib /usr/lib/libstdc++.a
-save
-end
-EOF
-ar -M < "$MRI_SCRIPT"
+echo "[INFO] Using extract+repack approach to properly handle thin archives..."
+MERGE_DIR="/tmp/merge_objects"
+rm -rf "$MERGE_DIR"
+mkdir -p "$MERGE_DIR"
+
+# Extract each archive into its own subdirectory to avoid object-file name collisions
+for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/lib/libmpfr.a /usr/lib/libc.a /usr/lib/libstdc++.a; do
+  if [ -f "$lib" ]; then
+    libname=$(basename "$lib" .a)
+    subdir="$MERGE_DIR/$libname"
+    mkdir -p "$subdir"
+    echo "  extracting: $lib"
+    (cd "$subdir" && ar xv "$lib" 2>&1 | tail -3) || true
+  else
+    echo "  [WARN] not found, skipping: $lib"
+  fi
+done
+
+# Build merged fat archive from all extracted object files
+echo "[INFO] Building merged fat archive..."
+find "$MERGE_DIR" -name "*.o" | sort | xargs ar rcs "$SDK_DIR/lib/libphp.a"
 ranlib "$SDK_DIR/lib/libphp.a"
 ls -lh "$SDK_DIR/lib/libphp.a"
 
