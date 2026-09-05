@@ -1,7 +1,7 @@
 #!/bin/sh
 set -ex
 
-apk add --no-cache musl-dev linux-headers php84-dev php84-embed gmp-dev gmp-static mpfr-dev build-base cmake binutils curl xz bison re2c libxml2-dev
+apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base cmake binutils curl xz bison re2c libxml2-dev
 
 SDK_DIR="/host/vendor/swoole/phpx/full-static/sdk"
 mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
@@ -9,11 +9,8 @@ mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
 # 1. Copy musl crt files
 cp -f /usr/lib/crt1.o /usr/lib/crti.o /usr/lib/crtn.o "$SDK_DIR/lib/musl/"
 
-# 2. Copy PHP headers
-cp -r /usr/include/php84/. "$SDK_DIR/include/php/"
-
-# 3. Build or provide libphp.a (Embed SAPI static library)
-PHP_SRC_VER="8.4.4"
+# 2. Build or provide libphp.a (Embed SAPI static library from PHP 8.5)
+PHP_SRC_VER="8.5.0"
 PHP_BUILD_DIR="/tmp/php-src"
 mkdir -p "$PHP_BUILD_DIR"
 cd "$PHP_BUILD_DIR"
@@ -24,7 +21,6 @@ echo "[INFO] Configuring PHP static embed..."
 ./configure \
   --prefix=/usr \
   --enable-embed=static \
-  --enable-zts \
   --disable-all \
   --enable-cli \
   --enable-session \
@@ -52,6 +48,10 @@ fi
 
 echo "[INFO] Found built static libphp: $LIBPHP_STATIC_SOURCE"
 ls -lh "$LIBPHP_STATIC_SOURCE"
+
+echo "[INFO] Installing PHP headers from compiled source to SDK..."
+make install-headers INSTALL_ROOT=/tmp/php-install
+cp -r /tmp/php-install/usr/include/php/. "$SDK_DIR/include/php/"
 
 echo "[INFO] Merging libphp.a with musl libc, libgmp, libmpfr, libstdc++ into self-contained static archive..."
 MRI_SCRIPT="/tmp/merge_libphp.mri"

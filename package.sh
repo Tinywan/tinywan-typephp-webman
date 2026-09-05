@@ -15,9 +15,11 @@ if [ "${FULL_STATIC:-0}" = "1" ]; then
     FULL_STATIC_MODE=1
 fi
 
-# Resolve PHP executable (handle environments where php is php84, e.g. Alpine)
+# Resolve PHP executable (handle environments where php is php85/php84, e.g. Alpine)
 if command -v php &> /dev/null; then
     PHP_EXECUTABLE="php"
+elif command -v php85 &> /dev/null; then
+    PHP_EXECUTABLE="php85"
 elif command -v php84 &> /dev/null; then
     PHP_EXECUTABLE="php84"
 else
