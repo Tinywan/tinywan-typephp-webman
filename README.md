@@ -64,9 +64,9 @@ cd dist
 
 | 目标平台 | 构建类型 | 产物文件名 | 说明 |
 | :--- | :--- | :--- | :--- |
-| **Linux x64** | 动态链接 (`dynamic`) | `typephp-webman-linux-x64.tar.gz` | 自包含 PHP embed 及扩展共享库 |
-| **Linux x64 (Static)** | 纯静态 (`static`) | `typephp-webman-linux-x64-static.tar.gz` | 基于 Musl libc 全静态编译，零外部动态依赖 |
-| **Windows x64** | 动态链接 (`dynamic`) | `typephp-webman-windows-x64.zip` | 包含可执行程序、dll 及运行依赖 |
+| **Linux x64** | 动态链接 (`dynamic`) | `typephp-webman-php8.5-linux-x64.tar.gz` | 自包含 PHP embed 及扩展共享库 |
+| **Linux x64 (Static)** | 纯静态 (`static`) | `typephp-webman-php8.5-linux-x64-static.tar.gz` | 基于 Musl libc 全静态编译，零外部动态依赖 |
+| **Windows x64** | 动态链接 (`dynamic`) | `typephp-webman-php8.5-windows-x64.zip` | 包含可执行程序、dll 及运行依赖 |
 
 ---
 
