@@ -39,13 +39,25 @@ echo "[INFO] Configuring PHP static embed..."
   --without-pear
 
 echo "[INFO] Building static libphp.a..."
-make -j$(nproc) libs/libphp.a
+make -j$(nproc) libphp.la
+
+LIBPHP_STATIC_SOURCE=""
+if [ -f "libs/libphp.a" ]; then
+  LIBPHP_STATIC_SOURCE="libs/libphp.a"
+elif [ -f ".libs/libphp.a" ]; then
+  LIBPHP_STATIC_SOURCE=".libs/libphp.a"
+else
+  LIBPHP_STATIC_SOURCE=$(find . -name "libphp.a" | head -n 1)
+fi
+
+echo "[INFO] Found built static libphp: $LIBPHP_STATIC_SOURCE"
+ls -lh "$LIBPHP_STATIC_SOURCE"
 
 echo "[INFO] Merging libphp.a with musl libc, libgmp, libmpfr, libstdc++ into self-contained static archive..."
 MRI_SCRIPT="/tmp/merge_libphp.mri"
 cat <<EOF > "$MRI_SCRIPT"
 create $SDK_DIR/lib/libphp.a
-addlib libs/libphp.a
+addlib $LIBPHP_STATIC_SOURCE
 addlib /usr/lib/libgmp.a
 addlib /usr/lib/libmpfr.a
 addlib /usr/lib/libc.a
