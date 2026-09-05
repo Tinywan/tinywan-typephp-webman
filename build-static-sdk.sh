@@ -1,7 +1,7 @@
 #!/bin/sh
 set -ex
 
-apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base g++ cmake binutils curl xz bison re2c libxml2-dev
+apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base g++ cmake binutils curl xz bison re2c libxml2-dev pcre2-dev
 
 SDK_DIR="/host/vendor/swoole/phpx/full-static/sdk"
 mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
@@ -147,7 +147,9 @@ cp -r /host/vendor/swoole/phpx/include/. "$SDK_DIR/include/phpx/"
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
 
-# Copy GMP & MPFR headers into SDK
+# Copy GMP, MPFR and PCRE2 headers into SDK
 mkdir -p "$SDK_DIR/include"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/phpx/"
+cp -f /usr/include/pcre2*.h "$SDK_DIR/include/" 2>/dev/null || true
+cp -f /usr/include/pcre2*.h "$SDK_DIR/include/php/" 2>/dev/null || true
