@@ -260,7 +260,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v9
+          key: linux-musl-phpx-full-static-sdk-v10
 
       - name: Prepare Musl Full-Static SDK (if cache miss)
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
@@ -277,7 +277,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v9
+          key: linux-musl-phpx-full-static-sdk-v10
 
       # ---------------- Linux 全静态版编译与打包 ----------------
       - name: Build and Package on Linux (Full Static)

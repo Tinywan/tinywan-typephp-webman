@@ -58,6 +58,7 @@ echo "[INFO] Using extract+repack approach to properly handle thin archives..."
 MERGE_DIR="/tmp/merge_objects"
 rm -rf "$MERGE_DIR"
 mkdir -p "$MERGE_DIR"
+rm -f "$SDK_DIR/lib/libphp.a"
 
 # Extract each archive into its own subdirectory to avoid object-file name collisions
 for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/lib/libmpfr.a /usr/lib/libc.a /usr/lib/libstdc++.a; do
@@ -66,7 +67,7 @@ for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/li
     subdir="$MERGE_DIR/$libname"
     mkdir -p "$subdir"
     echo "  extracting: $lib"
-    (cd "$subdir" && ar xv "$lib" 2>&1 | tail -3) || true
+    (cd "$subdir" && ar x "$lib") || true
   else
     echo "  [WARN] not found, skipping: $lib"
   fi
@@ -77,6 +78,12 @@ echo "[INFO] Building merged fat archive..."
 find "$MERGE_DIR" -name "*.o" | sort | xargs ar rcs "$SDK_DIR/lib/libphp.a"
 ranlib "$SDK_DIR/lib/libphp.a"
 ls -lh "$SDK_DIR/lib/libphp.a"
+
+echo "[INFO] Checking required symbols in libphp.a..."
+if ! nm "$SDK_DIR/lib/libphp.a" 2>/dev/null | grep -q '__gmp_version'; then
+  echo "[WARN] __gmp_version not found in symbol table via plain nm (possibly LTO), checking archive contents..."
+  ar t "$SDK_DIR/lib/libphp.a" | grep -i 'version' || true
+fi
 
 # 4. Build static libphpx.a
 cmake -S /host/vendor/swoole/phpx/full-static -B /tmp/phpx-static-build \
