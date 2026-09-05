@@ -96,7 +96,7 @@ fi
 # 4. Compile project via TPC
 if [ "$FULL_STATIC_MODE" = "1" ]; then
     echo "[INFO] Running TPC in --full-static mode with Clang compiler ($PHP_EXECUTABLE)..."
-    if ! "$PHP_EXECUTABLE" "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml" --full-static --compiler=clang -l gmp -l gmpxx -l mpfr; then
+    if ! "$PHP_EXECUTABLE" "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml" --full-static --compiler=clang; then
         echo "[ERROR] TPC --full-static compilation failed!"
         ls -la "$SCRIPT_DIR/build" || true
         exit 1

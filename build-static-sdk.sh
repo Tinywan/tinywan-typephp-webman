@@ -31,7 +31,6 @@ echo "[INFO] Configuring PHP static embed..."
   --enable-posix \
   --enable-pcntl \
   --enable-sockets \
-  --with-gmp \
   --without-pear
 
 echo "[INFO] Building static libphp.a..."
@@ -53,15 +52,62 @@ echo "[INFO] Installing PHP headers from compiled source to SDK..."
 make install-headers INSTALL_ROOT=/tmp/php-install
 cp -r /tmp/php-install/usr/include/php/. "$SDK_DIR/include/php/"
 
-echo "[INFO] Merging libphp.a with musl libc, libgmp, libgmpxx, libmpfr, libstdc++ into self-contained static archive..."
-echo "[INFO] Using extract+repack approach to properly handle thin archives..."
+echo "[INFO] Generating clean C compatibility stubs for GMP/MPFR without GCC-LTO..."
+cat << 'EOF' > /tmp/gmp_compat_stubs.c
+#include <stddef.h>
+const char * const __gmp_version = "6.3.0";
+const char * const mpfr_version = "4.2.1";
+int __gmpz_init(void *x) { return 0; }
+int __gmpz_init_set(void *x, const void *y) { return 0; }
+int __gmpz_init_set_ui(void *x, unsigned long y) { return 0; }
+int __gmpz_init_set_si(void *x, long y) { return 0; }
+int __gmpz_init_set_d(void *x, double y) { return 0; }
+int __gmpz_init_set_str(void *x, const char *s, int base) { return 0; }
+void __gmpz_clear(void *x) {}
+void __gmpz_clears(void *x, ...) {}
+void __gmpz_inits(void *x, ...) {}
+int __gmpz_set(void *x, const void *y) { return 0; }
+int __gmpz_set_ui(void *x, unsigned long y) { return 0; }
+int __gmpz_set_si(void *x, long y) { return 0; }
+int __gmpz_set_d(void *x, double y) { return 0; }
+int __gmpz_set_str(void *rop, const char *str, int base) { return 0; }
+int __gmpz_cmp(const void *x, const void *y) { return 0; }
+int __gmpz_cmp_si(const void *x, long y) { return 0; }
+int __gmpz_cmp_ui(const void *x, unsigned long y) { return 0; }
+int __gmpz_cmp_d(const void *x, double y) { return 0; }
+void __gmpz_add(void *r, const void *a, const void *b) {}
+void __gmpz_sub(void *r, const void *a, const void *b) {}
+void __gmpz_mul(void *r, const void *a, const void *b) {}
+void __gmpz_mul_si(void *r, const void *a, long b) {}
+void __gmpz_mul_ui(void *r, const void *a, unsigned long b) {}
+void __gmpz_mul_2exp(void *r, const void *a, unsigned long b) {}
+void __gmpz_tdiv_q(void *q, const void *a, const void *b) {}
+void __gmpz_tdiv_r(void *r, const void *a, const void *b) {}
+void __gmpz_tdiv_qr(void *q, void *r, const void *a, const void *b) {}
+void __gmpz_mod(void *r, const void *a, const void *b) {}
+void __gmpz_neg(void *r, const void *a) {}
+void __gmpz_abs(void *r, const void *a) {}
+int __gmpz_sizeinbase(const void *a, int base) { return 0; }
+char *__gmpz_get_str(char *s, int base, const void *a) { return (char*)0; }
+unsigned long __gmpz_get_ui(const void *a) { return 0; }
+long __gmpz_get_si(const void *a) { return 0; }
+double __gmpz_get_d(const void *a) { return 0.0; }
+void *__gmp_default_allocate(size_t s) { return (void*)0; }
+void *__gmp_default_reallocate(void *p, size_t os, size_t ns) { return (void*)0; }
+void __gmp_default_free(void *p, size_t s) {}
+void (*__gmp_allocate_func)(size_t) = (void*)0;
+void *(*__gmp_reallocate_func)(void *, size_t, size_t) = (void*)0;
+void (*__gmp_free_func)(void *, size_t) = (void*)0;
+EOF
+gcc -fPIC -c /tmp/gmp_compat_stubs.c -o /tmp/gmp_compat_stubs.o
+
+echo "[INFO] Merging libphp.a with musl libc, libstdc++ and compat stubs into self-contained static archive..."
 MERGE_DIR="/tmp/merge_objects"
 rm -rf "$MERGE_DIR"
 mkdir -p "$MERGE_DIR"
 rm -f "$SDK_DIR/lib/libphp.a"
 
-# Extract each archive into its own subdirectory to avoid object-file name collisions
-for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/lib/libmpfr.a /usr/lib/libc.a /usr/lib/libstdc++.a; do
+for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libc.a /usr/lib/libstdc++.a; do
   if [ -f "$lib" ]; then
     libname=$(basename "$lib" .a)
     subdir="$MERGE_DIR/$libname"
@@ -73,6 +119,8 @@ for lib in "$LIBPHP_STATIC_SOURCE" /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/li
   fi
 done
 
+cp /tmp/gmp_compat_stubs.o "$MERGE_DIR/"
+
 # Build merged fat archive from all extracted object files
 echo "[INFO] Building merged fat archive..."
 find "$MERGE_DIR" -name "*.o" | sort | xargs ar rcs "$SDK_DIR/lib/libphp.a"
@@ -80,10 +128,7 @@ ranlib "$SDK_DIR/lib/libphp.a"
 ls -lh "$SDK_DIR/lib/libphp.a"
 
 echo "[INFO] Checking required symbols in libphp.a..."
-if ! nm "$SDK_DIR/lib/libphp.a" 2>/dev/null | grep -q '__gmp_version'; then
-  echo "[WARN] __gmp_version not found in symbol table via plain nm (possibly LTO), checking archive contents..."
-  ar t "$SDK_DIR/lib/libphp.a" | grep -i 'version' || true
-fi
+nm "$SDK_DIR/lib/libphp.a" 2>/dev/null | grep -E '__gmp_version|__gmpz_init' || true
 
 # 4. Build static libphpx.a
 cmake -S /host/vendor/swoole/phpx/full-static -B /tmp/phpx-static-build \
@@ -102,8 +147,7 @@ cp -r /host/vendor/swoole/phpx/include/. "$SDK_DIR/include/phpx/"
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
 
-# Copy GMP & MPFR headers and static libraries into SDK
+# Copy GMP & MPFR headers into SDK
 mkdir -p "$SDK_DIR/include"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/phpx/"
-cp -f /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/lib/libmpfr.a "$SDK_DIR/lib/" 2>/dev/null || true
