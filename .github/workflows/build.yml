@@ -274,7 +274,7 @@ jobs:
         run: |
           chmod +x package.sh start.sh
           echo "[CI] Compiling and packaging full-static webman-server in Alpine musl environment..."
-          docker run --rm -v "$(pwd):/host" -w /host alpine:edge sh -c "apk add --no-cache bash clang lld build-base binutils php84 php84-phar php84-openssl php84-tokenizer php84-ctype php84-mbstring php84-dom php84-xml php84-simplexml && ./package.sh --full-static"
+          docker run --rm -v "$(pwd):/host" -w /host alpine:edge sh -c "apk add --no-cache bash clang lld build-base binutils php84 php84-phar php84-openssl php84-tokenizer php84-ctype php84-mbstring php84-dom php84-xml php84-simplexml && ln -sf /usr/bin/php84 /usr/bin/php && ./package.sh --full-static"
           echo "=== Verify Static ELF Linkage ==="
           file dist/webman-server
           ldd dist/webman-server || true

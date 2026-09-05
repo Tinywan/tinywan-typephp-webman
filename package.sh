@@ -15,7 +15,15 @@ if [ "${FULL_STATIC:-0}" = "1" ]; then
     FULL_STATIC_MODE=1
 fi
 
-echo "[INFO] Step 1: Compiling webman-server with TypePHP (FULL_STATIC=$FULL_STATIC_MODE)..."
+# Resolve PHP executable (handle environments where php is php84, e.g. Alpine)
+if command -v php &> /dev/null; then
+    PHP_EXECUTABLE="php"
+elif command -v php84 &> /dev/null; then
+    PHP_EXECUTABLE="php84"
+else
+    PHP_EXECUTABLE="php"
+fi
+
 if [ -f "./vendor/bin/tpc.php" ]; then
     TPC_BIN="./vendor/bin/tpc.php"
 elif command -v tpc &> /dev/null; then
@@ -85,15 +93,15 @@ fi
 
 # 4. Compile project via TPC
 if [ "$FULL_STATIC_MODE" = "1" ]; then
-    echo "[INFO] Running TPC in --full-static mode with Clang compiler..."
-    if ! php "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml" --full-static --compiler=clang; then
+    echo "[INFO] Running TPC in --full-static mode with Clang compiler ($PHP_EXECUTABLE)..."
+    if ! "$PHP_EXECUTABLE" "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml" --full-static --compiler=clang; then
         echo "[ERROR] TPC --full-static compilation failed!"
         ls -la "$SCRIPT_DIR/build" || true
         exit 1
     fi
 else
     echo "[INFO] Running TPC compiler with PHP_HOME=$PHP_HOME PHPX_HOME=$PHPX_HOME ..."
-    if ! php "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml"; then
+    if ! "$PHP_EXECUTABLE" "$TPC_BIN" "$SCRIPT_DIR/project.linux.yml"; then
         echo "[ERROR] TPC compilation failed!"
         echo "[DEBUG] Inspecting generated C++ files in build directory..."
         ls -la "$SCRIPT_DIR/build" || true
