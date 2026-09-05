@@ -1,117 +1,79 @@
-# TypePHP (TPC) Webman 编译与原生二进制打包实践
+# TypePHP Webman
 
-本项目是基于 **TypePHP**（将 PHP 代码静态 AOT 编译为 C++ 原生机器码）对 **Webman / Workerman** 进行独立二进制程序编译、打包与运行的实践方案。
+本项目基于 [TypePHP](https://www.swoole.com/)（Swoole 研发的 PHP AOT 静态编译器），将 **Webman / Workerman** 项目直接静态编译为原生二进制机器码（ELF / PE），实现高性能独立发布与零依赖运行。
 
-## 1. 快速构建与运行
+---
 
-### 1.1 纯代码编译 (Build)
+## 🚀 核心特性
 
+- **AOT 原生编译**：PHP 代码直接转译为 C++17 并编译为机器码，脱离传统 PHP 解释器。
+- **跨平台全目标**：支持 Windows x64、Linux x64（动态链接版）与 Linux x64（Musl 纯静态单文件，无外部 libc 依赖）。
+- **CI/CD 自动化**：GitHub Actions 自动构建跨平台产物，推送 Tag 即可发布 Release 包。
+- **完整框架生态**：兼容路由、中间件、静态文件分发与模板渲染。
+
+---
+
+## 📦 快速使用
+
+### 1. 本地打包构建
+
+#### Windows (MSVC)
 ```cmd
+# 仅编译生成二进制
 build.bat
-```
 
-> 调用 `tpc.exe project.yml`，通过 MSVC `cl.exe` + `link.exe` 编译生成 `build/webman_server.exe`。
-
-### 1.2 自动打包为独立分发包 (Package)
-
-```cmd
+# 编译并打包到 dist/ 目录 (包含 exe, dll, 配置与视图)
 package.bat
 ```
 
-> 先执行 `build.bat`，随后将可执行文件、核心动态库 DLL、PHP 扩展（ext）、配置文件与视图模板等自动同步打包至 `dist/` 目录。
+#### Linux (Clang / GCC)
+```bash
+# 动态链接版本打包 (生成 dist/webman-server.bin 及关联 so)
+./package.sh
 
-### 1.3 启动服务 (Run)
-
-```powershell
-# 方式 1：进入 dist 目录直接启动二进制
-cd dist
-.\webman-server.exe
-
-# 方式 2：执行启动脚本（自动配置 PHPRC 与 PATH）
-.\dist\run.bat
+# 纯静态版本打包 (基于 Musl libc，生成单文件 dist/webman-server)
+./package.sh --full-static
 ```
 
-Linux release packages provide the same self-contained entry point:
+### 2. 启动服务
 
-```sh
+#### Windows
+```cmd
 cd dist
-./webman-server start
+webman-server.exe
 ```
 
-The `webman-server` launcher sets `PHPRC` and the local library path before
-executing the compiled `webman-server.bin`, so the adjacent `php.ini` is used
-even when the binary is started directly.
+#### Linux
+```bash
+cd dist
 
-## 2. 踩坑与问题解决汇总 (Troubleshooting)
+# 启动服务
+./start.sh start
 
-### 一、环境配置问题 (Environment)
+# 守护进程模式
+./start.sh start -d
 
-* **PHP_HOME 环境变量指向错误**
-  * **现象**：构建时找不到 `php8ts.lib` / `phpx.lib`，或 DLL 缺失导致链接失败。
-  * **解决**：在 `build.bat` 和 `package.bat` 中强制显式指定 `set "PHP_HOME=D:\workspace\tpc_v0.6.5_windows_x86_64"`，不再依赖可能冲突的系统环境变量。
-* **Windows CMD 字符编码冲突**
-  * **现象**：批处理文件在 Windows 默认 GBK 终端下因 UTF-8 中文注释乱码直接中断退出。
-  * **解决**：脚本统一使用标准英文日志与 ASCII 编码注释。
-* **工作目录 (CWD) 与动态库加载路径问题**
-  * **现象**：在项目根目录下直接运行 `.\dist\webman-server.exe` 报错找不到配置或 DLL。
-  * **解决**：在 `run.bat` 中通过 `cd /d "%~dp0"` 切入 `dist/`，并设置 `PHPRC` 与 `PATH`。
+# 查看状态与停止
+./start.sh status
+./start.sh stop
+```
 
-### 二、编译阶段问题 (Compile / Build)
+---
 
-* **重复类/函数定义冲突 (Duplicate class / Cannot redeclare function)**
-  * **现象**：`support\Request`、FastRoute `simpleDispatcher()` 等提示重复定义。
-  * **解决**：在 `project.yml` 中忽略根目录冗余的 `support`，只保留 `vendor/workerman/webman-framework/src/support`；在 `main.php` 中移除动态 `require_once $autoload;`，由 TypePHP 统一进行静态符号管理。
-* **不支持动态语言特性 `extract()` 与 `$$` 语法**
-  * **现象**：`Raw.php` 模板引擎编译时报 `Unsupported function: extract` 或 `The $$ syntax is not supported`。
-  * **原因**：C++ 强类型静态编译器无法在编译期为动态变量注入确定栈帧。
-  * **解决**：重构 `Raw.php` 的模板变量渲染逻辑，采用静态友好的内容占位替换方案。
+## 🛠️ Release 发布矩阵
 
-### 三、运行阶段问题 (Runtime)
+| 目标平台 | 构建类型 | 产物文件名 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **Linux x64** | 动态链接 (`dynamic`) | `typephp-webman-linux-x64.tar.gz` | 自包含 PHP embed 及扩展共享库 |
+| **Linux x64 (Static)** | 纯静态 (`static`) | `typephp-webman-linux-x64-static.tar.gz` | 基于 Musl libc 全静态编译，零外部动态依赖 |
+| **Windows x64** | 动态链接 (`dynamic`) | `typephp-webman-windows-x64.zip` | 包含可执行程序、dll 及运行依赖 |
 
-* **SAPI 运行模式拦截 (`checkSapiEnv`)**
-  * **现象**：Workerman 抛出异常强制退出，因为当前运行在 `embed` SAPI（内嵌 PHP 运行时）下。
-  * **解决**：修改 `Worker.php` 的 `checkSapiEnv()`，允许 `PHP_SAPI === 'embed'`。
-* **无参闭包传参严格报错 (`ArgumentCountError`)**
-  * **现象**：`set_error_handler(static fn (): bool => true)` 与 `Worker::stopAll()` 的 `array_walk` 抛出 `expects exactly 0 arguments, 4 given`。
-  * **解决**：将所有错误处理闭包声明为变长参数 `static fn (...$args): bool => true`。
-* **Windows 下回调方法的访问控制权限错误 (`TypeError`)**
-  * **现象**：外部事件循环与注册的 shutdown 函数调用 `checkErrors()`、`acceptTcpConnection()`、`acceptUdpConnection()` 时报 `cannot access protected method`。
-  * **解决**：将这些跨上下文调用的类方法访问级别从 `protected` 改为 `public`。
-* **命名空间与别名歧义导致的方法未定义 (`Invalid callback`)**
-  * **现象**：`support\App::request`、`Webman\Route\Route::dispatch`、`Webman\Route\Route::getFallback` 等方法不存在报错。
-  * **原因**：类中同时 `use` 了属性注解同名类（如 `RouteAttribute`、`MiddlewareAttribute`），AOT 编译器在 AST 解析时发生歧义绑定。
-  * **解决**：在关键分发逻辑中显式指定全限定类名（如 `\Webman\Route::dispatch()`、`\Webman\App::request()` 等）。
-* **单机模式缺少 Route/Middleware 启动装载**
-  * **现象**：`call method dispatch on null`。
-  * **解决**：在 `main.php` 启动序列中主动调用 `\Webman\Middleware::load()` 与 `\Webman\Route::load([config_path()])`。
+---
 
-## 3. Workerman / Webman 官方 PR 提案整理
+## 💡 关键适配记录
 
-以下修改点可向官方仓库提交 PR，有助于提升框架在 PHP 8 严格模式、静态分析工具以及原生嵌入式（SAPI/AOT）环境下的兼容性。
+1. **SAPI 兼容**：允许 Workerman 在 `PHP_SAPI === 'embed'` 模式下启动。
+2. **符号与注解解耦**：消除路由与属性注解同名类在 AST 静态解析下的命名冲突。
+3. **闭包严格签名**：统一信号处理器与退出回调形参为可变参数，适配 PHP 8 严格模式。
+4. **模板引擎优化**：重构 `Raw.php`，采用静态友好的占位渲染方案，替代动态 `extract()` 语法。
 
-### PR 1：提交给 `workerman/workerman` 仓库
-
-**PR 标题**：`fix: improve PHP 8 strict callback compatibility, visibility, and allow embed SAPI`
-
-**修改内容说明**：
-1. **统一错误处理器与退出回调形参签名（修复 `ArgumentCountError`）**：
-   * 将 `Worker.php` 中的 `set_error_handler(static fn (): bool => true)` 调整为 `set_error_handler(static fn (...$args): bool => true)`。
-   * 将 `Worker::stopAll()` 中 `array_walk` 的闭包形参调整为 `static fn (Worker $worker, mixed ...$args) => $worker->stop(false)`。
-2. **支持 `embed` SAPI 运行环境**：
-   * 在 `Worker::checkSapiEnv()` 中补充支持 `PHP_SAPI === 'embed'`。
-3. **修复网络接收、错误检查与信号处理回调的访问控制及类型兼容（修复 `TypeError`）**：
-   * 将 `Worker` 类中的 `acceptTcpConnection()`、`acceptUdpConnection()`、`checkErrors()` 与 `signalHandler()` 访问修饰符由 `protected` 调整为 `public`，确保在 Event 扩展或全局生命周期中作为 `callable` 回调时具备正确的访问权限。
-   * 使用现代 `static::signalHandler(...)` 第一型可调用语法注册信号。
-
-### PR 2：提交给 `workerman/webman-framework` 仓库
-
-**PR 标题**：`fix: eliminate Route/Middleware attribute alias ambiguity and fix getFallback signature`
-
-**修改内容说明**：
-1. **消除属性注解与核心类同名引起的符号歧义**：
-   * 在 `App.php` 中使用 `\Webman\Route::dispatch()` 与 `\Webman\Route::getFallback()`，避免与局部引入的 `Webman\Route\Route as RouteObject` / `support\annotation\route\Route` 发生 AST 解析二义性。
-   * 在 `Route.php` 中使用 `static::setCollector()` 替代 `Route::setCollector()`。
-2. **规范默认 404 回调签名**：
-   * 将 `App::getFallback()` 默认返回的闭包形参规范为 `function ($req = null)`，防止分发器传参时在严格参数校验模式下抛出参数个数不匹配异常。
-3. **优化 `Middleware::prepareAttributeMiddlewares` 传参**：
-   * 避免将临时数组直接作为引用传递，提升类型安全性。
