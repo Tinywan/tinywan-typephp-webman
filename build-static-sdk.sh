@@ -37,12 +37,12 @@ echo "[INFO] Building static libphp.a..."
 make -j$(nproc) libphp.la
 
 LIBPHP_STATIC_SOURCE=""
-if [ -f "libs/libphp.a" ]; then
-  LIBPHP_STATIC_SOURCE="libs/libphp.a"
-elif [ -f ".libs/libphp.a" ]; then
-  LIBPHP_STATIC_SOURCE=".libs/libphp.a"
+if [ -f "$PHP_BUILD_DIR/.libs/libphp.a" ]; then
+  LIBPHP_STATIC_SOURCE="$PHP_BUILD_DIR/.libs/libphp.a"
+elif [ -f "$PHP_BUILD_DIR/libs/libphp.a" ]; then
+  LIBPHP_STATIC_SOURCE="$PHP_BUILD_DIR/libs/libphp.a"
 else
-  LIBPHP_STATIC_SOURCE=$(find . -name "libphp.a" | head -n 1)
+  LIBPHP_STATIC_SOURCE=$(find "$PHP_BUILD_DIR" -name "libphp.a" | head -n 1)
 fi
 
 echo "[INFO] Found built static libphp: $LIBPHP_STATIC_SOURCE"
@@ -128,6 +128,10 @@ ranlib "$SDK_DIR/lib/libphp.a"
 ls -lh "$SDK_DIR/lib/libphp.a"
 
 echo "[INFO] Checking required symbols in libphp.a..."
+if ! nm "$SDK_DIR/lib/libphp.a" 2>/dev/null | grep -q 'zend_is_true'; then
+  echo "[FATAL] libphp.a does not contain zend_is_true! Fat archive creation failed."
+  exit 1
+fi
 nm "$SDK_DIR/lib/libphp.a" 2>/dev/null | grep -E '__gmp_version|__gmpz_init' || true
 
 # 4. Build static libphpx.a
