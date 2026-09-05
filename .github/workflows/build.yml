@@ -61,7 +61,7 @@ jobs:
               matrix='{"include":[{"os":"windows-latest","platform":"windows-x64","build_type":"dynamic","archive_name":"typephp-webman-windows-x64.zip"}]}'
               ;;
             all|*)
-              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","build_type":"dynamic","archive_name":"typephp-webman-linux-x64.tar.gz"},{"os":"windows-latest","platform":"windows-x64","build_type":"dynamic","archive_name":"typephp-webman-windows-x64.zip"}]}'
+              matrix='{"include":[{"os":"ubuntu-22.04","platform":"linux-x64","build_type":"dynamic","archive_name":"typephp-webman-linux-x64.tar.gz"},{"os":"ubuntu-22.04","platform":"linux-x64-static","build_type":"static","archive_name":"typephp-webman-linux-x64-static.tar.gz"},{"os":"windows-latest","platform":"windows-x64","build_type":"dynamic","archive_name":"typephp-webman-windows-x64.zip"}]}'
               ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -273,7 +273,8 @@ jobs:
         shell: bash
         run: |
           chmod +x package.sh start.sh
-          ./package.sh --full-static
+          echo "[CI] Compiling and packaging full-static webman-server in Alpine musl environment..."
+          docker run --rm -v "$(pwd):/host" -w /host alpine:edge sh -c "apk add --no-cache bash clang lld build-base binutils php84 php84-phar php84-openssl php84-tokenizer php84-ctype php84-mbstring php84-dom php84-xml php84-simplexml && ./package.sh --full-static"
           echo "=== Verify Static ELF Linkage ==="
           file dist/webman-server
           ldd dist/webman-server || true
