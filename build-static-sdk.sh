@@ -102,7 +102,8 @@ cp -r /host/vendor/swoole/phpx/include/. "$SDK_DIR/include/phpx/"
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
 
-# Copy GMP & MPFR headers into SDK include root ($SDK_DIR/include and $SDK_DIR/include/phpx)
+# Copy GMP & MPFR headers and static libraries into SDK
 mkdir -p "$SDK_DIR/include"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/"
 cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/phpx/"
+cp -f /usr/lib/libgmp.a /usr/lib/libgmpxx.a /usr/lib/libmpfr.a "$SDK_DIR/lib/" 2>/dev/null || true

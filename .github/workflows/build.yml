@@ -260,7 +260,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v10
+          key: linux-musl-phpx-full-static-sdk-v11
 
       - name: Prepare Musl Full-Static SDK (if cache miss)
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
@@ -277,7 +277,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v10
+          key: linux-musl-phpx-full-static-sdk-v11
 
       # ---------------- Linux 全静态版编译与打包 ----------------
       - name: Build and Package on Linux (Full Static)
@@ -286,7 +286,7 @@ jobs:
         run: |
           chmod +x package.sh start.sh
           echo "[CI] Compiling and packaging full-static webman-server in Alpine musl environment..."
-          docker run --rm -v "$(pwd):/host" -w /host alpine:edge sh -c "apk add --no-cache bash clang lld build-base binutils php85 php85-phar php85-openssl php85-tokenizer php85-ctype php85-mbstring php85-dom php85-xml php85-simplexml && ln -sf /usr/bin/php85 /usr/bin/php && ./package.sh --full-static"
+          docker run --rm -v "$(pwd):/host" -w /host alpine:edge sh -c "apk add --no-cache bash clang lld build-base binutils gmp-dev gmp-static mpfr-dev php85 php85-phar php85-openssl php85-tokenizer php85-ctype php85-mbstring php85-dom php85-xml php85-simplexml && ln -sf /usr/bin/php85 /usr/bin/php && ./package.sh --full-static"
           echo "=== Verify Static ELF Linkage ==="
           file dist/webman-server
           ldd dist/webman-server || true
