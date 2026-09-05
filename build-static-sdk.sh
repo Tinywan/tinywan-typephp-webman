@@ -1,7 +1,7 @@
 #!/bin/sh
 set -ex
 
-apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base g++ cmake binutils curl xz bison re2c libxml2-dev pcre2-dev
+apk add --no-cache musl-dev linux-headers php85-dev php85-embed php85-pcntl php85-posix gmp-dev gmp-static mpfr-dev build-base g++ cmake binutils curl xz bison re2c libxml2-dev pcre2-dev
 
 SDK_DIR="/host/vendor/swoole/phpx/full-static/sdk"
 mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
