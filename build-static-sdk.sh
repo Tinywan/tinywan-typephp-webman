@@ -81,7 +81,12 @@ cmake -S /host/vendor/swoole/phpx/full-static -B /tmp/phpx-static-build \
 cmake --build /tmp/phpx-static-build --parallel 4
 cp -f /tmp/phpx-static-build/libphpx.a "$SDK_DIR/lib/libphpx.a"
 
-# 5. Copy PHPX and mpdecimal headers
+# 5. Copy PHPX, GMP, MPFR and mpdecimal headers
 cp -r /host/vendor/swoole/phpx/include/. "$SDK_DIR/include/phpx/"
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec++/decimal.hh "$SDK_DIR/include/phpx/" 2>/dev/null || true
 cp -f /host/vendor/swoole/phpx/thirdparty/mpdecimal/libmpdec/mpdecimal.h "$SDK_DIR/include/phpx/" 2>/dev/null || true
+
+# Copy GMP & MPFR headers into SDK include root ($SDK_DIR/include and $SDK_DIR/include/phpx)
+mkdir -p "$SDK_DIR/include"
+cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/"
+cp -f /usr/include/gmp.h /usr/include/gmpxx.h /usr/include/mpfr.h "$SDK_DIR/include/phpx/"
