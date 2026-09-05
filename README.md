@@ -2,7 +2,6 @@
 
 本项目基于 [TypePHP](https://www.swoole.com/)（Swoole 研发的 PHP AOT 静态编译器），将 **Webman / Workerman** 项目直接静态编译为原生二进制机器码（ELF / PE），实现高性能独立发布与零依赖运行。
 
----
 
 ## 🚀 核心特性
 
@@ -11,7 +10,6 @@
 - **CI/CD 自动化**：GitHub Actions 自动构建跨平台产物，推送 Tag 即可发布 Release 包。
 - **完整框架生态**：兼容路由、中间件、静态文件分发与模板渲染。
 
----
 
 ## 📥 快速开始（直接下载使用 - 推荐）
 
@@ -46,7 +44,6 @@ chmod +x webman-server
 
 > **注意**：全静态包解压后根目录即为纯静态 ELF 二进制程序 `webman-server`，无需额外的 Shell 包装脚本，直接通过 `./webman-server` 控制。
 
----
 
 ### 方式二：Linux 动态链接版
 
@@ -67,7 +64,6 @@ chmod +x start.sh webman-server.bin
 ./start.sh stop
 ```
 
----
 
 ### 方式三：Windows x64 版
 
@@ -78,7 +74,6 @@ chmod +x start.sh webman-server.bin
    webman-server.exe
    ```
 
----
 
 ### 🌐 访问验证
 
@@ -88,7 +83,6 @@ chmod +x start.sh webman-server.bin
 - JSON 接口：`http://127.0.0.1:8737/user/1`
 - 视图页面：`http://127.0.0.1:8737/view`
 
----
 
 ## 📦 Release 发布产物对比矩阵
 
@@ -98,7 +92,6 @@ chmod +x start.sh webman-server.bin
 | `typephp-webman-php8.5-linux-x64.tar.gz` | Linux x64 | 动态链接 (glibc) | ~75 MB | 自包含 PHP embed 运行环境及扩展共享库，使用 `start.sh` 引导 | ⭐⭐⭐ |
 | `typephp-webman-php8.5-windows-x64.zip` | Windows x64 | 动态链接 (PE) | ~40 MB | 包含可执行程序、依赖 DLL、配置及视图文件 | ⭐⭐⭐⭐ |
 
----
 
 ## 🔨 本地源码打包构建（开发者）
 
@@ -134,7 +127,6 @@ package.bat
 
 > **提示**：建议在 Alpine 容器内使用 `--full-static` 构建全静态版本，以保证 musl-libc 依赖的完全静态绑定。
 
----
 
 ## 💡 框架关键适配记录
 
