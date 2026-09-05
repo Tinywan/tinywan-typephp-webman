@@ -1,7 +1,7 @@
 #!/bin/sh
 set -ex
 
-apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base cmake binutils curl xz bison re2c libxml2-dev
+apk add --no-cache musl-dev linux-headers php85-dev php85-embed gmp-dev gmp-static mpfr-dev build-base g++ cmake binutils curl xz bison re2c libxml2-dev
 
 SDK_DIR="/host/vendor/swoole/phpx/full-static/sdk"
 mkdir -p "$SDK_DIR/lib/musl" "$SDK_DIR/include/php" "$SDK_DIR/include/phpx"
@@ -53,12 +53,13 @@ echo "[INFO] Installing PHP headers from compiled source to SDK..."
 make install-headers INSTALL_ROOT=/tmp/php-install
 cp -r /tmp/php-install/usr/include/php/. "$SDK_DIR/include/php/"
 
-echo "[INFO] Merging libphp.a with musl libc, libgmp, libmpfr, libstdc++ into self-contained static archive..."
+echo "[INFO] Merging libphp.a with musl libc, libgmp, libgmpxx, libmpfr, libstdc++ into self-contained static archive..."
 MRI_SCRIPT="/tmp/merge_libphp.mri"
 cat <<EOF > "$MRI_SCRIPT"
 create $SDK_DIR/lib/libphp.a
 addlib $LIBPHP_STATIC_SOURCE
 addlib /usr/lib/libgmp.a
+addlib /usr/lib/libgmpxx.a
 addlib /usr/lib/libmpfr.a
 addlib /usr/lib/libc.a
 addlib /usr/lib/libstdc++.a

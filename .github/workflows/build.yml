@@ -93,8 +93,9 @@ jobs:
             echo "list=zip" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------------- Setup PHP 8.4 (参考官方配置 ZTS 与 embed 支持) ----------------
-      - name: Setup PHP
+      # ---------------- Setup PHP 8.4 (动态版本需要完整扩展与 ZTS/embed) ----------------
+      - name: Setup PHP (Dynamic Build)
+        if: matrix.build_type == 'dynamic'
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
@@ -107,9 +108,19 @@ jobs:
           phpts: ts
           update: true
 
+      # ---------------- Setup PHP 8.4 (静态构建仅用于 Runner 执行 Composer) ----------------
+      - name: Setup PHP (Static Build)
+        if: matrix.build_type == 'static'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl,mbstring,zip
+          coverage: none
+          tools: composer:v2
+
       # ---------------- Linux 构建环境准备 (官方原生依赖) ----------------
       - name: Install Linux native build dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.build_type == 'dynamic'
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential cmake libgmp-dev libmpfr-dev pkg-config python3-dev patchelf libevent-dev
@@ -117,10 +128,11 @@ jobs:
       - name: Install Clang and Musl toolchain (Static Build)
         if: matrix.build_type == 'static'
         run: |
+          sudo apt-get update
           sudo apt-get install --yes clang lld musl-tools
 
       - name: Patch php_hash.h for C++ compatibility
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.build_type == 'dynamic'
         shell: bash
         run: |
           PHP_INC="$(php-config --include-dir 2>/dev/null || echo '')"
@@ -130,7 +142,7 @@ jobs:
           fi
 
       - name: Configure Linux ZTS PHP embed library
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.build_type == 'dynamic'
         shell: bash
         run: |
           php_home="$(php-config --prefix)"
@@ -248,7 +260,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v6
+          key: linux-musl-phpx-full-static-sdk-v7
 
       - name: Prepare Musl Full-Static SDK (if cache miss)
         if: runner.os == 'Linux' && matrix.build_type == 'static' && steps.cache-static-sdk.outputs.cache-hit != 'true'
@@ -265,7 +277,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/swoole/phpx/full-static/sdk
-          key: linux-musl-phpx-full-static-sdk-v6
+          key: linux-musl-phpx-full-static-sdk-v7
 
       # ---------------- Linux 全静态版编译与打包 ----------------
       - name: Build and Package on Linux (Full Static)
