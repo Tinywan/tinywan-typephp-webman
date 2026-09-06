@@ -17,7 +17,6 @@
 
 </div>
 
----
 
 ## 📖 目录
 
@@ -35,7 +34,6 @@
 - [AOT 关键适配与技术细节](#-aot-关键适配与技术细节)
 - [开源协议](#-开源协议)
 
----
 
 ## 🚀 核心架构
 
@@ -62,7 +60,6 @@ graph LR
     style H fill:#8b5cf6,stroke:#7c3aed,stroke-width:1px,color:#fff
 ```
 
----
 
 ## ✨ 核心特性
 
@@ -72,7 +69,6 @@ graph LR
 - 🧩 **Webman 生态无缝适配**：支持路由、中间件、自定义进程、静态资源托管与模板引擎渲染。
 - 🤖 **全自动化 GitHub CI/CD**：跨平台矩阵构建，Push Tag 即可自动完成编译、校验并在 GitHub Releases 发布多架构安装包。
 
----
 
 ## 📦 编译产物一览
 
@@ -82,7 +78,6 @@ graph LR
 | `typephp-webman-php8.5-linux-x64.tar.gz` | Linux x64 | 动态链接 (Glibc) | ~75 MB | 包含 PHP Embed 运行时及所有依赖动态库 (`.so`)，通过 `start.sh` 启动 | ⭐⭐⭐ |
 | `typephp-webman-php8.5-windows-x64.zip` | Windows x64 | 原生 PE 动态包 | ~40 MB | 包含主执行文件 `webman-server.exe`、核心 DLL 与静态资源 | ⭐⭐⭐⭐ |
 
----
 
 ## 📥 快速开始（直接下载使用）
 
@@ -134,7 +129,6 @@ chmod +x start.sh webman-server.bin
    webman-server.exe start
    ```
 
----
 
 ## 🔨 本地开发与编译构建
 
@@ -172,7 +166,6 @@ docker compose -f docker-compose.build.yml run --rm linux-dynamic
 docker compose -f docker-compose.build.yml run --rm linux-static
 ```
 
----
 
 ### 方式二：宿主机原生工具链打包
 
@@ -201,7 +194,6 @@ package.bat
 
 </details>
 
----
 
 ## 🌐 服务验证与访问
 
@@ -213,7 +205,6 @@ package.bat
 | **RESTful 接口** | `http://127.0.0.1:8787/user/1` | JSON 格式数据响应 |
 | **AOT 模板页面** | `http://127.0.0.1:8787/view` | 经 AOT 静态优化编译的视图渲染 |
 
----
 
 ## 💡 AOT 关键适配与技术细节
 
@@ -224,7 +215,6 @@ package.bat
 3. **闭包严格签名对齐**：统一系统信号处理器与退出回调函数入参为可变签名，适配 PHP 8.5 严格类型约束。
 4. **视图引擎占位化改造**：重构 `Raw.php` 模板渲染逻辑，用确定性占位替换动态 `extract()` 变量注入，确保编译期符号确定性。
 
----
 
 ## 📄 开源协议
 
