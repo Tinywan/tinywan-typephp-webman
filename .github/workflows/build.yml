@@ -93,12 +93,12 @@ jobs:
             echo "list=zip" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------------- Setup PHP 8.4 (动态版本需要完整扩展与 ZTS/embed) ----------------
+      # ---------------- Setup PHP 8.5 (动态版本需要完整扩展与 ZTS/embed) ----------------
       - name: Setup PHP (Dynamic Build)
         if: matrix.build_type == 'dynamic'
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.5'
           extensions: ${{ steps.ext.outputs.list }}
           coverage: none
           ini-values: precision=17, memory_limit=4G, error_reporting=E_ERROR|E_WARNING, display_errors=1, display_startup_errors=1, log_errors=0
@@ -108,12 +108,12 @@ jobs:
           phpts: ts
           update: true
 
-      # ---------------- Setup PHP 8.4 (静态构建仅用于 Runner 执行 Composer) ----------------
+      # ---------------- Setup PHP 8.5 (静态构建仅用于 Runner 执行 Composer) ----------------
       - name: Setup PHP (Static Build)
         if: matrix.build_type == 'static'
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.5'
           extensions: curl,mbstring,zip
           coverage: none
           tools: composer:v2

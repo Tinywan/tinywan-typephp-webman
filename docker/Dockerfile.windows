@@ -1,0 +1,198 @@
+# escape=`
+# ============================================================
+# tinywan/typephp-windows-x64
+# Windows x64 MSVC 编译构建环境 (Server Core 2022 + VS Build Tools 2022)
+# ============================================================
+# 重要: 此 Dockerfile 必须在 Windows 容器模式 下构建
+#   Docker Desktop: 右键系统托盘 → Switch to Windows containers
+#
+# 构建镜像 (一次性):
+#   docker build -f docker/Dockerfile.windows -t tinywan/typephp-windows-x64 docker/
+#
+# 挂载项目编译:
+#   docker run --rm -v "D:\dnmp\www\typephp\tinywan-typephp-webman:C:\app" tinywan/typephp-windows-x64
+# ============================================================
+
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+SHELL ["powershell", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
+
+# ----------------------------------------------------------------
+# 1. Visual Studio Build Tools 2022 (MSVC C++ 编译器 + Windows SDK)
+# ----------------------------------------------------------------
+RUN Write-Host '[1/8] Installing Visual Studio Build Tools 2022...'; `
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile vs_buildtools.exe; `
+    Start-Process -FilePath .\vs_buildtools.exe -ArgumentList `
+        '--quiet','--wait','--norestart','--nocache', `
+        '--add','Microsoft.VisualStudio.Workload.VCTools', `
+        '--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64', `
+        '--add','Microsoft.VisualStudio.Component.Windows11SDK.22621' `
+    -Wait; `
+    Remove-Item vs_buildtools.exe -Force; `
+    Write-Host '[1/8] Done'
+
+# ----------------------------------------------------------------
+# 2. CMake
+# ----------------------------------------------------------------
+RUN Write-Host '[2/8] Installing CMake...'; `
+    Invoke-WebRequest -Uri 'https://github.com/Kitware/CMake/releases/download/v3.30.5/cmake-3.30.5-windows-x86_64.zip' `
+        -OutFile cmake.zip; `
+    Expand-Archive cmake.zip -DestinationPath C:\tools; `
+    $cmakeBin = (Get-ChildItem C:\tools -Directory -Filter 'cmake*' | Select-Object -First 1).FullName + '\bin'; `
+    [Environment]::SetEnvironmentVariable('Path', "$cmakeBin;$([Environment]::GetEnvironmentVariable('Path','Machine'))", 'Machine'); `
+    Remove-Item cmake.zip -Force; `
+    Write-Host '[2/8] Done'
+
+# ----------------------------------------------------------------
+# 3. Git
+# ----------------------------------------------------------------
+RUN Write-Host '[3/8] Installing Git...'; `
+    Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip' `
+        -OutFile git.zip; `
+    Expand-Archive git.zip -DestinationPath C:\git; `
+    [Environment]::SetEnvironmentVariable('Path', "C:\git\cmd;$([Environment]::GetEnvironmentVariable('Path','Machine'))", 'Machine'); `
+    Remove-Item git.zip -Force; `
+    Write-Host '[3/8] Done'
+
+# ----------------------------------------------------------------
+# 4. vcpkg + GMP/MPFR
+# ----------------------------------------------------------------
+RUN Write-Host '[4/8] Installing vcpkg + GMP + MPFR...'; `
+    $env:Path = "C:\git\cmd;$env:Path"; `
+    git clone https://github.com/microsoft/vcpkg.git C:\vcpkg; `
+    C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics; `
+    C:\vcpkg\vcpkg.exe install gmp mpfr --triplet=x64-windows --clean-after-build; `
+    [Environment]::SetEnvironmentVariable('VCPKG_INSTALLATION_ROOT', 'C:\vcpkg', 'Machine'); `
+    Write-Host '[4/8] Done'
+
+# ----------------------------------------------------------------
+# 5. PHP 8.5 ZTS for Windows
+# ----------------------------------------------------------------
+RUN Write-Host '[5/8] Installing PHP 8.5 ZTS...'; `
+    try { `
+        $html = (Invoke-WebRequest -Uri 'https://windows.php.net/downloads/releases/' -UseBasicParsing).Content; `
+        if ($html -match 'href="(php-(8\.5\.\d+)-Win32-vs17-x64\.zip)"') { `
+            $zipName = $matches[1]; $ver = $matches[2] `
+        } else { $ver = '8.5.0'; $zipName = "php-$ver-Win32-vs17-x64.zip" } `
+    } catch { $ver = '8.5.0'; $zipName = "php-$ver-Win32-vs17-x64.zip" }; `
+    Write-Host "Downloading PHP $ver..."; `
+    $urls = @( `
+        "https://windows.php.net/downloads/releases/$zipName", `
+        "https://windows.php.net/downloads/releases/archives/$zipName" `
+    ); `
+    $downloaded = $false; `
+    foreach ($url in $urls) { `
+        try { Invoke-WebRequest -Uri $url -OutFile php.zip -UseBasicParsing -ErrorAction Stop; $downloaded = $true; break } `
+        catch { continue } `
+    }; `
+    if (-not $downloaded) { throw "Failed to download PHP $ver" }; `
+    Expand-Archive php.zip -DestinationPath C:\php; `
+    [Environment]::SetEnvironmentVariable('PHP_HOME', 'C:\php', 'Machine'); `
+    [Environment]::SetEnvironmentVariable('Path', "C:\php;$([Environment]::GetEnvironmentVariable('Path','Machine'))", 'Machine'); `
+    Remove-Item php.zip -Force; `
+    Write-Host "[5/8] PHP $ver installed"
+
+# ----------------------------------------------------------------
+# 6. PHP Devpack (Headers & Import Libraries) + ioutil.h patch
+# ----------------------------------------------------------------
+RUN Write-Host '[6/8] Installing PHP Devpack...'; `
+    $ver = (C:\php\php.exe -r 'echo PHP_VERSION;'); `
+    $urls = @( `
+        "https://windows.php.net/downloads/releases/php-devel-pack-$ver-Win32-vs17-x64.zip", `
+        "https://windows.php.net/downloads/releases/archives/php-devel-pack-$ver-Win32-vs17-x64.zip" `
+    ); `
+    $downloaded = $false; `
+    foreach ($url in $urls) { `
+        try { Invoke-WebRequest -Uri $url -OutFile devpack.zip -UseBasicParsing -ErrorAction Stop; $downloaded = $true; break } `
+        catch { continue } `
+    }; `
+    if (-not $downloaded) { throw "Failed to download PHP Devpack for $ver" }; `
+    Expand-Archive devpack.zip -DestinationPath C:\temp\devpack -Force; `
+    $extracted = Get-ChildItem C:\temp\devpack -Directory | Select-Object -First 1; `
+    @('C:\php\SDK\lib','C:\php\SDK\include','C:\php\dev','C:\php\lib','C:\php\include') | `
+        ForEach-Object { if (-not (Test-Path $_)) { New-Item -ItemType Directory -Force -Path $_ | Out-Null } }; `
+    Copy-Item "$($extracted.FullName)\lib\*" 'C:\php\SDK\lib\' -Recurse -Force -ErrorAction SilentlyContinue; `
+    Copy-Item "$($extracted.FullName)\include\*" 'C:\php\SDK\include\' -Recurse -Force -ErrorAction SilentlyContinue; `
+    Copy-Item "$($extracted.FullName)\lib\*" 'C:\php\lib\' -Recurse -Force -ErrorAction SilentlyContinue; `
+    Copy-Item "$($extracted.FullName)\dev\' -Recurse -Force -ErrorAction SilentlyContinue; `
+    Copy-Item "$($extracted.FullName)\lib\*" 'C:\php\' -Force -ErrorAction SilentlyContinue; `
+    Copy-Item "$($extracted.FullName)\include\*" 'C:\php\include\' -Recurse -Force -ErrorAction SilentlyContinue; `
+    Remove-Item devpack.zip, C:\temp\devpack -Recurse -Force; `
+    foreach ($path in @('C:\php\SDK\include\win32\ioutil.h', 'C:\php\include\win32\ioutil.h')) { `
+        if (Test-Path $path) { `
+            $content = Get-Content $path -Raw; `
+            if ($content -notmatch 'corecrt_wio\.h') { `
+                $content = "#include <corecrt_wio.h>`r`n" + $content; `
+                Set-Content -Path $path -Value $content -NoNewline -Encoding utf8; `
+            } `
+        } `
+    }; `
+    Write-Host '[6/8] Done'
+
+# ----------------------------------------------------------------
+# 7. Stage GMP/MPFR into PHP SDK
+# ----------------------------------------------------------------
+RUN Write-Host '[7/8] Staging GMP/MPFR into PHP SDK...'; `
+    $root = 'C:\vcpkg\installed\x64-windows'; `
+    foreach ($h in @('gmp.h','gmpxx.h','mpfr.h')) { `
+        Copy-Item (Join-Path $root "include\$h") 'C:\php\SDK\include' -Force `
+    }; `
+    Copy-Item (Join-Path $root 'lib\gmp.lib'),(Join-Path $root 'lib\gmpxx.lib'),(Join-Path $root 'lib\mpfr.lib') 'C:\php\SDK\lib' -Force; `
+    Copy-Item (Join-Path $root 'bin\*.dll') 'C:\php' -Force; `
+    Write-Host '[7/8] Done'
+
+# ----------------------------------------------------------------
+# 8. Composer
+# ----------------------------------------------------------------
+RUN Write-Host '[8/8] Installing Composer...'; `
+    Invoke-WebRequest -Uri 'https://getcomposer.org/installer' -OutFile cs.php; `
+    C:\php\php.exe cs.php --install-dir=C:\php --filename=composer.phar; `
+    Remove-Item cs.php -Force; `
+    Write-Host '[8/8] Done'
+
+# 构建辅助入口脚本
+RUN @'
+@echo off
+setlocal
+cd /d C:\app
+set "PHPX_HOME=C:\app\vendor\swoole\phpx"
+set "COMPOSER_NO_INTERACTION=1"
+set "COMPOSER_PROCESS_TIMEOUT=0"
+
+echo [CI/Local] Step 1: Composer install...
+C:\php\php.exe C:\php\composer.phar install --prefer-dist --no-progress
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+echo [CI/Local] Step 2: Patch PHPX headers...
+powershell -Command "$phpxH = 'C:\app\vendor\swoole\phpx\include\phpx.h'; if (Test-Path $phpxH) { $c = Get-Content $phpxH -Raw; if ($c -notmatch 'corecrt_wio\.h') { $prelude = \"#if defined(WIN32) || defined(_WIN32)`r`n#include <corecrt.h>`r`n#include <cstdlib>`r`n#include <cmath>`r`n#include <stdlib.h>`r`n#include <io.h>`r`n#include <sys/stat.h>`r`n#include <corecrt_wio.h>`r`n#endif`r`n\"; $c = $c -replace '(#pragma once\r?\n)', \"`$1`r`n$prelude`r`n\"; Set-Content -Path $phpxH -Value $c -NoNewline -Encoding utf8 } }"
+
+echo [CI/Local] Step 3: Build mpdecimal...
+pushd C:\app\vendor\swoole\phpx\thirdparty\mpdecimal\vcbuild
+call vcbuild64.bat
+popd
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+echo [CI/Local] Step 4: Stage mpdecimal...
+powershell -Command "$dist = 'C:\app\vendor\swoole\phpx\thirdparty\mpdecimal\vcbuild\dist64'; Copy-Item (Join-Path $dist '*.lib') 'C:\php\SDK\lib' -Force; Copy-Item (Join-Path $dist '*.dll') 'C:\php\SDK\lib' -Force; Copy-Item (Join-Path $dist '*.dll') 'C:\php' -Force; Copy-Item (Join-Path $dist 'mpdecimal.h') 'C:\php\SDK\include' -Force; Copy-Item (Join-Path $dist 'decimal.hh') 'C:\php\SDK\include' -Force"
+
+echo [CI/Local] Step 5: Build PHPX...
+pushd C:\app\vendor\swoole\phpx
+if not exist build mkdir build
+cd build
+cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -Dphp_dir="C:\php" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX" -DMPDECIMAL_LIBRARY="C:\php\SDK\lib\libmpdec-4.0.1.dll.lib" -DMPDECIMALXX_LIBRARY="C:\php\SDK\lib\libmpdec++-4.0.1.dll.lib"
+if not exist "..\lib" mkdir "..\lib"
+nmake phpx
+if exist phpx.lib copy /y phpx.lib ..\lib\
+copy /y ..\lib\phpx.lib ..\
+popd
+
+echo [CI/Local] Step 6: Package webman-server...
+call package.bat
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+echo [CI/Local] Windows build finished successfully!
+'@ | Out-File -FilePath C:\build.bat -Encoding ascii
+
+WORKDIR C:\app
+
+CMD ["cmd", "/c", "C:\\build.bat"]

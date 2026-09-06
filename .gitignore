@@ -1,7 +1,9 @@
 /runtime
 /.idea
 /.vscode
-# /vendor
+/vendor
+/.qoder
+/.typephp
 *.log
 .env
 /tests/tmp

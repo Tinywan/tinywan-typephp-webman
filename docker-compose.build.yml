@@ -1,0 +1,59 @@
+# ============================================================
+# TypePHP Webman — 独立 Docker 构建环境编排
+# ============================================================
+# 三个完全独立的构建环境镜像，工具链全置于镜像内：
+#   tinywan/typephp-linux-x64         Linux glibc 动态链接环境
+#   tinywan/typephp-linux-x64-static  Linux musl 全静态链接环境
+#   tinywan/typephp-windows-x64       Windows MSVC 动态链接环境
+#
+# 使用方式:
+#   1. 构建环境镜像 (一次性):
+#      docker compose -f docker-compose.build.yml build linux-dynamic
+#      docker compose -f docker-compose.build.yml build linux-static
+#      docker compose -f docker-compose.build.yml build windows
+#
+#   2. 挂载当前项目直接编译打包 (产物生成到 dist/):
+#      docker compose -f docker-compose.build.yml run --rm linux-dynamic
+#      docker compose -f docker-compose.build.yml run --rm linux-static
+#      docker compose -f docker-compose.build.yml run --rm windows
+# ============================================================
+
+services:
+  # =========================================================
+  # 1. Linux x64 动态链接构建环境
+  # =========================================================
+  linux-dynamic:
+    build:
+      context: docker
+      dockerfile: Dockerfile.linux-dynamic
+    image: tinywan/typephp-linux-x64
+    container_name: typephp-builder-linux-dynamic
+    volumes:
+      - ./:/app
+    working_dir: /app
+
+  # =========================================================
+  # 2. Linux x64 全静态链接构建环境
+  # =========================================================
+  linux-static:
+    build:
+      context: docker
+      dockerfile: Dockerfile.linux-static
+    image: tinywan/typephp-linux-x64-static
+    container_name: typephp-builder-linux-static
+    volumes:
+      - ./:/app
+    working_dir: /app
+
+  # =========================================================
+  # 3. Windows x64 MSVC 动态链接构建环境 (需要 Windows 容器模式)
+  # =========================================================
+  windows:
+    build:
+      context: docker
+      dockerfile: Dockerfile.windows
+    image: tinywan/typephp-windows-x64
+    container_name: typephp-builder-windows
+    volumes:
+      - ./:C:\app
+    working_dir: C:\app

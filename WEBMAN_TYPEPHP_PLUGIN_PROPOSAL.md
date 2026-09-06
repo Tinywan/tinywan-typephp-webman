@@ -1,7 +1,7 @@
-﻿# Webman TypePHP AOT 静态编译打包插件与 Docker 构建方案
+# Webman TypePHP AOT 静态编译打包插件与 Docker 构建方案
 
 > **项目名称**：`tinywan/webman-typephp`  
-> **配套镜像**：`tinywan/typephp-builder:alpine`  
+> **配套镜像**：`tinywan/typephp-webman-builder:alpine`  
 > **开源定位**：Webman 官方标准基础插件 + AOT 原生二进制构建环境 (Architecture RFC)
 
 ## 1. 痛点与破局
@@ -13,26 +13,27 @@
 ### 1.2 破局架构：双子星方案
 - **前端门面（Webman 基础插件）**：`tinywan/webman-typephp`  
   负责在宿主机扫描项目代码依赖、自动生成 AOT `main.php` 和 `project.linux.yml`，提供极简命令行。
-- **后端引擎（构建 Docker 镜像）**：`tinywan/typephp-builder:alpine`  
-  作为自包含的黑盒编译器，内置完整 Alpine + Clang + PHP 8.5 + Musl 纯静态 SDK，屏蔽所有环境差异。
+- **后端引擎（构建 Docker 镜像）**：`tinywan/typephp-webman-builder:alpine`  
+  - 封装 Alpine 3.21 + Musl 环境 + TypePHP 构建工具链 + 必要依赖，开箱即用，免去用户本地编译 SDK 的复杂环境问题。
+  - 支持挂载 Webman 源码目录 `/workspace`，内部执行 `typephp build` 并生成最终产物。
 
 ## 2. 整体协同工作流
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Dev as Webman 开发者
-    participant Plugin as Webman 插件 (tinywan/webman-typephp)
-    participant Docker as 构建镜像 (tinywan/typephp-builder)
-    participant Dist as 输出产物 (dist/webman-server)
+    actor User as 开发者 (Windows/Linux/macOS)
+    participant Webman as Webman Console (PHP 8.4/8.5)
+    participant Plugin as tinywan/webman-typephp
+    participant Docker as 构建镜像 (tinywan/typephp-webman-builder)
 
-    Dev->>Plugin: composer require tinywan/webman-typephp --dev
-    Dev->>Plugin: php webman typephp:package
-    Note over Plugin: 1. 自动扫描当前项目代码与 composer.json<br/>2. 自动生成 project.linux.yml 和 AOT main.php 入口
-    Plugin->>Docker: docker run --rm -v $PWD:/workspace tinywan/typephp-builder:alpine
-    Note over Docker: 3. 容器内就绪工具链调用 tpc 编译<br/>4. Clang 进行 C++ 转译与 Musl 静态链接<br/>5. strip 剥离调试符号
-    Docker-->>Dist: 6. 在项目 dist/ 目录生成 webman-server (6MB)
-    Plugin-->>Dev: 🎉 打包完成！直接执行 ./dist/webman-server start
+    User->>Webman: php webman typephp:package
+    Webman->>Plugin: 执行 PackageCommand
+    Plugin->>Plugin: 生成 TypePHP 编译配置 (project.linux.yml)
+    Plugin->>Docker: docker run --rm -v $PWD:/workspace tinywan/typephp-webman-builder:alpine
+    Docker->>Docker: typephp build (musl AOT 静态编译)
+    Docker-->>Plugin: 输出产物到 dist/ 目录
+    Plugin-->>User: 打包完成！生成单文件二进制或 portable-dir
 ```
 
 ## 3. Webman 插件端设计 (`tinywan/webman-typephp`)
@@ -78,7 +79,7 @@ tinywan/webman-typephp/
 - **`php webman typephp:init-ci`**：  
   在 `.github/workflows/` 生成自动化构建流水线，打 Tag 即可自动在 GitHub Releases 发布跨平台包。
 
-## 4. Docker 构建镜像设计 (`tinywan/typephp-builder`)
+## 4. Docker 构建镜像设计 (`tinywan/typephp-webman-builder`)
 
 ### 4.1 Dockerfile
 ```dockerfile
@@ -193,7 +194,7 @@ cd dist
 ## 6. 开源与发布推进路线
 
 1. **构建并推送 Docker 镜像**：
-   将已验证的 Musl SDK 封装进 Dockerfile，推送至 Docker Hub：`tinywan/typephp-builder:alpine`。
+   将已验证的 Musl SDK 封装进 Dockerfile，推送至 Docker Hub：`tinywan/typephp-webman-builder:alpine`。
 2. **规范化插件仓库**：
    在 `tinywan/webman-typephp` 中对齐 `webman-storage` 规范（声明严格类型、生命周期安装器、PHP 8.5 约束）。
 3. **发布 Packagist**：

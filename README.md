@@ -8,6 +8,8 @@
 
 <p align="center">
   <a href="https://github.com/Tinywan/tinywan-typephp-webman/releases"><img src="https://img.shields.io/github/v/release/Tinywan/tinywan-typephp-webman?style=flat-square&color=blue&label=Release" alt="Release"></a>
+  <a href="https://hub.docker.com/r/tinywan/typephp-linux-x64"><img src="https://img.shields.io/badge/Docker-typephp--linux--x64-blue?style=flat-square&logo=docker" alt="Docker Dynamic"></a>
+  <a href="https://hub.docker.com/r/tinywan/typephp-linux-x64-static"><img src="https://img.shields.io/badge/Docker-typephp--linux--x64--static-blue?style=flat-square&logo=docker" alt="Docker Static"></a>
   <img src="https://img.shields.io/badge/PHP-8.5%20AOT-8892BF.svg?style=flat-square&logo=php" alt="PHP Version">
   <img src="https://img.shields.io/badge/Static%20Binary-Musl%20Libc-success.svg?style=flat-square&logo=linux" alt="Static Binary">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-brightgreen.svg?style=flat-square" alt="Platform">
@@ -128,10 +130,44 @@ chmod +x start.sh webman-server.bin
 
 ## 🔨 本地源码打包构建（开发者）
 
-如果您需要基于源码二次开发、修改业务代码或添加自定义依赖，可使用以下命令进行编译打包。
+如果您需要基于源码二次开发、修改业务代码或添加自定义依赖，可使用以下方式进行编译打包。
+
+### 🐳 方式一：使用官方 Docker 镜像一键编译（推荐 🌟 零本地环境依赖）
+
+官方提供了预装完整工具链与预编译运行库的构建环境镜像，**无需在宿主机安装 PHP、Composer、GCC、Clang 或编译工具**，只需将项目目录挂载进容器即可秒级编译并产出至宿主机 `dist/` 目录：
+
+| 官方 Docker 镜像 | 编译模式 | 产物类型 | 特性 |
+| :--- | :--- | :--- | :--- |
+| [`tinywan/typephp-linux-x64:v0.7.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64) | 动态链接 (glibc) | 便携运行目录 (`dist/`) | 内置 TypePHP v0.7.0、预编译 `libphpx.so`，产出 `webman-server.bin` |
+| [`tinywan/typephp-linux-x64-static:v0.7.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64-static) | 全静态链接 (musl) | 单文件 ELF (`dist/webman-server`) | 内置 TypePHP v0.7.0、预置 full-static SDK，零外部依赖单文件 |
+
+#### 1. 编译 Linux 动态便携包 (Portable-dir)
+```bash
+# 在项目根目录下直接运行（产物将直接写回本地 dist/ 目录）
+docker run --rm -v $(pwd):/app tinywan/typephp-linux-x64:v0.7.0
+```
+
+#### 2. 编译 Linux 全静态单文件 (Full-Static)
+```bash
+# 在项目根目录下直接运行（产物将直接写回本地 dist/webman-server）
+docker run --rm -v $(pwd):/app tinywan/typephp-linux-x64-static:v0.7.0
+```
+
+#### 3. 亦可通过 Docker Compose 快速编排
+```bash
+# 动态便携包
+docker compose -f docker-compose.build.yml run --rm linux-dynamic
+
+# 全静态单文件
+docker compose -f docker-compose.build.yml run --rm linux-static
+```
+
+---
+
+### 💻 方式二：本地原生工具链打包
 
 <details>
-<summary><b>🔍 查看开发者构建步骤与命令详情</b></summary>
+<summary><b>🔍 查看本地安装工具链构建步骤</b></summary>
 
 ### 环境要求
 
