@@ -1,4 +1,4 @@
-# 零环境依赖！用 Docker 一键将 PHP 编译为原生二进制文件
+# 零环境依赖！像 Go 一样分发 PHP：Docker 一键编译原生二进制
 
 > **摘要**：  
 > TypePHP 作为 Swoole 团队开源的 PHP 深度 AOT（Ahead-of-Time）原生静态编译器，能将 PHP 代码直接编译为原生汇编机器码，赋予 PHP 媲美 Go / Rust 的启动速度与单文件分发能力。然而，本地配置 C++17、PHP 8.5 ZTS/Embed 开发库及 GCC/Clang 复杂的工具链，往往让许多开发者望而却步。  
