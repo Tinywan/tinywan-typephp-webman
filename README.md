@@ -145,15 +145,33 @@ chmod +x start.sh webman-server.bin
 
 #### 单行命令直接编译
 
+> [!TIP]
+> **各终端路径变量兼容写法**：
+> - **PowerShell**：使用 `"${PWD}:/app"`
+> - **Linux / macOS / Git Bash**：使用 `"$(pwd):/app"`
+> - **Windows CMD**：使用 `"%cd%:/app"`
+
+**1. 编译 Linux 动态便携包 (输出至本地 `dist/` 目录)**
 ```bash
-# 1. 编译 Linux 动态便携包 (输出至本地 dist/ 目录)
-docker run --rm -v $(pwd):/app tinywan/typephp-linux-x64:v0.7.0
+# PowerShell (Windows)
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0
 
-# 2. 编译 Linux 全静态单文件 (输出至本地 dist/webman-server)
-docker run --rm -v $(pwd):/app tinywan/typephp-linux-x64-static:v0.7.0
+# Linux / macOS / Git Bash
+docker run --rm -v "$(pwd):/app" tinywan/typephp-linux-x64:v0.7.0
+```
 
-# 3. 调试模式：进入容器命令行环境
-docker run --rm -it -v $(pwd):/app tinywan/typephp-linux-x64:v0.7.0 bash
+**2. 编译 Linux 全静态单文件 (输出至本地 `dist/webman-server`)**
+```bash
+# PowerShell (Windows)
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64-static:v0.7.0
+
+# Linux / macOS / Git Bash
+docker run --rm -v "$(pwd):/app" tinywan/typephp-linux-x64-static:v0.7.0
+```
+
+**3. 调试模式：进入容器命令行交互**
+```bash
+docker run --rm -it -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 bash
 ```
 
 #### 通过 Docker Compose 编排编译
