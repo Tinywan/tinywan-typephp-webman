@@ -15,11 +15,14 @@ auto_compile_php_entry() {
     APP_NAME="$(basename "$ENTRY_FILE" .php)"
     [ "$APP_NAME" = "index" ] || [ "$APP_NAME" = "main" ] && APP_NAME="app"
     
-    echo "[TypePHP] Detected PHP entrypoint: $ENTRY_FILE"
-    echo "[TypePHP] Auto-generating project.yml for $APP_NAME..."
+    BIN_NAME="$APP_NAME"
+    if [ -d "$BIN_NAME" ]; then
+        BIN_NAME="${APP_NAME}.bin"
+    fi
     
     cat << EOF > project.yml
 name: $APP_NAME
+bin: $BIN_NAME
 
 sources:
   - $ENTRY_FILE
