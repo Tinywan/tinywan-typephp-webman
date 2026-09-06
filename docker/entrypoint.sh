@@ -1,50 +1,108 @@
 #!/bin/sh
 set -e
 
-# 如果挂载的项目缺少预编译的 PHPX 动态库，自动将容器内置的高性能预编译库链接或复制给它
-if [ -d "vendor/swoole/phpx" ]; then
-    if [ ! -f "vendor/swoole/phpx/lib/libphpx.so" ] && [ ! -f "vendor/swoole/phpx/libphpx.so" ]; then
-        if [ -f "/opt/typephp/vendor/swoole/phpx/libphpx.so" ]; then
-            echo "[Entrypoint] Providing precompiled libphpx.so to project vendor/swoole/phpx..."
-            mkdir -p vendor/swoole/phpx/lib
-            cp -f /opt/typephp/vendor/swoole/phpx/libphpx.so vendor/swoole/phpx/
-            cp -f /opt/typephp/vendor/swoole/phpx/libphpx.so vendor/swoole/phpx/lib/
+# ============================================================
+# TypePHP 通用 AOT 编译器容器入口
+# 适用于任意 PHP 项目 (CLI 单文件、库、框架项目等)
+# ============================================================
+
+# 辅助函数：为指定的 PHP 入口自动生成通用的 project.yml 并编译
+auto_compile_php_entry() {
+    ENTRY_FILE="$1"
+    APP_NAME="$(basename "$ENTRY_FILE" .php)"
+    [ "$APP_NAME" = "index" ] || [ "$APP_NAME" = "main" ] && APP_NAME="app"
+    
+    echo "[TypePHP] Detected PHP entrypoint: $ENTRY_FILE"
+    echo "[TypePHP] Auto-generating project.yml for $APP_NAME..."
+    
+    cat << EOF > project.yml
+name: $APP_NAME
+
+sources:
+  - $ENTRY_FILE
+EOF
+
+    # 如果存在通用源码目录，自动加入 sources
+    for dir in src app lib; do
+        if [ -d "$dir" ]; then
+            echo "  - $dir" >> project.yml
         fi
+    done
+
+    # 如果存在 vendor 目录且包含 autoload，自动载入
+    if [ -d "vendor" ]; then
+        echo "  - vendor" >> project.yml
     fi
-    # 全静态 SDK 自动同步
-    if [ ! -d "vendor/swoole/phpx/full-static/sdk" ] && [ -d "/opt/typephp/vendor/swoole/phpx/full-static/sdk" ]; then
-        echo "[Entrypoint] Providing pre-assembled full-static SDK to project vendor/swoole/phpx..."
-        mkdir -p vendor/swoole/phpx/full-static
-        cp -r /opt/typephp/vendor/swoole/phpx/full-static/sdk vendor/swoole/phpx/full-static/
-    fi
+
+    echo "[TypePHP] Generated project.yml:"
+    cat project.yml
+    echo "----------------------------------------"
+    echo "[TypePHP] Starting AOT compilation via tpc..."
+    exec tpc project.yml
+}
+
+# 1. 如果传入了具体参数
+if [ $# -gt 0 ]; then
+    # 如果第一个参数是 .php 文件，直接编译该文件
+    case "$1" in
+        *.php)
+            if [ -f "$1" ]; then
+                auto_compile_php_entry "$1"
+            else
+                echo "[Error] File '$1' not found in $(pwd)"
+                exit 1
+            fi
+            ;;
+        *)
+            # 其他情况透传执行（如 tpc、php、composer、bash、sh 等）
+            exec "$@"
+            ;;
+    esac
 fi
 
-# 如果没有指定参数，智能识别并执行默认构建
-if [ $# -eq 0 ]; then
-    if [ -f "package.sh" ]; then
-        echo "[Entrypoint] Found package.sh in $(pwd), executing build..."
-        chmod +x package.sh
-        # 判断当前镜像类型：如果是 Alpine，走全静态；如果是 Ubuntu，走动态
-        if [ -f /etc/alpine-release ]; then
-            exec ./package.sh --full-static
-        else
-            exec ./package.sh
-        fi
-    elif [ -f "project.linux.yml" ]; then
-        echo "[Entrypoint] Found project.linux.yml in $(pwd), running tpc..."
-        exec tpc project.linux.yml
-    elif [ -f "project.yml" ]; then
-        echo "[Entrypoint] Found project.yml in $(pwd), running tpc..."
-        exec tpc project.yml
+# 2. 如果没有传入参数，进行通用探测与编译
+echo "[TypePHP] Working directory: $(pwd)"
+
+# 2.1 探测是否存在现有 TypePHP 配置文件
+if [ -f "project.linux.yml" ]; then
+    echo "[TypePHP] Found project.linux.yml, executing tpc..."
+    exec tpc project.linux.yml
+elif [ -f "project.yml" ]; then
+    echo "[TypePHP] Found project.yml, executing tpc..."
+    exec tpc project.yml
+fi
+
+# 2.2 探测是否存在自定义打包脚本
+if [ -f "package.sh" ]; then
+    echo "[TypePHP] Found package.sh, executing..."
+    chmod +x package.sh
+    if [ -f /etc/alpine-release ] && grep -q -- "--full-static" package.sh 2>/dev/null; then
+        exec ./package.sh --full-static
     else
-        echo "[Entrypoint] No build script or project.yml found in $(pwd)."
-        echo "Usage:"
-        echo "  docker run --rm -v \$(pwd):/app tinywan/typephp-linux-x64:v0.7.0"
-        echo "  docker run --rm -v \$(pwd):/app tinywan/typephp-linux-x64:v0.7.0 tpc <args>"
-        echo "  docker run --rm -it -v \$(pwd):/app tinywan/typephp-linux-x64:v0.7.0 bash"
-        exit 1
+        exec ./package.sh
     fi
 fi
 
-# 如果指定了具体命令或选项，直接透明执行用户指令
-exec "$@"
+# 2.3 探测常见的 PHP 入口文件并自动生成配置进行 AOT 编译
+for entry in main.php index.php app.php start.php bin/console; do
+    if [ -f "$entry" ]; then
+        auto_compile_php_entry "$entry"
+    fi
+done
+
+# 2.4 如果什么都没探测到，输出标准使用帮助
+echo "[TypePHP] No project.yml or recognized PHP entrypoint (main.php, index.php, app.php) found."
+echo ""
+echo "TypePHP Compiler Usage:"
+echo "  1. Compile a single PHP file:"
+echo "     docker run --rm -v \$(pwd):/app tinywan/typephp-linux-x64 <your-script.php>"
+echo ""
+echo "  2. Compile with an existing project.yml:"
+echo "     docker run --rm -v \$(pwd):/app tinywan/typephp-linux-x64"
+echo ""
+echo "  3. Use tpc CLI directly:"
+echo "     docker run --rm -v \$(pwd):/app tinywan/typephp-linux-x64 tpc --help"
+echo ""
+echo "  4. Interactive Shell:"
+echo "     docker run --rm -it -v \$(pwd):/app tinywan/typephp-linux-x64 bash"
+exit 1
