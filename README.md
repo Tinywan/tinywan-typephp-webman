@@ -151,25 +151,32 @@ chmod +x start.sh webman-server.bin
 > - **Linux / macOS / Git Bash**：使用 `"$(pwd):/app"`
 > - **Windows CMD**：使用 `"%cd%:/app"`
 
-**1. 编译 Linux 动态便携包 (输出至本地 `dist/` 目录)**
+**1. 编译当前项目 (自动探测配置并输出)**
 ```bash
-# PowerShell (Windows)
+# 动态便携包（输出至本地 dist/ 目录）
 docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0
 
-# Linux / macOS / Git Bash
-docker run --rm -v "$(pwd):/app" tinywan/typephp-linux-x64:v0.7.0
-```
-
-**2. 编译 Linux 全静态单文件 (输出至本地 `dist/webman-server`)**
-```bash
-# PowerShell (Windows)
+# 全静态单文件（输出至本地 dist/webman-server）
 docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64-static:v0.7.0
-
-# Linux / macOS / Git Bash
-docker run --rm -v "$(pwd):/app" tinywan/typephp-linux-x64-static:v0.7.0
 ```
 
-**3. 调试模式：进入容器命令行交互**
+**2. 零配置编译任意单文件 PHP 脚本**
+镜像具备智能推导能力，无需预先创建 `project.yml`，只要目录下存在 `main.php`、`index.php` 或直接指定文件名即可自动编译：
+```bash
+# 挂载目录自动探测 index.php / main.php 生成 app 二进制：
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0
+
+# 明确指定编译某个 PHP 脚本：
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 your_script.php
+```
+
+**3. 直接使用容器运行编译后的二进制程序**
+镜像内已预置并注册完整的动态链接运行时库（`libphpx.so` 等），可直接透传运行编译产物：
+```bash
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 ./app
+```
+
+**4. 调试模式：进入容器命令行交互**
 ```bash
 docker run --rm -it -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 bash
 ```
