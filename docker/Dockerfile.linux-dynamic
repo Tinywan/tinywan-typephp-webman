@@ -57,7 +57,7 @@ RUN composer require swoole/typephp:${TYPEPHP_VERSION} --prefer-dist --no-progre
     && ln -sf /opt/typephp/vendor/bin/tpc.php /usr/local/bin/tpc \
     && chmod +x /usr/local/bin/tpc
 
-# 7. 预编译 PHPX 动态运行时库 (libphpx.so)，免去挂载项目每次重新编译
+# 7. 预编译 PHPX 动态运行时库 (libphpx.so)，并注册到系统动态链接器
 RUN PHPX_DIR="/opt/typephp/vendor/swoole/phpx" \
     && cd "$PHPX_DIR" \
     && sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include \/usr\/include\/x86_64-linux-gnu)/g' CMakeLists.txt \
@@ -65,7 +65,10 @@ RUN PHPX_DIR="/opt/typephp/vendor/swoole/phpx" \
     && make phpx -j$(nproc) \
     && mkdir -p "$PHPX_DIR/lib" \
     && cp -f "$PHPX_DIR/libphpx.so" "$PHPX_DIR/lib/" 2>/dev/null || true \
-    && echo "[OK] Precompiled libphpx.so created successfully"
+    && echo "$PHPX_DIR/lib" > /etc/ld.so.conf.d/typephp.conf \
+    && echo "$PHPX_DIR" >> /etc/ld.so.conf.d/typephp.conf \
+    && ldconfig \
+    && echo "[OK] Precompiled libphpx.so created and registered to system ldconfig successfully"
 
 # 8. 配置 Entrypoint 脚本
 COPY entrypoint.sh /entrypoint.sh
@@ -73,7 +76,8 @@ RUN chmod +x /entrypoint.sh
 
 ENV PATH="/opt/typephp/vendor/bin:${PATH}" \
     TYPEPHP_HOME="/opt/typephp" \
-    PHPX_HOME="/opt/typephp/vendor/swoole/phpx"
+    PHPX_HOME="/opt/typephp/vendor/swoole/phpx" \
+    LD_LIBRARY_PATH="/opt/typephp/vendor/swoole/phpx/lib:/opt/typephp/vendor/swoole/phpx:/usr/lib:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
 

@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+# 确保动态库路径全局可用
+export LD_LIBRARY_PATH="/opt/typephp/vendor/swoole/phpx/lib:/opt/typephp/vendor/swoole/phpx:/usr/lib:${LD_LIBRARY_PATH}"
+
 # ============================================================
 # TypePHP 通用 AOT 编译器容器入口
 # 适用于任意 PHP 项目 (CLI 单文件、库、框架项目等)
