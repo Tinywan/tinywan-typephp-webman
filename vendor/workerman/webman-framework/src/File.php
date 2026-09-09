@@ -28,6 +28,10 @@ use function umask;
 
 class File extends SplFileInfo
 {
+    private static function toMixed(mixed $value): mixed
+    {
+        return $value;
+    }
 
     /**
      * Move.
@@ -36,6 +40,7 @@ class File extends SplFileInfo
      */
     public function move(string $destination): File
     {
+        $error = self::toMixed(null);
         set_error_handler(function ($type, $msg) use (&$error) {
             $error = $msg;
         });
