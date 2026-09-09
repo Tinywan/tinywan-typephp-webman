@@ -75,6 +75,7 @@ ignore:
   - vendor/nikic/fast-route/src/Dispatcher/CharCountBased.php
   - vendor/nikic/fast-route/src/Dispatcher/GroupPosBased.php
   - vendor/nikic/fast-route/src/Dispatcher/MarkBased.php
+  - vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php
 
   # ==========================================
   # 4. 协程组件：Swow 扩展依赖排除
