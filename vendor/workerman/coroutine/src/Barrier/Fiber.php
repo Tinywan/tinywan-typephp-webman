@@ -32,7 +32,7 @@ class Fiber implements BarrierInterface
     /**
      * @inheritDoc
      */
-    public static function wait(object &$barrier, int $timeout = -1): void
+    public static function wait(mixed &$barrier, int $timeout = -1): void
     {
         $coroutine = BaseFiber::getCurrent();
         $resumed = false;

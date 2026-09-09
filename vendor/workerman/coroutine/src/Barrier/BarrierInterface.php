@@ -28,7 +28,7 @@ interface BarrierInterface
      * @param int $timeout
      * @return void
      */
-    public static function wait(object &$barrier, int $timeout = -1): void;
+    public static function wait(mixed &$barrier, int $timeout = -1): void;
 
     /**
      * Create a new barrier instance.
