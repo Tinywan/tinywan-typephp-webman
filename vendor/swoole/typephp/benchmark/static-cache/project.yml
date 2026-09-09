@@ -1,0 +1,8 @@
+name: static_cache_benchmark
+mode: bin
+optimize: 3
+lto: true
+build-dir: build
+output: static_cache
+sources:
+  - benchmark.php

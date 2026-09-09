@@ -1,0 +1,7 @@
+/build/
+/build-*/
+/ios-build/
+/dist/
+/*.rsp
+/typephp_macos_hello
+/typephp_ios_hello

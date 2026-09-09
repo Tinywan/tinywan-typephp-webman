@@ -1,0 +1,17 @@
+name: typephp_android_hello
+version: 0.1.0
+mode: lib
+output: dist/typephp_android_hello.so
+php-version: "8.4"
+cxx-std: c++17
+target-platform: aarch64-linux-android24
+build-dir: build/typephp
+no-progress: true
+
+sources:
+  - php-src
+  - cpp-src
+
+ld-flags:
+  - -Wl,--gc-sections
+  - -Wl,--exclude-libs,ALL

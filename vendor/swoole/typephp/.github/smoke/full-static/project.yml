@@ -1,0 +1,8 @@
+name: full-static-smoke
+mode: bin
+build-dir: build
+output: full_static_smoke
+cxx-std: c++17
+
+sources:
+  - main.php
