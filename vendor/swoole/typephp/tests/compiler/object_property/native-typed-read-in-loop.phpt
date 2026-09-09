@@ -2,8 +2,6 @@
 Native typed object property read inside loop falls back to typed zval value
 --FILE--
 <?php
-use native_types;
-
 class NativeTypedLoopData
 {
     public int $val = 0;

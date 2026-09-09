@@ -5,7 +5,7 @@ bool 001
 function main()
 {
     $offset = 1;
-    $maxCount = any(10);
+    $maxCount = std::any(10);
     var_dump($maxCount-- > 0 && $offset);
 }
 ?>

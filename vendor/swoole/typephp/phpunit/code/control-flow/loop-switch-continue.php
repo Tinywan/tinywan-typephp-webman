@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 function switch_continue_in_for(): void
 {
     for ($i = 0; $i < 2; $i++) {

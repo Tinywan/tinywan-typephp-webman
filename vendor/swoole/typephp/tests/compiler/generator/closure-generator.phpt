@@ -17,7 +17,7 @@ class GeneratorClosureBox
 
 function main(): void
 {
-    $state = 1;
+    $state = std::any(1);
     $factory = function (int $add) use (&$state): iterable {
         ++$state;
         $sent = yield 'closure' => $state + $add;

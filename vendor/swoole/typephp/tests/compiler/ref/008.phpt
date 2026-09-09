@@ -5,7 +5,7 @@ class const 001
 class WorkerA
 {
     public function foo(): array {
-        $list = [377, 64, 688, 2];
+        $list = std::any([377, 64, 688, 2]);
         $ref = &$list;
         $this->sort($ref);
         return $list;

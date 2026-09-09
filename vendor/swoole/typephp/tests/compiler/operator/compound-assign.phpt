@@ -30,7 +30,7 @@ function main() {
     var_dump($c);
 
     // Reference assignment
-    $y = 2;
+    $y = std::any(2);
     $z = &$y;
     $y = 5;
     var_dump($z);

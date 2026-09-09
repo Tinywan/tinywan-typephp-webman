@@ -2,7 +2,6 @@
 use bigint_types — integer literals auto-converted to BigInt
 --FILE--
 <?php
-declare(strict_types=1);
 use bigint_types;
 
 function main(): void {

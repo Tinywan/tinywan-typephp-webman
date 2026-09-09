@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 final class DynamicPropertyEntity
 {
@@ -107,6 +106,7 @@ function measure(callable $callback, int $operations): float
 function main(): void
 {
     global $benchmarkSink;
+    $selectedCase = getenv('PROPERTY_ACCESS_CASE');
     $benchmarkSink = 0;
     $iterations = 200000;
     $data = [
@@ -121,34 +121,41 @@ function main(): void
     $static = new StaticPropertyEntity();
     $operations = $iterations * 5;
 
-    $dynamicWrite = measure(
-        function () use ($dynamic, $data, $iterations): int {
-            return runDynamicWrite($dynamic, $data, $iterations);
-        },
-        $operations,
-    );
-    $staticWrite = measure(
-        function () use ($static, $data, $iterations): int {
-            return runStaticWrite($static, $data, $iterations);
-        },
-        $operations,
-    );
-    $dynamicRead = measure(
-        function () use ($dynamic, $properties, $iterations): int {
-            return runDynamicRead($dynamic, $properties, $iterations);
-        },
-        $operations,
-    );
-    $staticRead = measure(
-        function () use ($static, $iterations): int {
-            return runStaticRead($static, $iterations);
-        },
-        $operations,
-    );
-
-    printf("dynamic_write_ns=%.3f\n", $dynamicWrite);
-    printf("static_write_ns=%.3f\n", $staticWrite);
-    printf("dynamic_read_ns=%.3f\n", $dynamicRead);
-    printf("static_read_ns=%.3f\n", $staticRead);
+    if (!is_string($selectedCase) || $selectedCase === '' || $selectedCase === 'dynamic_write') {
+        $dynamicWrite = measure(
+            function () use ($dynamic, $data, $iterations): int {
+                return runDynamicWrite($dynamic, $data, $iterations);
+            },
+            $operations,
+        );
+        printf("dynamic_write_ns=%.3f\n", $dynamicWrite);
+    }
+    if (!is_string($selectedCase) || $selectedCase === '' || $selectedCase === 'static_write') {
+        $staticWrite = measure(
+            function () use ($static, $data, $iterations): int {
+                return runStaticWrite($static, $data, $iterations);
+            },
+            $operations,
+        );
+        printf("static_write_ns=%.3f\n", $staticWrite);
+    }
+    if (!is_string($selectedCase) || $selectedCase === '' || $selectedCase === 'dynamic_read') {
+        $dynamicRead = measure(
+            function () use ($dynamic, $properties, $iterations): int {
+                return runDynamicRead($dynamic, $properties, $iterations);
+            },
+            $operations,
+        );
+        printf("dynamic_read_ns=%.3f\n", $dynamicRead);
+    }
+    if (!is_string($selectedCase) || $selectedCase === '' || $selectedCase === 'static_read') {
+        $staticRead = measure(
+            function () use ($static, $iterations): int {
+                return runStaticRead($static, $iterations);
+            },
+            $operations,
+        );
+        printf("static_read_ns=%.3f\n", $staticRead);
+    }
     echo 'checksum=', $benchmarkSink + $dynamic->sum($properties) + $static->sum(), "\n";
 }

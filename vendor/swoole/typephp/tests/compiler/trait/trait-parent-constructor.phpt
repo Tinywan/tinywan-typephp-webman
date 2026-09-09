@@ -3,7 +3,6 @@ Trait constructor calling parent::__construct of the composing class
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 trait TestTrait
 {

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <type_traits>
 #include <string_view>
 #ifdef ZTS
 #include <atomic>
@@ -92,6 +93,504 @@ PHPX_API zend_function *typephp_get_parent_property_hook(zend_class_entry *paren
 #endif
 
 namespace php {
+
+/**
+ * Bridge a fixed TypePHP value and a Zend reference without weakening the
+ * native function ABI.  Typed TypePHP functions receive T&, while dynamic PHP
+ * calls still require a real zend_reference.
+ *
+ * A wrapper constructed from T& owns a temporary Reference.  commit() checks
+ * that dynamic code did not replace the value with another PHP type before it
+ * writes the value back.  A wrapper constructed from Reference uses an
+ * isolated proxy and commits it after the native call.  This slower bridge is
+ * reserved for dynamic/Zend boundaries; statically resolved TypePHP calls
+ * pass T& directly and do not construct RefWrap.
+ */
+template <typename T>
+class RefWrap;
+
+namespace detail {
+
+static inline void refWrapTypeError(const char *expected, const Variant &value) {
+    zend_type_error("Typed reference expects %s, %s given", expected, value.typeStr());
+    throwErrorIfOccurred();
+}
+
+static inline void refWrapEscapeError() {
+    throwError("A temporary typed reference cannot escape a dynamic call");
+}
+
+static inline void refWrapConflictError(const char *expected) {
+    throwError("Conflicting writes to a bridged %s reference", expected);
+}
+
+static inline bool refWrapIdentical(const Variant &left, const Variant &right) noexcept {
+    return zend_is_identical(
+        const_cast<zval *>(left.unwrap_ptr()),
+        const_cast<zval *>(right.unwrap_ptr()));
+}
+
+static inline String copyRefWrapString(const Reference &reference) {
+    if (UNEXPECTED(!reference.isString())) {
+        refWrapTypeError("string", reference);
+    }
+    const zval *value = reference.unwrap_ptr();
+    // A class-property default may point at a persistent, non-interned
+    // zend_string.  A shallow proxy would let an in-place concat attempt to
+    // erealloc() persistent storage with the request allocator.  The dynamic
+    // Reference -> typed-ref bridge is deliberately a copy/commit path, so
+    // give its proxy request-owned mutable storage.
+    return String(Z_STRVAL_P(value), Z_STRLEN_P(value));
+}
+
+static inline Array copyRefWrapArray(const Reference &reference) {
+    if (UNEXPECTED(!reference.isArray())) {
+        refWrapTypeError("array", reference);
+    }
+    zval value;
+    ZVAL_ARR(&value, zend_array_dup(Z_ARR_P(reference.unwrap_ptr())));
+    return Array(&value, Ctor::Move);
+}
+
+}  // namespace detail
+
+template <>
+class RefWrap<Int> final {
+    Int *typed_ = nullptr;
+    Reference reference_;
+    Int proxy_ = 0;
+    Int initial_ = 0;
+    bool native_to_zend_ = false;
+    bool committed_ = false;
+
+    void commitAfterException() noexcept {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (reference_.isInt()) {
+                *typed_ = Z_LVAL_P(reference_.unwrap_ptr());
+            }
+        } else if (reference_.isInt()) {
+            const Int current = Z_LVAL_P(reference_.unwrap_ptr());
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (proxy_changed && (!source_changed || current == proxy_)) {
+                try {
+                    reference_ = Variant(proxy_);
+                } catch (...) {
+                }
+            }
+        }
+        committed_ = true;
+    }
+
+  public:
+    explicit RefWrap(Int &value) : typed_(&value), native_to_zend_(true) {
+        reference_ = Variant(value);
+    }
+
+    explicit RefWrap(const Reference &reference) : reference_(reference) {
+        if (UNEXPECTED(!reference_.isInt())) {
+            detail::refWrapTypeError("int", reference_);
+        }
+        proxy_ = initial_ = Z_LVAL_P(reference_.unwrap_ptr());
+        typed_ = &proxy_;
+    }
+
+    RefWrap(const RefWrap &) = delete;
+    RefWrap &operator=(const RefWrap &) = delete;
+
+    ~RefWrap() noexcept {
+        commitAfterException();
+    }
+
+    Int &typed() noexcept {
+        return *typed_;
+    }
+
+    Reference &ref() noexcept {
+        return reference_;
+    }
+
+    void commit() {
+        if (committed_) {
+            return;
+        }
+        if (UNEXPECTED(!reference_.isInt())) {
+            detail::refWrapTypeError("int", reference_);
+        }
+        if (native_to_zend_) {
+            if (UNEXPECTED(reference_.getRefCount() != 1)) {
+                detail::refWrapEscapeError();
+            }
+            *typed_ = Z_LVAL_P(reference_.unwrap_ptr());
+        } else {
+            const Int current = Z_LVAL_P(reference_.unwrap_ptr());
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (UNEXPECTED(source_changed && proxy_changed && current != proxy_)) {
+                detail::refWrapConflictError("int");
+            }
+            if (proxy_changed) {
+                reference_ = Variant(proxy_);
+            }
+        }
+        committed_ = true;
+    }
+};
+
+template <>
+class RefWrap<Float> final {
+    Float *typed_ = nullptr;
+    Reference reference_;
+    Float proxy_ = 0;
+    Float initial_ = 0;
+    bool native_to_zend_ = false;
+    bool committed_ = false;
+
+    void commitAfterException() noexcept {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (reference_.isFloat()) {
+                *typed_ = Z_DVAL_P(reference_.unwrap_ptr());
+            }
+        } else if (reference_.isFloat()) {
+            const Float current = Z_DVAL_P(reference_.unwrap_ptr());
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (proxy_changed && (!source_changed || current == proxy_)) {
+                try {
+                    reference_ = Variant(proxy_);
+                } catch (...) {
+                }
+            }
+        }
+        committed_ = true;
+    }
+
+  public:
+    explicit RefWrap(Float &value) : typed_(&value), native_to_zend_(true) {
+        reference_ = Variant(value);
+    }
+
+    explicit RefWrap(const Reference &reference) : reference_(reference) {
+        if (UNEXPECTED(!reference_.isFloat())) {
+            detail::refWrapTypeError("float", reference_);
+        }
+        proxy_ = initial_ = Z_DVAL_P(reference_.unwrap_ptr());
+        typed_ = &proxy_;
+    }
+
+    RefWrap(const RefWrap &) = delete;
+    RefWrap &operator=(const RefWrap &) = delete;
+
+    ~RefWrap() noexcept {
+        commitAfterException();
+    }
+
+    Float &typed() noexcept {
+        return *typed_;
+    }
+
+    Reference &ref() noexcept {
+        return reference_;
+    }
+
+    void commit() {
+        if (committed_) {
+            return;
+        }
+        if (UNEXPECTED(!reference_.isFloat())) {
+            detail::refWrapTypeError("float", reference_);
+        }
+        if (native_to_zend_) {
+            if (UNEXPECTED(reference_.getRefCount() != 1)) {
+                detail::refWrapEscapeError();
+            }
+            *typed_ = Z_DVAL_P(reference_.unwrap_ptr());
+        } else {
+            const Float current = Z_DVAL_P(reference_.unwrap_ptr());
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (UNEXPECTED(source_changed && proxy_changed && current != proxy_)) {
+                detail::refWrapConflictError("float");
+            }
+            if (proxy_changed) {
+                reference_ = Variant(proxy_);
+            }
+        }
+        committed_ = true;
+    }
+};
+
+template <>
+class RefWrap<Bool> final {
+    Bool *typed_ = nullptr;
+    Reference reference_;
+    Bool proxy_ = false;
+    Bool initial_ = false;
+    bool native_to_zend_ = false;
+    bool committed_ = false;
+
+    void commitAfterException() noexcept {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (reference_.isBool()) {
+                *typed_ = reference_.toBool();
+            }
+        } else if (reference_.isBool()) {
+            const Bool current = reference_.toBool();
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (proxy_changed && (!source_changed || current == proxy_)) {
+                ZVAL_BOOL(reference_.unwrap_ptr(), proxy_);
+            }
+        }
+        committed_ = true;
+    }
+
+  public:
+    explicit RefWrap(Bool &value) : typed_(&value), native_to_zend_(true) {
+        reference_ = Variant(value);
+    }
+
+    explicit RefWrap(const Reference &reference) : reference_(reference) {
+        if (UNEXPECTED(!reference.isBool())) {
+            detail::refWrapTypeError("bool", reference);
+        }
+        proxy_ = initial_ = reference.toBool();
+        typed_ = &proxy_;
+    }
+
+    RefWrap(const RefWrap &) = delete;
+    RefWrap &operator=(const RefWrap &) = delete;
+
+    ~RefWrap() noexcept {
+        commitAfterException();
+    }
+
+    Bool &typed() noexcept {
+        return *typed_;
+    }
+
+    Reference &ref() noexcept {
+        return reference_;
+    }
+
+    void commit() {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (UNEXPECTED(!reference_.isBool())) {
+                detail::refWrapTypeError("bool", reference_);
+            }
+            if (UNEXPECTED(reference_.getRefCount() != 1)) {
+                detail::refWrapEscapeError();
+            }
+            *typed_ = reference_.toBool();
+        } else {
+            if (UNEXPECTED(!reference_.isBool())) {
+                detail::refWrapTypeError("bool", reference_);
+            }
+            const Bool current = reference_.toBool();
+            const bool source_changed = current != initial_;
+            const bool proxy_changed = proxy_ != initial_;
+            if (UNEXPECTED(source_changed && proxy_changed && current != proxy_)) {
+                detail::refWrapConflictError("bool");
+            }
+            if (proxy_changed) {
+                ZVAL_BOOL(reference_.unwrap_ptr(), proxy_);
+            }
+        }
+        committed_ = true;
+    }
+};
+
+template <>
+class RefWrap<String> final {
+    String *typed_ = nullptr;
+    Reference reference_;
+    String proxy_;
+    Variant initial_;
+    bool native_to_zend_ = false;
+    bool committed_ = false;
+
+    void commitAfterException() noexcept {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (reference_.isString()) {
+                try {
+                    *typed_ = String(reference_.unwrap_ptr());
+                } catch (...) {
+                }
+            }
+        } else if (reference_.isString()) {
+            const bool source_changed = !detail::refWrapIdentical(reference_, initial_);
+            const bool proxy_changed = !detail::refWrapIdentical(proxy_, initial_);
+            if (proxy_changed && (!source_changed || detail::refWrapIdentical(reference_, proxy_))) {
+                try {
+                    reference_ = proxy_;
+                } catch (...) {
+                }
+            }
+        }
+        committed_ = true;
+    }
+
+  public:
+    explicit RefWrap(String &value) : typed_(&value), native_to_zend_(true) {
+        reference_ = Variant(value);
+    }
+
+    explicit RefWrap(const Reference &reference)
+        : reference_(reference),
+          proxy_(detail::copyRefWrapString(reference)),
+          initial_(proxy_) {
+        typed_ = &proxy_;
+    }
+
+    RefWrap(const RefWrap &) = delete;
+    RefWrap &operator=(const RefWrap &) = delete;
+
+    ~RefWrap() noexcept {
+        commitAfterException();
+    }
+
+    String &typed() noexcept {
+        return *typed_;
+    }
+
+    Reference &ref() noexcept {
+        return reference_;
+    }
+
+    void commit() {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (UNEXPECTED(!reference_.isString())) {
+                detail::refWrapTypeError("string", reference_);
+            }
+            if (UNEXPECTED(reference_.getRefCount() != 1)) {
+                detail::refWrapEscapeError();
+            }
+            *typed_ = String(reference_.unwrap_ptr());
+        } else {
+            if (UNEXPECTED(!reference_.isString())) {
+                detail::refWrapTypeError("string", reference_);
+            }
+            const bool source_changed = !detail::refWrapIdentical(reference_, initial_);
+            const bool proxy_changed = !detail::refWrapIdentical(proxy_, initial_);
+            if (UNEXPECTED(source_changed && proxy_changed && !detail::refWrapIdentical(reference_, proxy_))) {
+                detail::refWrapConflictError("string");
+            }
+            if (proxy_changed) {
+                reference_ = proxy_;
+            }
+        }
+        committed_ = true;
+    }
+};
+
+template <>
+class RefWrap<Array> final {
+    Array *typed_ = nullptr;
+    Reference reference_;
+    Array proxy_;
+    Variant initial_;
+    zend_array *initial_proxy_array_ = nullptr;
+    bool native_to_zend_ = false;
+    bool committed_ = false;
+
+    void commitAfterException() noexcept {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (reference_.isArray()) {
+                try {
+                    *typed_ = Array(reference_.unwrap_ptr());
+                } catch (...) {
+                }
+            }
+        } else if (reference_.isArray()) {
+            const bool source_changed = !detail::refWrapIdentical(reference_, initial_);
+            const bool proxy_changed = proxy_.array() != initial_proxy_array_
+                || !detail::refWrapIdentical(proxy_, initial_);
+            if (proxy_changed && (!source_changed || detail::refWrapIdentical(reference_, proxy_))) {
+                try {
+                    reference_ = proxy_;
+                } catch (...) {
+                }
+            }
+        }
+        committed_ = true;
+    }
+
+  public:
+    explicit RefWrap(Array &value) : typed_(&value), native_to_zend_(true) {
+        reference_ = Variant(value);
+    }
+
+    explicit RefWrap(const Reference &reference)
+        : reference_(reference), proxy_(detail::copyRefWrapArray(reference)), initial_(proxy_) {
+        initial_proxy_array_ = proxy_.array();
+        typed_ = &proxy_;
+    }
+
+    RefWrap(const RefWrap &) = delete;
+    RefWrap &operator=(const RefWrap &) = delete;
+
+    ~RefWrap() noexcept {
+        commitAfterException();
+    }
+
+    Array &typed() noexcept {
+        return *typed_;
+    }
+
+    Reference &ref() noexcept {
+        return reference_;
+    }
+
+    void commit() {
+        if (committed_) {
+            return;
+        }
+        if (native_to_zend_) {
+            if (UNEXPECTED(!reference_.isArray())) {
+                detail::refWrapTypeError("array", reference_);
+            }
+            if (UNEXPECTED(reference_.getRefCount() != 1)) {
+                detail::refWrapEscapeError();
+            }
+            *typed_ = Array(reference_.unwrap_ptr());
+        } else {
+            if (UNEXPECTED(!reference_.isArray())) {
+                detail::refWrapTypeError("array", reference_);
+            }
+            const bool source_changed = !detail::refWrapIdentical(reference_, initial_);
+            const bool proxy_changed = proxy_.array() != initial_proxy_array_
+                || !detail::refWrapIdentical(proxy_, initial_);
+            if (UNEXPECTED(source_changed && proxy_changed && !detail::refWrapIdentical(reference_, proxy_))) {
+                detail::refWrapConflictError("array");
+            }
+            if (proxy_changed) {
+                reference_ = proxy_;
+            }
+        }
+        committed_ = true;
+    }
+};
 
 /**
  * Release a generated temporary argument array both after a successful full
@@ -233,6 +732,11 @@ class PHPX_API FunctionCallCacheSlot final {
     zend_fcall_info_cache cache_{};
     zend_array *polymorphic_cache_ = nullptr;
 
+    Variant callImpl(const Variant &func,
+                     uint32_t param_count,
+                     zval *params,
+                     zend_array *named_args);
+
   public:
     FunctionCallCacheSlot() = default;
     ~FunctionCallCacheSlot();
@@ -240,19 +744,40 @@ class PHPX_API FunctionCallCacheSlot final {
     FunctionCallCacheSlot &operator=(const FunctionCallCacheSlot &) = delete;
 
     void reset() noexcept;
-    Variant call(const Variant &func, uint32_t param_count, zval *params, zend_array *named_args = nullptr);
+    Variant call(const Variant &func) {
+        return callImpl(func, 0, nullptr, nullptr);
+    }
     Variant call(const Variant &func, Args &args, zend_array *named_args = nullptr) {
-        return call(func, args.count(), args.ptr(), named_args);
+        return callImpl(func, args.count(), args.ptr(), named_args);
+    }
+    Variant call(const Variant &func, FixedArgs args, zend_array *named_args = nullptr) {
+        return callImpl(func, args.count(), args.ptr(), named_args);
     }
 };
 
-/** Request-local monomorphic cache for one unscoped dynamic method call. */
+/** Request-local monomorphic cache for one dynamic method-call site. */
 class PHPX_API MethodCallCacheSlot final {
     zend_class_entry *class_entry_ = nullptr;
     zend_string *name_ = nullptr;
     zend_function *function_ = nullptr;
     zend_class_entry *called_scope_ = nullptr;
+    zend_class_entry *lexical_scope_guard_ = nullptr;
+    zend_class_entry *called_scope_guard_ = nullptr;
+    zend_class_entry *this_scope_guard_ = nullptr;
+    bool scoped_ = false;
     bool polymorphic_ = false;
+
+    Variant callImpl(const Variant &object,
+                     const Variant &method,
+                     uint32_t param_count,
+                     zval *params,
+                     zend_array *named_args);
+    Variant callScopedImpl(const Variant &object,
+                           const Variant &method,
+                           const CallableScope &scope,
+                           uint32_t param_count,
+                           zval *params,
+                           zend_array *named_args);
 
   public:
     MethodCallCacheSlot() = default;
@@ -261,13 +786,33 @@ class PHPX_API MethodCallCacheSlot final {
     MethodCallCacheSlot &operator=(const MethodCallCacheSlot &) = delete;
 
     void reset() noexcept;
-    Variant call(const Variant &object,
-                 const Variant &method,
-                 uint32_t param_count,
-                 zval *params,
-                 zend_array *named_args = nullptr);
+    Variant call(const Variant &object, const Variant &method) {
+        return callImpl(object, method, 0, nullptr, nullptr);
+    }
     Variant call(const Variant &object, const Variant &method, Args &args, zend_array *named_args = nullptr) {
-        return call(object, method, args.count(), args.ptr(), named_args);
+        return callImpl(object, method, args.count(), args.ptr(), named_args);
+    }
+    Variant call(const Variant &object, const Variant &method, FixedArgs args, zend_array *named_args = nullptr) {
+        return callImpl(object, method, args.count(), args.ptr(), named_args);
+    }
+    Variant callScoped(const Variant &object,
+                       const Variant &method,
+                       const CallableScope &scope) {
+        return callScopedImpl(object, method, scope, 0, nullptr, nullptr);
+    }
+    Variant callScoped(const Variant &object,
+                       const Variant &method,
+                       const CallableScope &scope,
+                       Args &args,
+                       zend_array *named_args = nullptr) {
+        return callScopedImpl(object, method, scope, args.count(), args.ptr(), named_args);
+    }
+    Variant callScoped(const Variant &object,
+                       const Variant &method,
+                       const CallableScope &scope,
+                       FixedArgs args,
+                       zend_array *named_args = nullptr) {
+        return callScopedImpl(object, method, scope, args.count(), args.ptr(), named_args);
     }
 };
 
@@ -388,6 +933,7 @@ static inline void appendCallExtraNamedArgs(Array &args) {
 
 PHPX_API Str getCalledClass(Object &this_);
 PHPX_API zend_class_entry *getCalledCe(Object &this_);
+
 static inline CallableScope getCallableScope(zend_function *caller_function, Object &this_) {
     auto *called_scope = getCalledCe(this_);
     return CallableScope{
@@ -413,41 +959,97 @@ static inline auto getCreateObjectFn(zend_class_entry *ce) {
 }  // namespace php
 
 /**
- * Materialize the common small positional-argument list on the C++ stack.
- *
- * This intentionally mirrors php::Args::append(): INDIRECT values are
- * materialized, references are preserved, and every copied zval is released
- * after the call. Larger lists keep using php::Args so this optimization does
- * not change the general-purpose container or its ABI.
+ * Hot AOT equivalents of php::getCalledCe()/getCalledClass(). Keep these in
+ * the TypePHP helper layer so generated code can inline the representation
+ * check without exposing Zend macros at each call site.
  */
-template <typename Invoke>
-static zend_always_inline php::Variant typephp_invoke_arg_list(const php::ArgList &args, Invoke invoke) {
-    constexpr size_t stack_capacity = 4;
-    if (UNEXPECTED(args.size() > stack_capacity)) {
-        php::Args call_args(args);
-        return invoke(call_args.count(), call_args.ptr());
+static inline zend_class_entry *typephp_get_called_ce(php::Object &this_) noexcept {
+    if (EXPECTED(this_.isObject())) {
+        return this_.ce();
+    }
+    return static_cast<zend_class_entry *>(Z_PTR_P(this_.ptr()));
+}
+
+static inline php::Str typephp_get_called_class(zend_class_entry *called_scope) {
+    return called_scope == nullptr ? php::Str("") : php::Str(called_scope->name);
+}
+
+/**
+ * Read a statically resolved TypePHP static-property slot by its cached
+ * offset. This is semantically identical to php::getStaticProperty(ce,
+ * offset), but is inline because static property access is emitted in hot
+ * generated paths. zval_wrap() deliberately preserves PHP references.
+ */
+static inline zval *typephp_get_static_property_slot(zend_class_entry *ce, uint32_t offset) {
+    if (UNEXPECTED(CE_STATIC_MEMBERS(ce) == nullptr)) {
+        zend_class_init_statics(ce);
+    }
+    zval *slot = CE_STATIC_MEMBERS(ce) + offset;
+    ZVAL_DEINDIRECT(slot);
+    return slot;
+}
+
+static inline zval *typephp_get_static_property_slot(zend_class_entry *ce, const php::String &property) {
+    zval *slot = zend_read_static_property_ex(ce, property.str(), true);
+    php::throwErrorIfOccurred();
+    return slot;
+}
+
+/**
+ * Lazily resolve one static-property slot into a generated function local.
+ * The resolver is not evaluated on a hit, so lookup disappears from hot loops
+ * without moving static-member initialization ahead of the PHP access itself.
+ * Only the final storage address is cached. A fresh lightweight Variant view is
+ * returned so the property's current value/reference state is always observed.
+ */
+template <typename Resolver>
+static zend_always_inline php::Variant typephp_get_static_property_cached(zval *&cached_slot,
+                                                                          Resolver &&resolver) {
+    if (UNEXPECTED(cached_slot == nullptr)) {
+        cached_slot = resolver();
+    }
+    return php::Variant{cached_slot, php::zval_wrap(cached_slot)};
+}
+
+/**
+ * Fast isset/coalesce lookup for a value statically known to be an array.
+ * Unusual key types stay on PHPX's general operation-chain path so this
+ * helper changes cost, not semantics.
+ */
+static inline bool typephp_array_isset(const php::Variant &array,
+                                       const php::Variant &key,
+                                       php::Variant *result = nullptr) {
+    const zval *root = array.unwrap_ptr();
+    if (UNEXPECTED(Z_TYPE_P(root) != IS_ARRAY)) {
+        if (result == nullptr) {
+            return php::exists(array, {{php::ArrayDimFetch, key}});
+        }
+        return php::exists(array, {{php::ArrayDimFetch, key}}, *result);
     }
 
-    zval params[stack_capacity];
-    uint32_t count = 0;
-    for (const auto &arg : args) {
-        const zval *source = arg.const_ptr();
-        ZVAL_DEINDIRECT(source);
-        ZVAL_COPY(&params[count++], source);
+    zval *value;
+    if (EXPECTED(key.isString())) {
+        value = zend_symtable_find(Z_ARRVAL_P(root), Z_STR_P(key.unwrap_ptr()));
+    } else if (key.isInt() || key.isBool() || key.isFloat()) {
+        value = zend_hash_index_find(Z_ARRVAL_P(root), static_cast<zend_ulong>(key.toInt()));
+    } else {
+        if (result == nullptr) {
+            return php::exists(array, {{php::ArrayDimFetch, key}});
+        }
+        return php::exists(array, {{php::ArrayDimFetch, key}}, *result);
     }
 
-    try {
-        php::Variant retval = invoke(count, count == 0 ? nullptr : params);
-        for (uint32_t i = 0; i < count; i++) {
-            zval_ptr_dtor(&params[i]);
+    if (UNEXPECTED(value == nullptr)) {
+        if (result != nullptr) {
+            *result = nullptr;
         }
-        return retval;
-    } catch (...) {
-        for (uint32_t i = 0; i < count; i++) {
-            zval_ptr_dtor(&params[i]);
-        }
-        throw;
+        return false;
     }
+    if (result != nullptr) {
+        *result = value;
+    }
+    ZVAL_DEREF(value);
+    return Z_TYPE_P(value) != IS_NULL && Z_TYPE_P(value) != IS_UNDEF;
 }
 
 static inline php::Variant typephp_call_cached(const php::Variant &func,
@@ -458,11 +1060,15 @@ static inline php::Variant typephp_call_cached(const php::Variant &func,
 }
 
 static zend_always_inline php::Variant typephp_call_cached(const php::Variant &func,
-                                                           php::FunctionCallCacheSlot &cache,
-                                                           const php::ArgList &args = {},
-                                                           zend_array *named_args = nullptr) {
-    return typephp_invoke_arg_list(
-        args, [&](uint32_t count, zval *params) { return cache.call(func, count, params, named_args); });
+                                                            php::FunctionCallCacheSlot &cache,
+                                                            php::FixedArgs args,
+                                                            zend_array *named_args = nullptr) {
+    return cache.call(func, args, named_args);
+}
+
+static inline php::Variant typephp_call_cached(const php::Variant &func,
+                                               php::FunctionCallCacheSlot &cache) {
+    return cache.call(func);
 }
 
 static inline php::Variant typephp_call_method_cached(const php::Variant &object,
@@ -476,84 +1082,41 @@ static inline php::Variant typephp_call_method_cached(const php::Variant &object
 static zend_always_inline php::Variant typephp_call_method_cached(const php::Variant &object,
                                                                   const php::Variant &method,
                                                                   php::MethodCallCacheSlot &cache,
-                                                                  const php::ArgList &args = {},
+                                                                  php::FixedArgs args,
                                                                   zend_array *named_args = nullptr) {
-    return typephp_invoke_arg_list(
-        args, [&](uint32_t count, zval *params) { return cache.call(object, method, count, params, named_args); });
+    return cache.call(object, method, args, named_args);
 }
 
-/** Invoke the lexical parent constructor as part of a new-expression chain. */
-static inline php::Variant typephp_call_parent_constructor(php::Object &object,
-                                                           zend_function *constructor,
-                                                           php::Args &args,
-                                                           zend_array *named_args = nullptr) {
-    php::Variant retval;
-    zend_call_known_function(constructor,
-                             object.checkedObject("Call to parent constructor"),
-                             object.ce(),
-                             retval.ptr(),
-                             args.count(),
-                             args.ptr(),
-                             named_args);
-    php::throwErrorIfOccurred();
-    return retval;
+static inline php::Variant typephp_call_method_cached(const php::Variant &object,
+                                                      const php::Variant &method,
+                                                      php::MethodCallCacheSlot &cache) {
+    return cache.call(object, method);
 }
 
-static inline php::Variant typephp_call_parent_constructor(php::Object &object, zend_function *constructor) {
-    php::Args args;
-    return typephp_call_parent_constructor(object, constructor, args);
+static inline php::Variant typephp_call_method_scoped_cached(const php::Variant &object,
+                                                             const php::Variant &method,
+                                                             const php::CallableScope &scope,
+                                                             php::MethodCallCacheSlot &cache,
+                                                             php::Args &args,
+                                                             zend_array *named_args = nullptr) {
+    return cache.callScoped(object, method, scope, args, named_args);
 }
 
-static inline php::Variant typephp_call_parent_constructor(php::Object &object,
-                                                           zend_function *constructor,
-                                                           const php::ArgList &args,
-                                                           zend_array *named_args = nullptr) {
-    php::Args call_args(args);
-    return typephp_call_parent_constructor(object, constructor, call_args, named_args);
+static zend_always_inline php::Variant typephp_call_method_scoped_cached(
+    const php::Variant &object,
+    const php::Variant &method,
+    const php::CallableScope &scope,
+    php::MethodCallCacheSlot &cache,
+    php::FixedArgs args,
+    zend_array *named_args = nullptr) {
+    return cache.callScoped(object, method, scope, args, named_args);
 }
 
-static inline php::Variant typephp_call_parent_constructor(php::Object &object,
-                                                           zend_function *constructor,
-                                                           php::Array &args,
-                                                           zend_array *named_args = nullptr) {
-    php::Args call_args(args);
-    return typephp_call_parent_constructor(object, constructor, call_args, named_args);
-}
-
-/** Invoke the lexical parent clone hook as part of a clone-expression chain. */
-static inline php::Variant typephp_call_parent_clone(php::Object &object, zend_function *clone_method) {
-    php::Variant retval;
-    zend_call_known_function(clone_method,
-                             object.checkedObject("Call to parent clone method"),
-                             object.ce(),
-                             retval.ptr(),
-                             0,
-                             nullptr,
-                             nullptr);
-    php::throwErrorIfOccurred();
-    return retval;
-}
-
-/**
- * Read one dynamic dimension for TypePHP's null-coalescing assignment.
- *
- * ArrayAccess requires offsetExists() followed by offsetGet(), because an
- * existing null value still selects the assignment branch. Arrays, strings,
- * and unsupported scalar values retain PHPX's normal exists() behavior.
- * Keeping this dispatch here prevents generated code from duplicating the
- * ArrayAccess protocol without exposing Zend dimension-handler details.
- */
-static inline bool typephp_coalesce_dimension_read(const php::Variant &container,
-                                                   const php::Variant &key,
-                                                   php::Variant &result) {
-    if (container.isObject()) {
-        if (!container.offsetExists(key)) {
-            return false;
-        }
-        result = container.offsetGet(key);
-        return !result.isNull();
-    }
-    return php::exists(container, {{php::ArrayDimFetch, key}}, result);
+static inline php::Variant typephp_call_method_scoped_cached(const php::Variant &object,
+                                                             const php::Variant &method,
+                                                             const php::CallableScope &scope,
+                                                             php::MethodCallCacheSlot &cache) {
+    return cache.callScoped(object, method, scope);
 }
 
 /**

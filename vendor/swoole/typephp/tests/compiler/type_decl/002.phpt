@@ -2,7 +2,6 @@
 Type Declarations - Strict and weak typing modes
 --FILE--
 <?php
-declare(strict_types=1);
 
 // Test scalar type declarations
 function add_integers(int $a, int $b): int {

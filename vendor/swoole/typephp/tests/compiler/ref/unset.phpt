@@ -4,7 +4,7 @@ object link operator
 <?php
 function main()
 {
-    $a = 1;
+    $a = std::any(1);
     $b = &$a;
     $b = 2;
     var_dump($a, $b);

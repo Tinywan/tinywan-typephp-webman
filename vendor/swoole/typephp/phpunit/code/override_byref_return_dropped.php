@@ -3,7 +3,8 @@ class A
 {
     public function &f(): array
     {
-        static $a = [];
+        static $a;
+        $a ??= [];
         return $a;
     }
 }

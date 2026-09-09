@@ -2,6 +2,8 @@
 Magic Methods - __get, __set, __call, __invoke etc.
 --FILE--
 <?php
+use varint_types;
+
 class Point {
     public function __construct(
         private float $x = 0.0,

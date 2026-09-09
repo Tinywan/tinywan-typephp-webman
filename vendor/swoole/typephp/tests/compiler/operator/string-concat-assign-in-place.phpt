@@ -2,7 +2,6 @@
 String concat assignment preserves PHP value, COW and expression semantics
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class ConcatAssignStringable
 {

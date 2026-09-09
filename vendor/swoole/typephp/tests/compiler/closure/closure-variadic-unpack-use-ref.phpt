@@ -4,7 +4,7 @@ closure variadic parameter should work with unpacked positional arguments
 <?php
 
 function main() {
-    $log = [];
+    $log = std::any([]);
     $fn = function ($a, $b = 20, ...$rest) use (&$log) {
         $log[] = $a + $b + array_sum($rest);
         var_dump($a, $b, $rest);

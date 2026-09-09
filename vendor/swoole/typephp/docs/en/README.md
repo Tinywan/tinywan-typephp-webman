@@ -10,7 +10,7 @@ This directory contains compiler implementation, compatibility, build-mode, and 
 - [Compiler CLI](COMPILER_CLI.md): current CLI arguments and project configuration.
 - [Compilation Modes](COMPILATION_MODES.md): binary, extension, library modes.
 - [Quick Start](QUICKSTART.md): the minimal compile flow.
-- [Compile-time Functions](COMPILE_TIME_FUNCTIONS.md): `any()`, `refval()`, `objval()`, `expected()`, `unexpected()`, and keyword methods.
+- [Compile-time Functions](COMPILE_TIME_FUNCTIONS.md): `std::any()`, `std::ref()`, `std::expected()`, `std::unexpected()`, and keyword methods.
 - [Native Types](NATIVE_TYPES.md), [High-Precision Types](HIGH_PRECISION_TYPES.md), [Std Containers](STD_CONTAINERS.md).
 - [Three Object Storage and Passing Models](OBJECT_STORAGE_AND_PASSING_MODELS.md): the responsibilities, ABI, and non-substitutable boundaries of Zend Object, PHPX Box, and Native Class Object.
 - [Universal and Extension Methods](UNIVERSAL_METHODS.md), [Generator](YIELD_GENERATOR.md).

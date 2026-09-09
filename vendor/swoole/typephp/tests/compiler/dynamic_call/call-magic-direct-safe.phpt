@@ -22,6 +22,15 @@ class RuntimeMethod extends DirectMagic
     }
 }
 
+final class MutatingMagic
+{
+    public function __call(string $name, array $arguments): mixed
+    {
+        $arguments[0] = 'changed-in-call';
+        return $arguments;
+    }
+}
+
 function callFromDeclaredBase(DirectMagic $object): mixed
 {
     return $object->existing();
@@ -39,6 +48,14 @@ function main(): void
     // A declared base type is not an exact runtime type. The compiler must
     // retain Zend dispatch so a subclass's real method wins over __call().
     var_dump(callFromDeclaredBase(new RuntimeMethod()));
+
+    // Zend constructs __call()'s argument array by value. A source reference
+    // must not leak into that array, including on the direct compiled path.
+    $source = std::any('original');
+    $reference = &$source;
+    $mutating = new MutatingMagic();
+    var_dump($mutating->missing($reference));
+    var_dump($source);
 }
 ?>
 --EXPECT--
@@ -67,3 +84,8 @@ array(2) {
   }
 }
 string(14) "runtime-method"
+array(1) {
+  [0]=>
+  string(15) "changed-in-call"
+}
+string(8) "original"

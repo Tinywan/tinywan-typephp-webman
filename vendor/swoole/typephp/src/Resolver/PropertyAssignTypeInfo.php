@@ -16,14 +16,11 @@ final class PropertyAssignTypeInfo
 {
     public function getFixedDefaultValue(PropertyDef $def): ?string
     {
-        return match ($def->type) {
-            Type::INT => $def->default ?? '0',
-            Type::FLOAT => $def->default ?? '0.0',
-            Type::BOOL => $def->default ?? 'false',
-            Type::STR => $def->default ?? Type::STR . '()',
-            Type::ARRAY => $def->default ?? Type::ARRAY . '{}',
-            default => null,
-        };
+        $typeDefault = Type::getDefaultValueExpression($def->type);
+        if ($typeDefault === null) {
+            return null;
+        }
+        return $def->default ?? $typeDefault;
     }
 
     public function isFixed(PropertyDef $def): bool

@@ -511,8 +511,6 @@ sec: 67.638107061386108
 ### std::array
 Test code:
 ```php
-use native_types;
-
 function main(int $argc, array $argv): void
 {
     $u = (int)$argv[2];

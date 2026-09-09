@@ -2,14 +2,12 @@
 SSA object prop: hoist int property to reference (NativeTypes)
 --FILE--
 <?php
-use native_types;
 class Foo {
     public int $a;
 }
 function main(): void {
     $o = new Foo();
     $o->a = 12;
-
     $n = 1024;
     while($n--) {
         $o->a += 13;

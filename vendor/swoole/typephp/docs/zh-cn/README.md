@@ -10,7 +10,7 @@
 - [编译器命令行](COMPILER_CLI.md)：当前 CLI 参数和项目配置。
 - [编译模式](COMPILATION_MODES.md)：binary、extension、library 模式。
 - [快速入门](QUICKSTART.md)：最小编译流程。
-- [编译期函数](COMPILE_TIME_FUNCTIONS.md)：`any()`、`refval()`、`objval()`、`expected()`、`unexpected()` 和关键词方法。
+- [编译期函数](COMPILE_TIME_FUNCTIONS.md)：`std::any()`、`std::ref()`、`std::expected()`、`std::unexpected()` 和关键词方法。
 - [原生类型](NATIVE_TYPES.md)、[高精度类型](HIGH_PRECISION_TYPES.md)、[Std 容器](STD_CONTAINERS.md)。
 - [三套对象存储与传递模型](OBJECT_STORAGE_AND_PASSING_MODELS.md)：Zend Object、PHPX Box 与 Native Class Object 的职责、ABI 和不可替代边界。
 - [通用与扩展方法](UNIVERSAL_METHODS.md)、[Generator](YIELD_GENERATOR.md)。

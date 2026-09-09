@@ -129,9 +129,10 @@ trait BinaryOpTrait
             $leftExpr = $this->convertExprType($leftExpr, $leftType, Type::FLOAT);
         }
 
-        $this->guardLiteralDivisionByZero($right, $op);
+        $this->guardLiteralDivisionByZero($left, $right, $op);
 
         $constantDivisionByZero = $this->handleNestedConstantDivisionByZero(
+            $left,
             $right,
             $op,
             $leftExpr,
@@ -145,12 +146,9 @@ trait BinaryOpTrait
             if (!($leftType === Type::INT and $rightType === Type::INT)) {
                 return 'php::fn::mod(' . $leftExpr . ', ' . $rightExpr . ')';
             }
-            // PHP int modulo raises a catchable DivisionByZeroError for a
-            // zero divisor and defines PHP_INT_MIN % -1 as 0; the raw C++ '%'
-            // is undefined behavior for both. Route dynamic int modulo through
-            // the PHP mod function unless the user explicitly selected
-            // `use native_types`. Constant operands are folded below.
-            if (!$this->nativeTypes
+            // varint_types retains PHP's catchable modulo errors and
+            // PHP_INT_MIN % -1 behavior. Native integers use raw C++ rules.
+            if ($this->varIntTypes
                 && !$this->isExplicitNativeArithmeticExpr($left)
                 && !$this->isExplicitNativeArithmeticExpr($right)
                 && $this->evaluateConstantIntArithmetic($left, $right, '%') === null
@@ -169,10 +167,9 @@ trait BinaryOpTrait
             // right-shifted value) and negative shift counts raise a catchable
             // ArithmeticError, while the raw C++ shift is undefined behavior
             // for both; a raw left shift into the sign bit is also undefined.
-            // Route dynamic int shifts through the encapsulated Variant
-            // operators unless the user explicitly selected `use native_types`.
-            // Constant shifts that C++ defines identically to PHP stay raw.
-            if (!$this->nativeTypes
+            // In varint mode, route dynamic shifts through Variant. Constant
+            // shifts that C++ defines identically to PHP stay raw.
+            if ($this->varIntTypes
                 && !$this->isExplicitNativeArithmeticExpr($left)
                 && !$this->isExplicitNativeArithmeticExpr($right)
                 && $leftType === Type::INT
@@ -200,10 +197,9 @@ trait BinaryOpTrait
         // Declared int parameters use the native Int ABI even in ordinary PHP
         // mode. Direct C++ +/−/* can overflow, while C++ integer division
         // truncates and cannot raise PHP's DivisionByZeroError. Route dynamic
-        // integer arithmetic through the encapsulated Variant operators unless
-        // the user explicitly selected `use native_types`. Fully constant
-        // expressions remain safe to emit directly after the checks above.
-        if (!$this->nativeTypes
+        // integer arithmetic through the encapsulated Variant operators only
+        // when varint_types explicitly requests PHP widening semantics.
+        if ($this->varIntTypes
             && $leftType === Type::INT
             && $rightType === Type::INT
             && in_array($op, ['+', '-', '*', '/'], true)
@@ -221,11 +217,9 @@ trait BinaryOpTrait
         // C++ '/': zend_long division truncates (7 / 2 is 3.5 in PHP, 3 in
         // C++), division by zero must raise the catchable DivisionByZeroError
         // (raw integer division is UB, raw double division yields INF/NAN),
-        // and PHP_INT_MIN / -1 promotes to float. Route dynamic division
-        // through the encapsulated Variant operator unless the user explicitly
-        // selected `use native_types`. Fully constant operands are folded
-        // above or are exact when emitted directly.
-        if (!$this->nativeTypes
+        // and PHP_INT_MIN / -1 promotes to float. varint_types explicitly
+        // selects this Variant path; native scalar division is the default.
+        if ($this->varIntTypes
             && $op === '/'
             && !$this->isExplicitNativeArithmeticExpr($left)
             && !$this->isExplicitNativeArithmeticExpr($right)
@@ -241,8 +235,8 @@ trait BinaryOpTrait
     }
 
     /**
-     * std::int/float/bool explicitly opt a value into native C++ arithmetic,
-     * independently of the file-wide `use native_types` declaration.
+     * std::int/float/bool explicitly retain native C++ arithmetic inside a
+     * file that selected `use varint_types`.
      */
     protected function isExplicitNativeArithmeticExpr(NodeAbstract $expr): bool
     {
@@ -277,7 +271,7 @@ trait BinaryOpTrait
 
         $wordSize = PHP_INT_SIZE * 8;
 
-        if ($this->nativeTypes) {
+        if (!$this->varIntTypes) {
             if ($shiftValue >= $wordSize) {
                 $this->fatalError(
                     $right,
@@ -371,7 +365,7 @@ trait BinaryOpTrait
             return null;
         }
 
-        if ($this->nativeTypes) {
+        if (!$this->varIntTypes) {
             if ($evaluation['cppUndefined']) {
                 $this->fatalError(
                     $left,
@@ -448,7 +442,7 @@ trait BinaryOpTrait
      */
     protected function constantIntValue(NodeAbstract $expr): ?int
     {
-        $value = $this->constantNumericValue($expr, $this->nativeTypes);
+        $value = $this->constantNumericValue($expr, !$this->varIntTypes);
         return is_int($value) ? $value : null;
     }
 
@@ -578,6 +572,7 @@ trait BinaryOpTrait
     }
 
     protected function handleNestedConstantDivisionByZero(
+        NodeAbstract $left,
         NodeAbstract $right,
         string $op,
         string $leftExpr,
@@ -588,13 +583,13 @@ trait BinaryOpTrait
         }
 
         if (!$this->isZeroLiteral($right)) {
-            $rightValue = $this->constantNumericValue($right, $this->nativeTypes);
+            $rightValue = $this->constantNumericValue($right, !$this->varIntTypes);
             if ($rightValue === null || $rightValue != 0) {
                 return null;
             }
         }
 
-        if ($this->nativeTypes) {
+        if (!$this->usesPhpArithmeticForZeroDivisor($left, $right)) {
             $this->fatalError($right, 'Constant division or modulo by zero has undefined behavior in C++ native mode');
         }
 
@@ -689,7 +684,7 @@ trait BinaryOpTrait
             $type = $this->getOrderedOperandTmpType($expr, (string) $value);
             $tmpVar = $this->addTmpVar($type);
         }
-        if ($this->nativeTypes && $this->isNativeType($type)) {
+        if ($this->usesNativeScalarStorage($type)) {
             // A native temporary has a fixed C++ scalar ABI. The expression
             // can still contain a dynamic operand (for example, an array
             // element), so normalize it at the materialization boundary.
@@ -721,7 +716,7 @@ trait BinaryOpTrait
             && $this->isVarExpr($expr->var)
         ) {
             $type = $this->getVarType($this->parseIdentifier($expr->var));
-            if ($this->nativeTypes && $this->isNativeType($type)) {
+            if ($this->usesNativeScalarStorage($type)) {
                 return $type;
             }
             return Type::VAR;
@@ -736,11 +731,11 @@ trait BinaryOpTrait
             $type = $this->detectTypeOfExpr($expr);
             if (
                 in_array($type, [Type::BIGINT, Type::DECIMAL, Type::BIGFLOAT], true)
-                || ($this->nativeTypes && $this->isNativeType($type))
+                || $this->usesNativeScalarStorage($type)
             ) {
                 // Calls and nested binary operands are materialized to preserve
-                // PHP's left-to-right evaluation order. In native-types mode
-                // their scalar result has a fixed C++ representation, so
+                // PHP's left-to-right evaluation order. A statically native
+                // scalar result has a fixed C++ representation, so
                 // boxing it in a Variant would add dynamic arithmetic and zval
                 // lifetime work to otherwise native expressions.
                 return $type;
@@ -778,7 +773,7 @@ trait BinaryOpTrait
         $type = $this->detectTypeOfExpr($expr);
         if ($expr instanceof Expr\Variable
             || in_array($type, [Type::BIGINT, Type::DECIMAL, Type::BIGFLOAT], true)
-            || ($this->nativeTypes && $this->isNativeType($type))
+            || $this->usesNativeScalarStorage($type)
         ) {
             return $type;
         }
@@ -786,8 +781,8 @@ trait BinaryOpTrait
         // around a side effect is materialized for evaluation order, but its
         // lowered C++ form can still be dynamic — `-strlen($s)` on an
         // unqualified namespaced call lowers to `-(php::call(...))`, a
-        // Variant. Outside native-types mode the temporary must stay dynamic,
-        // matching the call and binary-op policy above.
+        // Variant. When its type is not statically fixed the temporary must
+        // stay dynamic, matching the call and binary-op policy above.
         return Type::VAR;
     }
 
@@ -821,7 +816,7 @@ trait BinaryOpTrait
      */
     protected function tryParseFinalIntPropertyAddChain(Expr\BinaryOp\Plus $expr): ?string
     {
-        if ($this->nativeTypes) {
+        if (!$this->varIntTypes) {
             return null;
         }
 
@@ -1424,10 +1419,14 @@ trait BinaryOpTrait
             ?? $this->parseBinaryOp($expr->left, $expr->right, '/');
     }
 
-    protected function guardLiteralDivisionByZero(NodeAbstract $right, string $op): void
+    protected function guardLiteralDivisionByZero(
+        NodeAbstract $left,
+        NodeAbstract $right,
+        string $op
+    ): void
     {
         if (($op === '/' or $op === '%' or $op === '/=' or $op === '%=') and $this->isZeroLiteral($right)) {
-            if ($this->nativeTypes) {
+            if (!$this->usesPhpArithmeticForZeroDivisor($left, $right)) {
                 $this->fatalError($right, 'Cannot divide or modulo by zero');
             }
             // PHP raises a catchable DivisionByZeroError at runtime, and only
@@ -1435,6 +1434,19 @@ trait BinaryOpTrait
             // a literal zero divisor is valid PHP. Warn instead of rejecting.
             $this->warning($right, 'Division or modulo by zero throws DivisionByZeroError at runtime');
         }
+    }
+
+    /**
+     * A boxed operand already carries Zend arithmetic semantics regardless of
+     * the file mode. varint_types additionally opts integer arithmetic into
+     * that path; native scalar expressions reject statically known zero
+     * divisors before raw C++ arithmetic can produce UB or infinity.
+     */
+    protected function usesPhpArithmeticForZeroDivisor(NodeAbstract $left, NodeAbstract $right): bool
+    {
+        return $this->varIntTypes
+            || $this->detectTypeOfExpr($left) === Type::VAR
+            || $this->detectTypeOfExpr($right) === Type::VAR;
     }
 
     protected function parseBinaryOpMinus(Expr\BinaryOp\Minus $expr): string

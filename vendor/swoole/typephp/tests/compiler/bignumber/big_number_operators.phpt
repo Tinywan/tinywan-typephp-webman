@@ -2,9 +2,6 @@
 BigInt and Decimal operator overloading (+, -, *, /, %, **, <, >, <=, >=, ==, !=, <=>)
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // === BigInt arithmetic operators ===
     $a = std::bigInt(100);

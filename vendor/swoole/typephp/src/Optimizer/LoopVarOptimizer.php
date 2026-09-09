@@ -2,8 +2,8 @@
 /**
  * Range-proven loop variable optimizer.
  *
- * This pass narrows common PHP loop counters to php::Int without requiring
- * `use native_types`. It is intentionally pattern-based: PHP arithmetic can
+ * This pass narrows common PHP loop counters to php::Int even under
+ * `use varint_types`. It is intentionally pattern-based: PHP arithmetic can
  * widen integers to floats on overflow, so only monotonic counters with a
  * statically bounded range are accepted.
  */
@@ -526,9 +526,7 @@ trait LoopVarOptimizer
                     return true;
                 }
             }
-            if ($node instanceof Expr\FuncCall
-                && $node->name instanceof Node\Name
-                && strtolower($node->name->toString()) === 'refval') {
+            if ($this->isStdRefCall($node)) {
                 foreach ($node->args as $arg) {
                     if ($arg instanceof Node\Arg && $this->loopExprUsesAny($arg->value, $vars)) {
                         return true;
@@ -739,9 +737,7 @@ trait LoopVarOptimizer
                     return true;
                 }
             }
-            if ($expr instanceof Expr\FuncCall
-                && $expr->name instanceof Node\Name
-                && strtolower($expr->name->toString()) === 'refval') {
+            if ($this->isStdRefCall($expr)) {
                 foreach ($expr->args as $arg) {
                     if ($arg instanceof Node\Arg && $this->exprUsesVar($arg->value, $varName)) {
                         return true;

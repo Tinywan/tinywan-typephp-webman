@@ -2,9 +2,6 @@
 Decimal: powmod
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // 2^10 mod 1000 = 24
     $a = std::decimal("2");

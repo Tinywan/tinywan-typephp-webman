@@ -2,8 +2,6 @@
 Static property local slots survive dynamic PHP calls
 --FILE--
 <?php
-use native_types;
-
 class StaticDynamicCallStable {
     public static int $i = 1;
     public static string $s = "seed";

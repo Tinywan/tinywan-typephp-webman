@@ -21,7 +21,7 @@ function inspectSelections(array $values, string $text, bool $flag): void
 
 function main(): void
 {
-    $referenced = 3;
+    $referenced = std::any(3);
     $values = [
         'value' => 1,
         '12' => 'numeric key',

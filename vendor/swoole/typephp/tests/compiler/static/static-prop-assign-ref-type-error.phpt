@@ -2,8 +2,6 @@
 Reference to a typed static property preserves its type constraint
 --FILE--
 <?php
-use native_types;
-
 class TypedStaticReference
 {
     public static int $value = 1;

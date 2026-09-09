@@ -2,7 +2,6 @@
 Typed by-reference variadics validate, widen float arguments and write through unions and objects
 --FILE--
 <?php
-declare(strict_types=1);
 
 class Counter
 {
@@ -27,7 +26,7 @@ function normalize(int|string &...$values): void
     unset($value);
 }
 
-function bump_objects(Counter &...$values): void
+function bump_objects(mixed &...$values): void
 {
     foreach ($values as $value) {
         $value->value++;
@@ -40,8 +39,8 @@ function require_ints(int &...$values): void
 
 function main(): void
 {
-    $integer = 2;
-    $float = 2.5;
+    $integer = std::any(2);
+    $float = std::any(2.5);
     scale($integer, $float);
     var_dump($integer, $float);
 
@@ -49,17 +48,17 @@ function main(): void
     scale(...$values);
     var_dump($values);
 
-    $number = 10;
-    $text = 'hello';
+    $number = std::any(10);
+    $text = std::any('hello');
     normalize($number, $text);
     var_dump($number, $text);
 
-    $first = new Counter(1);
-    $second = new Counter(5);
+    $first = std::any(new Counter(1));
+    $second = std::any(new Counter(5));
     bump_objects($first, $second);
     var_dump($first->value, $second->value);
 
-    $invalid = any('not-an-int');
+    $invalid = std::any('not-an-int');
     try {
         require_ints($invalid);
     } catch (TypeError $error) {

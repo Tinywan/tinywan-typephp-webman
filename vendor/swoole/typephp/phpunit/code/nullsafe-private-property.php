@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class NullsafePrivateOwner
 {
     private int $value = 1;

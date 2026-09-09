@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 #[WasmExport(name: 'get-demo-report')]
 function getDemoReport(string $argumentsJson, string $greeting, string $stdin): string

@@ -769,7 +769,7 @@ PHP reference symbols are neither needed nor allowed here:
 ```php
 function replace(Point &$point): void; // FatalError
 $alias =& $point;                       // FatalError
-refval($point);                         // FatalError
+std::ref($point);                         // FatalError
 $point->toRef();                        // FatalError
 ```
 

@@ -9,7 +9,7 @@ class WorkerA
     }
 
     public function baz(string $name) {
-        $value = '';
+        $value = std::any('');
         $this->foo($name, $value);
         return $value;
     }
@@ -18,7 +18,7 @@ class WorkerA
 class WorkerB extends WorkerA
 {
     public function bar(string $name) {
-        $value = '';
+        $value = std::any('');
         $this->foo($name, $value);
         return $value;
     }

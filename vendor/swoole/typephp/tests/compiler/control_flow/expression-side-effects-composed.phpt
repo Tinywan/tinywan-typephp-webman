@@ -10,7 +10,7 @@ function side_effect(string $label, &$counter, $value) {
 }
 
 function main() {
-    $n = 0;
+    $n = std::any(0);
 
     $ternary = side_effect('ternary-cond', $n, true)
         ? side_effect('ternary-if', $n, 'yes')

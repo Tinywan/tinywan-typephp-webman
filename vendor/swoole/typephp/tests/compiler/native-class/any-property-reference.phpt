@@ -38,7 +38,7 @@ function main(): void
     replaceAny($object->child->value, 'direct argument');
     var_dump($childReference);
 
-    $source = 'assigned reference';
+    $source = std::any('assigned reference');
     $object->value =& $source;
     $source = 'source changed';
     var_dump($object->value);

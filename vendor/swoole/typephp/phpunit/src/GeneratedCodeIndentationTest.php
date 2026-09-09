@@ -18,7 +18,7 @@ class GeneratedCodeIndentationTest extends \PHPUnit\Framework\TestCase
         $code = file_get_contents($cppFile);
         $this->assertIsString($code);
         $this->assertStringContainsString(
-            "\t\twhile (tmp_var_0.next()) {\n\t\t\titem = tmp_var_0.value();",
+            "\t\twhile (tmp_var_0.nextValue(item)) {",
             $code,
         );
         $this->assertStringContainsString(
@@ -41,7 +41,7 @@ class GeneratedCodeIndentationTest extends \PHPUnit\Framework\TestCase
             $code,
         );
         $this->assertStringContainsString(
-            "\tphp::Var value = 1L;\n\n\treturn php::null;\n}",
+            "\tphp::Int value = php::toInt(1L);\n\n\treturn php::null;\n}",
             $code,
         );
         $this->assertStringNotContainsString('return php::null;}', $code);

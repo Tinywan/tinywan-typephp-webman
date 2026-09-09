@@ -2,9 +2,6 @@
 Decimal comparison and conversions
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::decimal("123.456");
     $b = std::decimal("789.012");

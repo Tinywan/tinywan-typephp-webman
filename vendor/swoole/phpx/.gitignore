@@ -10,6 +10,7 @@
 # Precompiled Headers
 *.gch
 *.pch
+*_arginfo.h
 
 # Compiled Dynamic libraries
 *.so
@@ -52,7 +53,6 @@ examples/test/test.so.dSYM/
 console/vendor
 console/test
 console/composer.lock
-bin/phpx
 /build/
 \.settings/
 /Debug/
@@ -62,7 +62,6 @@ bin/phpx
 /vendor
 /.phpunit.cache
 /composer.lock
-/bin/PHP-Parser-*
 /examples/gtk/Makefile
 /examples/gtk/cmake_install.cmake
 /examples/gtk/CMakeCache.txt
@@ -71,5 +70,9 @@ bin/phpx
 /test_output.xml
 /test_results.xml
 /wasm/wasm32-wasip2/
+/ios/iphoneos-arm64/
 /full-static/sdk
 /phpx.sln
+/examples/*/.phpx.json
+/examples/*/build/
+/examples/*/run-tests.php

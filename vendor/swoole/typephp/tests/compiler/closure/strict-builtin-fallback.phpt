@@ -2,7 +2,6 @@
 Closure calls preserve strict builtin argument validation on dynamic fallback
 --FILE--
 <?php
-declare(strict_types=1);
 
 function mixedInt(): mixed
 {

@@ -24,7 +24,7 @@ function main(): void
     $b = 4;
     var_dump($a->toAny() / $b->toAny());
 
-    $name = 'php ';
+    $name = std::any('php ');
     append_text($name->toRef(), 'keyword');
     var_dump($name);
 
@@ -38,11 +38,11 @@ function main(): void
     var_dump($obj->prop);
 
     $fn = 'set_value';
-    $dynamic = 'old';
+    $dynamic = std::any('old');
     $fn($dynamic->toRef(), 'dynamic');
     var_dump($dynamic);
 
-    $named = 'old';
+    $named = std::any('old');
     $fn = 'set_named';
     $fn(label: 'named', value: $named->toRef());
     var_dump($named);

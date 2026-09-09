@@ -2,7 +2,6 @@
 Optimized numeric builtins preserve strict union parameter validation
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main(): void
 {

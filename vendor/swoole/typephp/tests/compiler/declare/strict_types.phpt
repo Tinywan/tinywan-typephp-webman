@@ -1,8 +1,7 @@
 --TEST--
-declare: strict types 1
+dynamic calls remain strict without a declare directive
 --FILE--
 <?php
-declare(strict_types=1);
 function main() {
     $callable = 'strlen';
     try {

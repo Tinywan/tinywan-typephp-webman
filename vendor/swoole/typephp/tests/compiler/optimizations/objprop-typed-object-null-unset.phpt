@@ -2,8 +2,6 @@
 SSA object prop: typed object property supports unset
 --FILE--
 <?php
-use native_types;
-
 class ObjPropValue {
     public function name(): string {
         return "value";

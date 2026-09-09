@@ -4,7 +4,8 @@ Reference-returning functions can forward dynamic and chained calls
 <?php
 function &dynamic_source(): mixed
 {
-    static $value = 1;
+    static $value;
+    $value ??= 1;
     return $value;
 }
 

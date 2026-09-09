@@ -88,7 +88,12 @@ trait DeclarationSymbolTrait
             } else {
                 $idLower = strtolower($id);
                 if ($idLower === 'native_types') {
-                    $this->nativeTypes = true;
+                    $this->fatalError(
+                        $use,
+                        '`use native_types` has been removed; native scalar types are now the default',
+                    );
+                } elseif ($idLower === 'varint_types') {
+                    $this->varIntTypes = true;
                 } elseif ($idLower === 'decimal_types') {
                     $this->decimalTypes = true;
                 } elseif ($idLower === 'bigint_types') {

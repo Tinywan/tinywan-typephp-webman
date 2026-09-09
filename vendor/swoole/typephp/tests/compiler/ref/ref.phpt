@@ -4,7 +4,7 @@ object link operator
 <?php
 function main()
 {
-    $a = [1, 2, 3];
+    $a = std::any([1, 2, 3]);
     $b = &$a;
     $b[] = 5;
 

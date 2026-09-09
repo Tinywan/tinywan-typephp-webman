@@ -48,7 +48,7 @@ function main(): void
     $first[] = 'changed';
     var_dump($first, $second, $tail);
 
-    $source = 'reference';
+    $source = std::any('reference');
     [$referenceFirst, $referenceSecond] = multi_return_reference_value($source);
     $referenceFirst = 'changed';
     var_dump($source, $referenceFirst, $referenceSecond);

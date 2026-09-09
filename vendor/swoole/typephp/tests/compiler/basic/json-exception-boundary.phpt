@@ -12,7 +12,7 @@ function main(): void
         echo "decode-caught\n";
     }
 
-    $recursive = [];
+    $recursive = std::any([]);
     $recursive['self'] = &$recursive;
     try {
         json_encode($recursive, JSON_THROW_ON_ERROR);

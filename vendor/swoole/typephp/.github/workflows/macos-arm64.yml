@@ -26,7 +26,7 @@ jobs:
       matrix:
         php: ["8.4", "8.5"]
     env:
-      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      PHPX_HOME: ${{ github.workspace }}/third_party/phpx
 
     steps:
       - name: Checkout TypePHP

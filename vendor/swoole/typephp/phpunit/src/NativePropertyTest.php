@@ -38,9 +38,15 @@ class NativePropertyTest extends \BaseTest
         }
 
         $code = file_get_contents($outputFile);
-        $this->assertStringContainsString('tmp_var_0 = php::getCalledClass(this_);', $code);
-        $this->assertStringContainsString('php::getStaticProperty((tmp_var_0.isObject()', $code);
-        $this->assertStringContainsString('php::getStaticProperty((tmp_var_0.isObject() ? php::fn::get_class(tmp_var_0)', $code);
+        $this->assertStringContainsString(
+            'zend_class_entry *const _typephp_called_ce = typephp_get_called_ce(this_);',
+            $code,
+        );
+        $this->assertStringContainsString(
+            'typephp_get_static_property_slot(_typephp_called_ce, get_str(',
+            $code,
+        );
+        $this->assertStringNotContainsString('typephp_get_called_class(this_)', $code);
         $this->assertStringContainsString('= php::toInt(value);', $code);
     }
 

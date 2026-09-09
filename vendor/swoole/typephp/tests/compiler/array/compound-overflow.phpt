@@ -2,7 +2,6 @@
 Array element compound arithmetic promotes overflowing integers to float
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main(): void
 {

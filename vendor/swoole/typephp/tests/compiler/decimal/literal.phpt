@@ -2,8 +2,6 @@
 decimal: literal
 --FILE--
 <?php
-use native_types;
-
 function main()
 {
     require __DIR__ . '/../../../src/Assert.php';

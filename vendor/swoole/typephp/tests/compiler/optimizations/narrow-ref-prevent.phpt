@@ -3,7 +3,7 @@ SSA narrowing: reference assignment prevents narrowing
 --FILE--
 <?php
 function main(): void {
-    $a = 100;
+    $a = std::any(100);
     $b = &$a;
     $a = 200;
     echo $b, PHP_EOL;

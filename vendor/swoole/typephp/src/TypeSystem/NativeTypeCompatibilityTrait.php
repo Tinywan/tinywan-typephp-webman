@@ -239,11 +239,11 @@ trait NativeTypeCompatibilityTrait
                 if ($this->isVarExpr($inner)) {
                     $arg->value = $inner;
                 } else {
-                    $expr = $this->expandRefvalExpr($inner, $arg);
+                    $expr = $this->expandReferenceWrapperExpr($inner, $arg);
                     if ($expr !== null) {
                         return $expr;
                     }
-                    $this->fatalError($arg, 'The refval function only accepts a variable, array element, or object property');
+                    $this->fatalError($arg, 'The std::ref function only accepts a variable, array element, or object property');
                 }
             } else {
                 $this->assertNativeObjectReferenceForbidden($arg->value, $arg);
@@ -257,6 +257,51 @@ trait NativeTypeCompatibilityTrait
                     $this->addLocalVar($var, Type::VAR);
                 }
             }
+
+            if (Type::isTypedRefType($argInfo->type)) {
+                $expectedType = Type::getReferencedType($argInfo->type);
+                $actualType = Type::getReferencedType($this->detectTypeOfExpr($arg->value));
+                if ($this->isVarExpr($arg->value)) {
+                    $var = $this->parseIdentifier($arg->value);
+                    $rawType = $this->getRawVarType($var);
+                    if ($actualType === $expectedType
+                        && ($rawType === $expectedType || $rawType === $argInfo->type)
+                    ) {
+                        return $var;
+                    }
+                }
+
+                if ($actualType !== $expectedType
+                    && !in_array($actualType, [Type::VAR, Type::REF], true)
+                ) {
+                    $this->fatalError(
+                        $arg,
+                        'Cannot pass value of type ' . $actualType
+                            . ' to reference parameter of type ' . $argInfo->type,
+                    );
+                }
+
+                $reference = $this->addTmpVar(Type::REF);
+                $wrapper = $this->genTmpVarName();
+                $this->context->beforeStmtLines[] = $reference . ' = ' . $this->convertToRef($arg->value) . ';';
+                $this->context->beforeStmtLines[] = 'php::RefWrap<' . $expectedType . '> '
+                    . $wrapper . '(' . $reference . ');';
+                $this->context->afterStmtLines[] = $wrapper . '.commit();';
+                return $wrapper . '.typed()';
+            }
+
+            // A mixed/union/defaulted reference parameter keeps the php::Ref
+            // ABI. When its caller is one of the five fixed native locals,
+            // bridge that storage for exactly this call and validate the
+            // write-back afterwards instead of weakening the local to Var.
+            if ($this->isVarExpr($arg->value)) {
+                $var = $this->parseIdentifier($arg->value);
+                $rawType = $this->getRawVarType($var);
+                $valueType = Type::getReferencedType($rawType);
+                if (Type::getReferenceType($valueType) !== null) {
+                    return $this->getDynamicTypedRefBridge($var, $valueType) . '.ref()';
+                }
+            }
             return $this->convertToRef($arg->value);
         }
 
@@ -265,7 +310,7 @@ trait NativeTypeCompatibilityTrait
 
         if (($type === Type::VAR || $type === Type::REF) && $this->isStrictScalarType($argInfo->type)) {
             // A native scalar ABI value has already lost its zval type. Preserve
-            // the dynamic value until strict_types validation has completed.
+            // the dynamic value until TypePHP's strict validation has completed.
             // The PHPX helper evaluates the expression exactly once and returns
             // the final native ABI type without an immediately-invoked closure.
             $this->checkVarAssignExpr($arg, $argInfo->type, $type);

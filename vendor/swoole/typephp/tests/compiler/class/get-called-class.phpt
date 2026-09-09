@@ -2,7 +2,6 @@
 static::class uses the runtime called scope
 --FILE--
 <?php
-declare(strict_types=1);
 
 class CalledClassParent
 {

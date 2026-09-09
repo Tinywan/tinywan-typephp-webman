@@ -529,27 +529,34 @@ final class PythonToTypePhpConverter
     private function deleteStatement(array $node): array
     {
         $targets = [];
-        $walk = function (array $target) use (&$walk, &$targets, $node): void {
-            // del (a, b) / del [a, b] expands element by element.
-            if (in_array($target['_type'] ?? '', ['Tuple', 'List'], true)) {
-                foreach ($target['elts'] ?? [] as $element) {
-                    $walk($element);
-                }
-                return;
-            }
-            if (!in_array($target['_type'] ?? '', ['Name', 'Attribute', 'Subscript'], true)) {
-                $this->unsupported($node, 'unsupported del target');
-            }
-            $targets[] = $target;
-        };
         foreach ($node['targets'] ?? [] as $target) {
-            $walk($target);
+            $this->collectDeleteTargets($target, $node, $targets);
         }
         $lines = [];
         foreach ($targets as $target) {
             $lines[] = $this->line('unset(' . $this->target($target) . ');');
         }
         return $lines;
+    }
+
+    /**
+     * @param array<string, mixed> $target
+     * @param array<string, mixed> $node
+     * @param list<array<string, mixed>> $targets
+     */
+    private function collectDeleteTargets(array $target, array $node, array &$targets): void
+    {
+        // del (a, b) / del [a, b] expands element by element.
+        if (in_array($target['_type'] ?? '', ['Tuple', 'List'], true)) {
+            foreach ($target['elts'] ?? [] as $element) {
+                $this->collectDeleteTargets($element, $node, $targets);
+            }
+            return;
+        }
+        if (!in_array($target['_type'] ?? '', ['Name', 'Attribute', 'Subscript'], true)) {
+            $this->unsupported($node, 'unsupported del target');
+        }
+        $targets[] = $target;
     }
 
     /** @param array<string, mixed> $node */

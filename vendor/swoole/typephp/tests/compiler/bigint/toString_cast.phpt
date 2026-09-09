@@ -2,9 +2,6 @@
 Big* types: (string) cast, strval() and echo → toString()
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // BigInt
     $a = std::bigInt("12345678901234567890");

@@ -41,18 +41,18 @@ function main(): void
 {
     var_dump(suffix('!'));
 
-    $first = 'first';
-    $second = 'second';
+    $first = std::any('first');
+    $second = std::any('second');
     var_dump(suffix('!', $first, $second));
     var_dump($first, $second);
 
-    $left = 'left';
-    $right = 'right';
+    $left = std::any('left');
+    $right = std::any('right');
     var_dump(suffix(suffix: '?', left: $left, right: $right));
     var_dump($left, $right);
 
-    $one = 1;
-    $two = 2;
+    $one = std::any(1);
+    $two = std::any(2);
     VariadicReferenceMutator::increment($one, $two);
     var_dump($one, $two);
 

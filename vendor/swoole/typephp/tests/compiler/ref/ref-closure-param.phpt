@@ -8,7 +8,7 @@ function main()
         $data .= " (_)";
     };
     $sweet = array('a' => 'apple', 'b' => 'banana');
-    $fruits = array('sweet' => $sweet, 'sour' => 'lemon');
+    $fruits = std::any(array('sweet' => $sweet, 'sour' => 'lemon'));
 
     array_walk_recursive($fruits, $testFn);
     var_dump($fruits);

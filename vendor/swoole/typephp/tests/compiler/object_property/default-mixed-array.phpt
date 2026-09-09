@@ -3,7 +3,6 @@ property default value is array with mixed declared type
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 class Test
 {

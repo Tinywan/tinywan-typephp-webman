@@ -27,11 +27,18 @@ jobs:
       matrix:
         php: ["8.4", "8.5"]
     env:
-      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      PHPX_HOME: ${{ github.workspace }}/third_party/phpx
 
     steps:
       - name: Checkout TypePHP
         uses: actions/checkout@v4
+
+      - name: Checkout PHPX master
+        uses: actions/checkout@v4
+        with:
+          repository: swoole/phpx
+          ref: master
+          path: third_party/phpx
 
       - name: Checkout phpy
         uses: actions/checkout@v4
@@ -139,7 +146,11 @@ jobs:
           retention-days: 7
           path: |
             tpc
-            vendor/swoole/phpx/lib/libphpx.so
+            third_party/phpx/lib/libphpx.so
+            third_party/phpx/include/**
+            third_party/phpx/src/misc/**
+            third_party/phpx/thirdparty/mpdecimal/libmpdec/**
+            third_party/phpx/thirdparty/mpdecimal/libmpdec++/**
             third_party/phpy/modules/phpy.so
 
   phpunit:
@@ -153,7 +164,7 @@ jobs:
       matrix:
         php: ["8.4", "8.5"]
     env:
-      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      PHPX_HOME: ${{ github.workspace }}/third_party/phpx
 
     steps:
       - name: Checkout TypePHP
@@ -242,7 +253,7 @@ jobs:
       matrix:
         php: ["8.4", "8.5"]
     env:
-      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      PHPX_HOME: ${{ github.workspace }}/third_party/phpx
 
     steps:
       - name: Checkout TypePHP
@@ -349,7 +360,7 @@ jobs:
       matrix:
         php: ["8.4", "8.5"]
     env:
-      PHPX_HOME: ${{ github.workspace }}/vendor/swoole/phpx
+      PHPX_HOME: ${{ github.workspace }}/third_party/phpx
       NO_INTERACTION: 1
       REPORT_EXIT_STATUS: 1
       TYPEPHP_PHPT_GENERATED_ARTIFACT_DIR: ${{ github.workspace }}/build/phpt-generated

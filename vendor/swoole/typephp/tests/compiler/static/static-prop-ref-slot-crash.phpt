@@ -2,8 +2,6 @@
 Static property native slot becomes invalid after dynamic reference binding
 --FILE--
 <?php
-use native_types;
-
 class StaticRefSlotCrash {
     public static int $i = 1;
 }

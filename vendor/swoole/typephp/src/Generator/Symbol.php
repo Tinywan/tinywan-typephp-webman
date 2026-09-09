@@ -35,16 +35,6 @@ class Symbol
         return 'php::concat';
     }
 
-    public static function getCalledCe(): string
-    {
-        return 'php::getCalledCe(this_)';
-    }
-
-    public static function getCalledClass(): string
-    {
-        return 'php::getCalledClass(this_)';
-    }
-
     public static function constant(): string
     {
         return 'php::constant';
@@ -58,6 +48,11 @@ class Symbol
     public static function argList(): string
     {
         return 'php::ArgList';
+    }
+
+    public static function varList(): string
+    {
+        return 'php::VarList';
     }
 
     public static function safeIndex(string $index, int|string $size): string

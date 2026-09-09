@@ -2,7 +2,7 @@
 Constant bit shift boundaries follow PHP semantics
 --FILE--
 <?php
-declare(strict_types=1);
+use varint_types;
 
 function main(): void
 {

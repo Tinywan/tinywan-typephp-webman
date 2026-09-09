@@ -2,6 +2,8 @@
 SSA: int
 --FILE--
 <?php
+use varint_types;
+
 function main(): void {
     ini_set('precision', 17);
     $a = 100;

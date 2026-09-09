@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 const N = 1000_0000;
 const ROUNDS = 5;
 

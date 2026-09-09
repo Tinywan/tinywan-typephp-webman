@@ -3,7 +3,6 @@ class const override referencing another constant
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 abstract class ParentClass
 {

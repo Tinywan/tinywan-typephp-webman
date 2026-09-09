@@ -226,11 +226,22 @@ trait TypeConversionTrait
         if ($type === Type::FLOAT && $this->decimalTypes) {
             return Type::DECIMAL;
         }
-        return $this->nativeTypes ? $type : Type::VAR;
+        return $type === Type::INT && $this->varIntTypes ? Type::VAR : $type;
+    }
+
+    /**
+     * Whether an inferred scalar has fixed C++ storage in the current file.
+     * Float and bool are always native; varint_types only boxes integers.
+     */
+    protected function usesNativeScalarStorage(string $type): bool
+    {
+        return $this->isNativeType($type)
+            && !($type === Type::INT && $this->varIntTypes);
     }
 
     protected function convertExprFromType(string $type, string $expr): string
     {
+        $type = Type::getReferencedType($type);
         if ($type === Type::FLOAT) {
             return $this->convertFloatExpr($expr);
         }
@@ -280,10 +291,45 @@ trait TypeConversionTrait
             return $this->emitStaticPropertyFetchRef($expr, $expr);
         }
         $var = $this->parseIdentifier($expr);
-        if ($this->isVarExpr($expr) and $this->isNativeTypeVar($var)) {
-            $this->context->localVars[$var] = Type::VAR;
-        }
+        $this->assertVariableReferenceStorage($expr, $expr, $var);
         return $var . '.toReference()';
+    }
+
+    /**
+     * A reference created from an ordinary local has no Zend type source.
+     * Exposing fixed C++ storage through such a reference would therefore let
+     * dynamic code replace the value with an incompatible type. Typed object
+     * and static properties are deliberately handled before this method: Zend
+     * attaches their property_info to the reference and enforces the declared
+     * type. PHP array elements are dynamic zval slots and use the same Ref path.
+     */
+    protected function assertVariableReferenceStorage(
+        NodeAbstract $expr,
+        NodeAbstract $errorNode,
+        ?string $name = null,
+    ): void {
+        if (!$this->isVarExpr($expr)) {
+            return;
+        }
+
+        $name ??= $this->parseIdentifier($expr);
+        if (!$this->hasVar($name)) {
+            return;
+        }
+
+        $type = $this->hasStaticVar($name)
+            ? $this->context->staticVars[$name]
+            : $this->getVarType($name);
+        if ($type === Type::VAR || $type === Type::REF) {
+            return;
+        }
+
+        $this->fatalError(
+            $errorNode,
+            'Cannot create a reference to variable $' . $this->unescapeVarName($name)
+                . ' of fixed type ' . $type
+                . '; initialize it with std::any() when reference semantics are required',
+        );
     }
 
 }

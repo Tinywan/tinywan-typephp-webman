@@ -1,5 +1,7 @@
 <?php
 
+use varint_types;
+
 function recursivePhpInt(int $value): int
 {
     return $value < 2

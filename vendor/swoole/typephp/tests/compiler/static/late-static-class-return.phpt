@@ -2,7 +2,6 @@
 static::class resolves to the called class through string-typed methods
 --FILE--
 <?php
-declare(strict_types=1);
 
 trait LsbClassTrait
 {

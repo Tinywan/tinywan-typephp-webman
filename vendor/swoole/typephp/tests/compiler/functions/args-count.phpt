@@ -2,7 +2,6 @@
 Zend wrappers validate required, optional, variadic and excessive arguments
 --FILE--
 <?php
-declare(strict_types=1);
 function noArgs() {
     echo "noArgs\n";
 }

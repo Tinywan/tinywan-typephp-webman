@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 class NativePropertyStaticTypeMismatchBox
 {
     public int $value = 0;

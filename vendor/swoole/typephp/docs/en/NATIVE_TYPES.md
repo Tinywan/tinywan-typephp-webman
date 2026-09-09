@@ -4,6 +4,15 @@
 
 **The AOT compiler supports 6 native/high-precision types**:
 
+Since TypePHP 0.8, inferred `int`, `float`, and `bool` locals use native
+`php::Int`, `php::Float`, and `php::Bool` storage by default. The old
+`use native_types` directive has been removed. Native locals are never
+silently promoted to `php::Var` later.
+
+Use `use varint_types` only for a file that needs Zend PHP integer widening
+semantics. It boxes inferred integers, but not floats or booleans. Use
+`std::any($value)` when only one value must be dynamic or reference-capable.
+
 ### Basic Native Types
 1. ✅ `std::int` - Native integer type (zend_long, 8 bytes)
 2. ✅ `std::float` - Native floating-point type (double, 8 bytes)
@@ -24,7 +33,6 @@ Pay particular attention to `unset($obj->prop)` and assigning `null` on fixed-va
 
 ```php
 <?php
-use native_types;
 
 class User {
     public int $id = 0;
@@ -52,21 +60,18 @@ Correct practices:
 
 ---
 
-## 🎯 The objval Compile-Time Function
+## 🎯 The `toObject()` Keyword Method
 
 ### Use Cases
 
-When obtaining objects from sources such as arrays or function return values, variables lose their type context information. In such cases you need to use `objval()` to explicitly declare the class of the object.
+When obtaining objects from sources such as arrays or function return values, variables lose their type context information. Use the `toObject()` keyword method to assert the object's class.
 
 ### Basic Syntax
 
 ```php
 <?php
-// objval takes two arguments:
-// 1. The object variable (must be a PHP variable expression)
-// 2. The class name (must be a literal string)
-
-$obj = objval($array['object'], 'ClassName');
+// The receiver is the value to check. The argument is a compile-time class name.
+$obj = $array['object']->toObject(ClassName::class);
 ```
 
 ### Typical Scenarios
@@ -83,9 +88,9 @@ $data = [
 // ❌ Wrong: type is lost
 $user = $data['user'];  // AOT cannot infer the type
 
-// ✅ Correct: use objval to declare the type
-$user = objval($data['user'], 'User');
-$product = objval($data['product'], 'Product');
+// ✅ Correct: use toObject() to declare the type
+$user = $data['user']->toObject(User::class);
+$product = $data['product']->toObject(Product::class);
 ```
 
 #### Scenario 2: A Function Returns an Object
@@ -99,8 +104,8 @@ function get_object() {
 // ❌ Type is lost
 $obj = get_object();
 
-// ✅ Use objval to declare
-$obj = objval(get_object(), 'stdClass');
+// ✅ Use toObject() to declare
+$obj = get_object()->toObject(stdClass::class);
 ```
 
 #### Scenario 3: The Factory Pattern
@@ -123,8 +128,8 @@ class Factory {
 $factory = new Factory();
 
 // ✅ Explicitly specify the returned object type
-$user = objval($factory->create('user'), 'User');
-$product = objval($factory->create('product'), 'Product');
+$user = $factory->create('user')->toObject(User::class);
+$product = $factory->create('product')->toObject(Product::class);
 ```
 
 ### Notes
@@ -134,46 +139,45 @@ $product = objval($factory->create('product'), 'Product');
 ```php
 <?php
 // ✅ Correct: literal class name
-$obj = objval($value, 'MyClass');
+$obj = $value->toObject(MyClass::class);
 
 // ❌ Wrong: variable class name (cannot be analyzed at compile time)
 $className = 'MyClass';
-$obj = objval($value, $className);  // Compile error
+$obj = $value->toObject($className);  // Compile error
 
 // ❌ Wrong: constant class name (may not be resolvable at compile time)
 const CLASS_NAME = 'MyClass';
-$obj = objval($value, CLASS_NAME);  // May fail
+$obj = $value->toObject(CLASS_NAME);  // May fail
 ```
 
-⚠️ **The first argument must be a variable expression**:
+The receiver may be any supported value expression:
 
 ```php
 <?php
 // ✅ Correct: variable expression
-$obj = objval($array['key'], 'MyClass');
-$obj = objval($object->property, 'MyClass');
-$obj = objval(get_object(), 'MyClass');
+$obj = $array['key']->toObject(MyClass::class);
+$obj = $object->property->toObject(MyClass::class);
+$obj = get_object()->toObject(MyClass::class);
 
-// ❌ Wrong: non-variable expression
-$obj = objval(new MyClass(), 'MyClass');  // Not needed
+// ✅ Legal, but redundant because the expression already has the exact type
+$obj = (new MyClass())->toObject(MyClass::class);  // Not needed
 ```
 
 ### Performance Impact
 
-- ✅ `objval()` is a **compile-time function**
-- ✅ It produces no runtime overhead
-- ✅ It only performs type inference during the compilation stage
-- ✅ The generated C++ code is identical to a normal variable assignment
+- ✅ `toObject()` is a TypePHP keyword method
+- ✅ It provides the compiler with the target class
+- ✅ It emits a PHPX object conversion/type check for values whose runtime class is not statically proven
 
 ### Differences from std:: Types
 
-| Feature | std::int/float/bool | objval |
+| Feature | std::int/float/bool | toObject |
 |------|---------------------|--------|
 | **Purpose** | Numeric/boolean type optimization | Object type declaration |
 | **Performance** | ⚡ High performance (native type) | 🐢 Standard (ZVAL) |
 | **Memory** | 8B/1B | Pointer (16B+) |
-| **Timing** | Runtime optimization | Compile-time inference |
-| **Syntax** | `std::int(value)` | `objval(variable, 'ClassName')` |
+| **Timing** | Runtime optimization | Compile-time lowering plus runtime check when needed |
+| **Syntax** | `std::int(value)` | `$value->toObject(ClassName::class)` |
 
 ---
 
@@ -267,8 +271,6 @@ BigInt, Decimal, and BigFloat all inherit from `php::Box` and are stored inside 
 ### Declaration and Construction
 
 ```php
-use native_types;
-
 // Construct a BigInt from an integer literal
 $a = std::bigInt(100);
 $b = std::bigInt("123456789012345678901234567890");  // Very long integer string
@@ -500,11 +502,15 @@ Both sides are Int
 
 ### Rule 1: Var Dominates
 
-When at least one side of the operands is of type `Var` (not declared with `use native_types`), both sides are treated as `Var`, using ZendVM's `add_function` / `div_function` and other operation functions, fully following PHP's native type conversion (type juggling) semantics.
+When at least one operand is `Var`, both sides use the PHPX/Zend arithmetic
+path and follow PHP type-juggling semantics. A `Var` comes from an expression
+such as `std::any(...)`, a dynamic runtime value, or an inferred integer in a
+file that declares `use varint_types`.
 
 ```php
+use varint_types;
 $a = 10;        // Var, stores int(10)
-$b = 2.5;       // Var, stores float(2.5)
+$b = 2.5;       // php::Float (varint_types affects only inferred integers)
 $c = $a + $b;   // Both sides are Var → ZendVM operation → float(12.5)
 ```
 
@@ -512,10 +518,11 @@ C++ code generation: `int64_t` and `double` values are implicitly converted to `
 
 ### Rule 2: Float Takes Precedence over Int
 
-When both sides are native types (declared via `use native_types` or `std::int()`/`std::float()`), if either side is Float, both sides are converted to Float for the operation. Only when both sides are Int is integer arithmetic used.
+When both sides are native types (the default, or explicitly constructed with
+`std::int()` / `std::float()` inside a varint file), Float takes precedence.
+Only two Int operands use integer arithmetic.
 
 ```php
-use native_types;
 $a = 10;        // php::Int
 $b = 2.5;       // php::Float
 $c = $a + $b;   // Float + Float → double addition
@@ -525,7 +532,10 @@ $e = 3;         // php::Int
 $f = $d + $e;   // Int + Int → int64_t addition
 ```
 
-> **Note**: native-type variables **do not change their own type** during operations. For example, `Int += Float` executes `int64_t += double` in C++, and the result is truncated to int64_t, which differs from PHP behavior (in PHP the variable becomes float). This is intentional semantics of `use native_types`.
+> **Note**: native variables **do not change storage type** during operations.
+> For example, `Int += Float` remains Int. This fixed-type behavior is now the
+> default; choose `use varint_types` or `std::any()` when dynamic integer
+> widening is required.
 
 ### Rule 3: Safe Promotion of High-Precision Types
 
@@ -564,15 +574,15 @@ When the operands include `BigInt`, `Decimal`, or `BigFloat`, only explicit and 
 Compound assignment operators such as `+=`, `-=`, `*=`, `/=`, `%=` follow the same type promotion rules, but the RHS is converted to the type of the LHS variable. If the LHS is Var, the RHS keeps its original type (Var's `operator+=` takes over); if the LHS is a native type, the RHS is explicitly converted to that type.
 
 ```php
-$a = 10;        // Var
+use varint_types;
+$a = 10;        // Var because this file selected varint_types
 $a += 2.5;      // Var::operator+=(float) → ZendVM → $a becomes float(12.5)
 
-use native_types;
-$b = 10;        // php::Int
+$b = std::int(10); // Explicit php::Int inside a varint_types file
 $b += 2.5;      // int64_t += double → C++ implicit truncation → $b = 12 (Int)
 ```
 
 ---
 
-**Last updated**: May 26, 2026
-**Applicable version**: PHP AOT Compiler v1.x
+**Last updated**: September 6, 2026
+**Applicable version**: TypePHP 0.8+

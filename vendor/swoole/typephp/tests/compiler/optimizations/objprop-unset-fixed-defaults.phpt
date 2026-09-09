@@ -2,8 +2,6 @@
 SSA object prop: unset fixed typed properties restores declared defaults
 --FILE--
 <?php
-use native_types;
-
 class FixedDefaults {
     public int $i;
     public float $f;

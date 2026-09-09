@@ -18,7 +18,7 @@ function wrapper_argument_move(
 
 function main(): void
 {
-    $reference = 'before';
+    $reference = std::any('before');
     $object = (object) ['name' => 'object'];
     $result = wrapper_argument_move('mixed', 'text', [10], $object, 5, $reference, 'x', 'y');
     var_dump($reference, $result);

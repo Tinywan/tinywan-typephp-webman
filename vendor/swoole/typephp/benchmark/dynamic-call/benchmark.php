@@ -1,13 +1,27 @@
 <?php
 
-declare(strict_types=1);
 
 const DYNAMIC_CALL_ITERATIONS = 1_000_000;
 const DYNAMIC_CALL_ROUNDS = 5;
 
+function dynamicCallNoArgs(): int
+{
+    return 1;
+}
+
 function dynamicCallAddOne(int $value): int
 {
     return $value + 1;
+}
+
+function dynamicCallAddTwoArgs(int $left, int $right): int
+{
+    return $left + $right;
+}
+
+function dynamicCallAddFourArgs(int $a, int $b, int $c, int $d): int
+{
+    return $a + $b + $c + $d;
 }
 
 function dynamicCallAddTwo(int $value): int
@@ -52,6 +66,11 @@ final class DynamicCallTarget
         return $value + 1;
     }
 
+    public static function addTwoStatic(int $value): int
+    {
+        return $value + 2;
+    }
+
     public function addTwo(int $value): int
     {
         return $value + 2;
@@ -67,6 +86,11 @@ final class DynamicCallTarget
         return $value + 2;
     }
 
+    public function hitZero(): int
+    {
+        return 1;
+    }
+
     public function __invoke(int $value): int
     {
         return $value + 3;
@@ -75,10 +99,67 @@ final class DynamicCallTarget
 
 final class DynamicCallAlternateTarget
 {
+    public static function addOne(int $value): int
+    {
+        return $value + 1;
+    }
+
+    public static function addTwoStatic(int $value): int
+    {
+        return $value + 2;
+    }
+
     public function hitOne(int $value): int
     {
         return $value + 1;
     }
+}
+
+final class ScopedDynamicCallTarget
+{
+    private function hitZero(): int
+    {
+        return 1;
+    }
+
+    protected function hitOne(int $value): int
+    {
+        return $value + 1;
+    }
+
+    public function runDynamicNameZeroArgs(int $iterations): int
+    {
+        $method = 'hitZero';
+        $sum = 0;
+        for ($i = 0; $i < $iterations; $i++) {
+            $sum += $this->$method();
+        }
+        return $sum;
+    }
+
+    public function runDynamicName(int $iterations): int
+    {
+        $method = 'hitOne';
+        $sum = 0;
+        for ($i = 0; $i < $iterations; $i++) {
+            $sum += $this->$method($i);
+        }
+        return $sum;
+    }
+
+    public function runNamedDynamicReceiver(object $target, int $iterations): int
+    {
+        $sum = 0;
+        for ($i = 0; $i < $iterations; $i++) {
+            $sum += $target->hitOne($i);
+        }
+        return $sum;
+    }
+}
+
+function createDynamicMethodReceiver(): object
+{
+    return new DynamicCallTarget();
 }
 
 function runDirectCall(int $iterations): int
@@ -96,6 +177,36 @@ function runMonomorphicStringCall(int $iterations): int
     $sum = 0;
     for ($i = 0; $i < $iterations; $i++) {
         $sum += $callback($i);
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallZeroArgs(int $iterations): int
+{
+    $callback = 'dynamicCallNoArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback();
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallTwoArgs(int $iterations): int
+{
+    $callback = 'dynamicCallAddTwoArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback($i, 1);
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallFourArgs(int $iterations): int
+{
+    $callback = 'dynamicCallAddFourArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback($i, 1, 2, 3);
     }
     return $sum;
 }
@@ -162,6 +273,68 @@ function runStaticMethodStringCall(int $iterations): int
     return $sum;
 }
 
+function runDynamicStaticClassCall(int $iterations): int
+{
+    $class = DynamicCallTarget::class;
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $class::addOne($i);
+    }
+    return $sum;
+}
+
+function runDynamicStaticMethodCall(int $iterations): int
+{
+    $method = 'addOne';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += DynamicCallTarget::$method($i);
+    }
+    return $sum;
+}
+
+function runDynamicStaticClassAndMethodCall(int $iterations): int
+{
+    $class = DynamicCallTarget::class;
+    $method = 'addOne';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $class::$method($i);
+    }
+    return $sum;
+}
+
+function runAlternatingDynamicStaticClassCall(int $iterations): int
+{
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $class = ($i & 1) === 0 ? DynamicCallTarget::class : DynamicCallAlternateTarget::class;
+        $sum += $class::addOne($i);
+    }
+    return $sum;
+}
+
+function runAlternatingDynamicStaticMethodCall(int $iterations): int
+{
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $method = ($i & 1) === 0 ? 'addOne' : 'addTwoStatic';
+        $sum += DynamicCallTarget::$method($i);
+    }
+    return $sum;
+}
+
+function runAlternatingDynamicStaticClassAndMethodCall(int $iterations): int
+{
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $class = ($i & 1) === 0 ? DynamicCallTarget::class : DynamicCallAlternateTarget::class;
+        $method = ($i & 1) === 0 ? 'addOne' : 'addTwoStatic';
+        $sum += $class::$method($i);
+    }
+    return $sum;
+}
+
 function runObjectMethodArrayCall(int $iterations): int
 {
     $target = new DynamicCallTarget();
@@ -217,21 +390,87 @@ function runPolymorphicMethodReceiverCall(int $iterations): int
     return $sum;
 }
 
+function runNamedMethodDynamicReceiverZeroArgs(int $iterations): int
+{
+    // The declared `object` return type deliberately hides the concrete class
+    // from TypePHP while keeping the call site monomorphic at runtime.
+    $target = createDynamicMethodReceiver();
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $target->hitZero();
+    }
+    return $sum;
+}
+
+function runNamedMethodDynamicReceiverCall(int $iterations): int
+{
+    $target = createDynamicMethodReceiver();
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $target->hitOne($i);
+    }
+    return $sum;
+}
+
+function runNamedMethodPolymorphicReceiverCall(int $iterations): int
+{
+    $targets = [new DynamicCallTarget(), new DynamicCallAlternateTarget()];
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $target = $targets[$i & 1];
+        $sum += $target->hitOne($i);
+    }
+    return $sum;
+}
+
+function runScopedMethodNameZeroArgs(int $iterations): int
+{
+    $target = new ScopedDynamicCallTarget();
+    return $target->runDynamicNameZeroArgs($iterations);
+}
+
+function runScopedMethodNameCall(int $iterations): int
+{
+    $target = new ScopedDynamicCallTarget();
+    return $target->runDynamicName($iterations);
+}
+
+function runScopedNamedDynamicReceiverCall(int $iterations): int
+{
+    $target = new ScopedDynamicCallTarget();
+    return $target->runNamedDynamicReceiver($target, $iterations);
+}
+
 function runDynamicCallCase(string $case, int $iterations): int
 {
     return match ($case) {
         'direct' => runDirectCall($iterations),
+        'string_monomorphic_zero' => runMonomorphicStringCallZeroArgs($iterations),
         'string_monomorphic' => runMonomorphicStringCall($iterations),
+        'string_monomorphic_two' => runMonomorphicStringCallTwoArgs($iterations),
+        'string_monomorphic_four' => runMonomorphicStringCallFourArgs($iterations),
         'string_alternating' => runAlternatingStringCall($iterations),
         'string_megamorphic' => runMegamorphicStringCall($iterations),
         'closure_monomorphic' => runMonomorphicClosureCall($iterations),
         'closure_alternating' => runAlternatingClosureCall($iterations),
         'static_method_string' => runStaticMethodStringCall($iterations),
+        'static_class_dynamic' => runDynamicStaticClassCall($iterations),
+        'static_method_dynamic' => runDynamicStaticMethodCall($iterations),
+        'static_class_method_dynamic' => runDynamicStaticClassAndMethodCall($iterations),
+        'static_class_alternating' => runAlternatingDynamicStaticClassCall($iterations),
+        'static_method_alternating' => runAlternatingDynamicStaticMethodCall($iterations),
+        'static_class_method_alternating' => runAlternatingDynamicStaticClassAndMethodCall($iterations),
         'object_method_array' => runObjectMethodArrayCall($iterations),
         'invokable_object' => runInvokableObjectCall($iterations),
         'method_name_monomorphic' => runMonomorphicMethodNameCall($iterations),
         'method_name_alternating' => runAlternatingMethodNameCall($iterations),
         'method_receiver_polymorphic' => runPolymorphicMethodReceiverCall($iterations),
+        'named_method_dynamic_receiver_zero' => runNamedMethodDynamicReceiverZeroArgs($iterations),
+        'named_method_dynamic_receiver' => runNamedMethodDynamicReceiverCall($iterations),
+        'named_method_polymorphic_receiver' => runNamedMethodPolymorphicReceiverCall($iterations),
+        'scoped_method_name_zero' => runScopedMethodNameZeroArgs($iterations),
+        'scoped_method_name' => runScopedMethodNameCall($iterations),
+        'scoped_named_dynamic_receiver' => runScopedNamedDynamicReceiverCall($iterations),
         default => throw new RuntimeException("Unknown benchmark case: {$case}"),
     };
 }
@@ -262,17 +501,32 @@ function main(): void
     $selectedCase = getenv('DYNAMIC_CALL_CASE');
     foreach ([
         'direct',
+        'string_monomorphic_zero',
         'string_monomorphic',
+        'string_monomorphic_two',
+        'string_monomorphic_four',
         'string_alternating',
         'string_megamorphic',
         'closure_monomorphic',
         'closure_alternating',
         'static_method_string',
+        'static_class_dynamic',
+        'static_method_dynamic',
+        'static_class_method_dynamic',
+        'static_class_alternating',
+        'static_method_alternating',
+        'static_class_method_alternating',
         'object_method_array',
         'invokable_object',
         'method_name_monomorphic',
         'method_name_alternating',
         'method_receiver_polymorphic',
+        'named_method_dynamic_receiver_zero',
+        'named_method_dynamic_receiver',
+        'named_method_polymorphic_receiver',
+        'scoped_method_name_zero',
+        'scoped_method_name',
+        'scoped_named_dynamic_receiver',
     ] as $case) {
         if (is_string($selectedCase) && $selectedCase !== '' && $selectedCase !== $case) {
             continue;

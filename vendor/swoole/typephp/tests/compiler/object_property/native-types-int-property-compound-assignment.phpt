@@ -1,9 +1,7 @@
 --TEST--
-Native-types int property compound assignments use C++ integer semantics
+Default int property compound assignments use C++ integer semantics
 --FILE--
 <?php
-use native_types;
-
 class NativeTypesIntCompoundBox
 {
     public int $value = 0;
@@ -24,8 +22,8 @@ function nativeTypesIntCompoundOperand(int $value, int &$calls): int
 function main(): void
 {
     $box = new NativeTypesIntCompoundBox();
-    $receiverCalls = 0;
-    $operandCalls = 0;
+    $receiverCalls = std::any(0);
+    $operandCalls = std::any(0);
 
     $box->value = 7;
     $result = nativeTypesIntCompoundReceiver($box, $receiverCalls)->value

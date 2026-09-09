@@ -2,8 +2,6 @@
 SSA object prop: loop body object redefinition prevents hoisting
 --FILE--
 <?php
-use native_types;
-
 class Foo {
     public int $a;
 }

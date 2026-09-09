@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class NativePropertyUnsetDisablesHoist
 {
     public int $value = 7;

@@ -149,11 +149,11 @@ function main()
     Assert::eq($stack->pop(), 'raspberry');
     Assert::eq(array_pop($stack), 'apple');
 
-    $array = array("red","green");
-    $array->push("blue");
-    Assert::eq($array, ["red","green", "blue"]);
-    array_push($array, "yellow");
-    Assert::eq($array, ["red","green", "blue", "yellow"]);
+    $mutableArray = array("red","green");
+    $mutableArray->push("blue");
+    Assert::eq($mutableArray, ["red","green", "blue"]);
+    array_push($mutableArray, "yellow");
+    Assert::eq($mutableArray, ["red","green", "blue", "yellow"]);
 
     $stack = array("orange", "banana", "apple", "raspberry");
     Assert::eq($stack->shift(), 'orange');
@@ -166,9 +166,9 @@ function main()
     Assert::eq($queue, ["orange", "orange", "orange", "banana"]);
 
     $array1 = array("red", "green", "blue", "yellow");
-    $array2 = array("red", "green", "blue", "yellow");
-    Assert::eq($array1->splice(2), array_splice($array2, 2));
-    Assert::eq($array1, $array2);
+    $spliceArray = array("red", "green", "blue", "yellow");
+    Assert::eq($array1->splice(2), array_splice($spliceArray, 2));
+    Assert::eq($array1, $spliceArray);
 
     $find = array("Hello","world");
     $replace = array("B");

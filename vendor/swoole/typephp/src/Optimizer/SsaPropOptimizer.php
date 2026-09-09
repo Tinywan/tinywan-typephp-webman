@@ -459,10 +459,12 @@ trait SsaPropOptimizer
 
             $rightProp = $this->getPropNameOfObj($node->expr, $objName);
             if ($rightProp !== null) {
-                // $ref = &$o->prop changes the slot to a reference. Earlier
-                // optimized accesses remain safe only if the property is not
-                // touched again afterward.
-                $events[] = ['kind' => 'danger', 'prop' => $rightProp];
+                // $ref = &$o->prop changes the zval slot itself from the
+                // declared scalar into IS_REFERENCE. A C++ reference hoisted
+                // from any earlier access would then alias the zend_reference
+                // pointer bits rather than the referenced scalar. Disable
+                // hoisting for this property for the complete function.
+                $events[] = ['kind' => 'danger_always', 'prop' => $rightProp];
                 $this->collectPropEventsInDynamicParts($node->expr, $objName, $events);
             } else {
                 $this->collectPropEvents($node->expr, $objName, $events);
@@ -470,14 +472,14 @@ trait SsaPropOptimizer
             return;
         }
 
-        if ($node instanceof Expr\FuncCall
-            && $node->name instanceof Node\Name
-            && $node->name->toLowerString() === 'refval'
+        if ($this->isStdRefCall($node)
             && isset($node->args[0])
             && $node->args[0] instanceof Node\Arg) {
             $propName = $this->getPropNameOfObj($node->args[0]->value, $objName);
             if ($propName !== null) {
-                $events[] = ['kind' => 'danger', 'prop' => $propName];
+                // std::ref($o->prop) has the same slot-changing effect as an
+                // explicit reference assignment.
+                $events[] = ['kind' => 'danger_always', 'prop' => $propName];
                 $this->collectPropEventsInDynamicParts($node->args[0]->value, $objName, $events);
                 return;
             }

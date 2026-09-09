@@ -594,31 +594,27 @@
         },
         {
             "name": "swoole/phpx",
-            "version": "v2.7.0",
-            "version_normalized": "2.7.0.0",
+            "version": "v2.8.0",
+            "version_normalized": "2.8.0.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.7.0/swoole-phpx-v2.7.0.zip",
-                "reference": "1e8e5875b8c026dd705b8e8b3a24fa3a5601ae44",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.8.0/swoole-phpx-v2.8.0.zip",
+                "reference": "3f79403a2adc462eaea7531518034fdc98b1820b",
                 "shasum": ""
             },
             "require": {
-                "league/climate": "^3.10",
-                "marcj/topsort": "^2.0",
                 "php": ">=8.4 <8.6"
             },
             "require-dev": {
                 "friendsofphp/php-cs-fixer": "^3.75",
                 "phpunit/phpunit": "^10.0"
             },
-            "time": "2026-09-04T06:27:14+00:00",
+            "time": "2026-09-08T07:30:36+00:00",
+            "bin": [
+                "bin/phpx"
+            ],
             "type": "library",
             "installation-source": "dist",
-            "autoload": {
-                "psr-4": {
-                    "Phpx\\": "src/php"
-                }
-            },
             "license": [
                 "Apache-2.0"
             ],
@@ -631,18 +627,18 @@
             ],
             "support": {
                 "issues": "https://github.com/swoole/phpx/issues",
-                "source": "https://github.com/swoole/phpx/tree/v2.7.0"
+                "source": "https://github.com/swoole/phpx/tree/v2.8.0"
             },
             "install-path": "../swoole/phpx"
         },
         {
             "name": "swoole/typephp",
-            "version": "v0.7.0",
-            "version_normalized": "0.7.0.0",
+            "version": "v0.8.0",
+            "version_normalized": "0.8.0.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.7.0/swoole-typephp-v0.7.0.zip",
-                "reference": "dd4cd6d16257b9cdadbb96c23b67903f3e388e96",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.8.0/swoole-typephp-v0.8.0.zip",
+                "reference": "91f133f17a9b57db9b54f5be2e1c3a5c9839065c",
                 "shasum": ""
             },
             "require": {
@@ -653,7 +649,7 @@
                 "marcj/topsort": "^2.0",
                 "nikic/php-parser": "^5.6",
                 "php": ">=8.4 <8.6",
-                "swoole/phpx": "~2.7.0",
+                "swoole/phpx": "~2.8.0",
                 "symfony/var-dumper": "^8.0",
                 "symfony/yaml": "^8.0"
             },
@@ -665,7 +661,7 @@
             "suggest": {
                 "ext-pcntl": "Required for process control features."
             },
-            "time": "2026-09-04T07:39:32+00:00",
+            "time": "2026-09-08T11:31:45+00:00",
             "bin": [
                 "bin/tpc.php"
             ],
@@ -689,7 +685,7 @@
             "description": "TypePHP native AOT compiler",
             "support": {
                 "issues": "https://github.com/swoole/typephp/issues",
-                "source": "https://github.com/swoole/typephp/tree/v0.7.0"
+                "source": "https://github.com/swoole/typephp/tree/v0.8.0"
             },
             "install-path": "../swoole/typephp"
         },

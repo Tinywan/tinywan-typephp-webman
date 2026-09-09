@@ -17,7 +17,7 @@ function main(): void
         echo "invalid utf8\n";
     }
 
-    $recursive = [];
+    $recursive = std::any([]);
     $recursive['self'] = &$recursive;
     try {
         python\repr($recursive);

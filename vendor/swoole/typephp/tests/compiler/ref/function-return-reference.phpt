@@ -15,7 +15,7 @@ function value_copy()
 function main()
 {
     global $value;
-    $value = 1;
+    $value = std::any(1);
     $alias =& value_ref();
     $alias = 42;
     var_dump(value_ref());
@@ -45,7 +45,7 @@ function main()
 
 function &local_ref()
 {
-    $value = 1;
+    $value = std::any(1);
     return $value;
 }
 ?>

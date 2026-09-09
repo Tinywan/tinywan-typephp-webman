@@ -76,6 +76,9 @@ trait AssignOpTrait
                 return $code . $array . '.appendValue(' . $value . ')';
             }
             $tmp = $this->addTmpVar(Type::VAR);
+            if ($arrayType === Type::ARRAY) {
+                return $code . '((' . $tmp . ' = ' . $value . ', ' . "{$array}.append({$tmp})" . '), ' . $tmp . ')';
+            }
             return $code . '((' . $tmp . ' = ' . $value . ', ' . "{$array}.offsetSet(" . self::VALUE_NULL . ", {$tmp})" . '), ' . $tmp . ')';
         }
         $dim = $this->parseIdentifier($left->dim);
@@ -172,6 +175,11 @@ trait AssignOpTrait
 
     protected function parseAssign(Expr\Assign $v): string
     {
+        $nativeClosure = $this->parseNativeLocalClosureAssignment($v);
+        if ($nativeClosure !== null) {
+            return $nativeClosure;
+        }
+
         $left  = $v->var;
         $right = $v->expr;
         if ($this->isAssignExpr($right)) {
@@ -287,20 +295,34 @@ trait AssignOpTrait
                 continue;
             }
             if ($item instanceof ArrayItem) {
-                $key = $item->key ? $this->parseArrayKey($item->key) : (string) $k;
+                $key = $item->key ?? new Node\Scalar\Int_($k, $item->getAttributes());
+                $itemExpr = new Expr\ArrayDimFetch(
+                    new Variable($tmpVar, $item->getAttributes()),
+                    $key,
+                    $item->getAttributes(),
+                );
                 if ($item->value instanceof Expr\List_) {
-                    $nestedTmp = $this->genTmpVarName();
-                    $this->addLocalVar($nestedTmp, Type::ARRAY);
-                    $code .= $this->getIndent() . "{$nestedTmp} = {$tmpVar}.item({$key});" . PHP_EOL;
                     $code .= $this->getIndent()
-                        . $this->parseAssignToList($item->value, new Variable($nestedTmp))
+                        . $this->parseAssignToList($item->value, $itemExpr)
                         . PHP_EOL;
                 } else {
-                    $var = $this->parseWritableIdentifier($item->value);
-                    if ($this->isVarExpr($item->value) and !$this->hasVar($var)) {
-                        $this->addLocalVar($var, Type::VAR);
+                    // Destructuring is an indirect write form. It must not
+                    // inherit the direct-assignment initialization exception
+                    // for readonly properties.
+                    $writeTarget = $item->value;
+                    while ($writeTarget instanceof Expr\ArrayDimFetch) {
+                        $writeTarget = $writeTarget->var;
                     }
-                    $code .= $this->getIndent() . "{$var} = {$tmpVar}.item({$key});" . PHP_EOL;
+                    if ($writeTarget instanceof Expr\PropertyFetch) {
+                        $this->preparePropertyWriteTarget($writeTarget, false);
+                    }
+                    // Route every destructuring target through the normal
+                    // assignment pipeline. Existing native locals remain
+                    // native and receive the usual scalar conversion, while
+                    // typed properties retain their runtime type checks.
+                    $code .= $this->getIndent()
+                        . $this->parseAssignFinally($item->value, $itemExpr)
+                        . ';' . PHP_EOL;
                 }
             } else {
                 $this->unsupportedSyntax($item);
@@ -590,8 +612,9 @@ trait AssignOpTrait
                     $type = $type === Type::VOID ? Type::VAR : $type;
                 } elseif ($this->isStaticCall($right) and $this->isNameExpr($right->class) and $this->isIdExpr($right->name)) {
                     $class = $this->parseIdentifier($right->class);
-                    if ($class === 'std') {
-                        if (in_array($right->name->toString(), ['array', 'vector', 'map', 'ordered_map'], true)) {
+                    if ($this->isStdClassExpr($right->class)) {
+                        $stdMethod = strtolower($right->name->toString());
+                        if (in_array($stdMethod, ['array', 'vector', 'map', 'ordered_map'], true)) {
                             if ($this->hasScopeGlobalVar($var) || $this->hasStaticVar($var)) {
                                 $this->assertNativeStdContainerFunctionLocal($right);
                             }
@@ -601,28 +624,39 @@ trait AssignOpTrait
                             if ($this->context->scopeLevel > 1) {
                                 $this->fatalError($left, "Must create std::{$right->name->toString()} in the top-level scope of the function");
                             }
-                            if ($right->name->toString() === 'array') {
+                            if ($stdMethod === 'array') {
                                 $this->addLocalVar($var, Type::STD_ARRAY);
                                 return $this->parseStdArray($var, $right);
                             }
-                            if ($right->name->toString() === 'vector') {
+                            if ($stdMethod === 'vector') {
                                 $this->addLocalVar($var, Type::STD_VECTOR);
                                 return $this->parseStdVector($var, $right);
                             }
-                            if ($right->name->toString() === 'map') {
+                            if ($stdMethod === 'map') {
                                 $this->addLocalVar($var, Type::STD_MAP);
                                 return $this->parseStdMap($var, $right);
                             }
                             $this->addLocalVar($var, Type::STD_ORDERED_MAP);
                             return $this->parseStdOrderedMap($var, $right);
                         } else {
-                            $valueExpr = $this->parseStdCall($right);
                             if (!$this->hasVar($var)) {
-                                $finalVarType = $right->getAttribute('nativeType');
+                                $valueExpr = $this->parseStdCall($right);
+                                $finalVarType = $right->getAttribute('nativeType') ?? Type::VAR;
                                 $this->addLocalVar($var, $finalVarType);
+                                if ($finalVarType !== Type::VAR) {
+                                    $this->context->explicitNativeTypeVars[$var] = true;
+                                }
+                                return $var . ' = ' . $valueExpr;
                             }
-                            $this->context->explicitNativeTypeVars[$var] = true;
-                            return $var . ' = ' . $valueExpr;
+
+                            // An existing local keeps its established storage and
+                            // declared object constraint. std::any() deliberately
+                            // erases only the RHS static type; returning directly
+                            // here would bypass the normal assignment/type-check
+                            // pipeline for typed objects and native scalars.
+                            if (in_array($stdMethod, ['int', 'float', 'bool'], true)) {
+                                $this->context->explicitNativeTypeVars[$var] = true;
+                            }
                         }
                     }
                 } elseif ($this->isVarExpr($right)) {
@@ -652,7 +686,12 @@ trait AssignOpTrait
                     $this->addLocalVar($var, $finalVarType);
                 } else {
                     $finalVarType = $this->getVarType($var);
-                    $this->checkVarAssignExpr($left, $finalVarType, $type);
+                    $rawVarType = $this->getRawVarType($var);
+                    if (Type::isTypedRefType($rawVarType)) {
+                        $this->checkTypedReferenceAssignExpr($left, $rawVarType, $type);
+                    } else {
+                        $this->checkVarAssignExpr($left, $finalVarType, $type);
+                    }
                     $declaredObjectClass = $this->getDeclaredObjectType($var);
                     if (!$assigningNullToTypedObject
                         && $finalVarType === Type::OBJECT
@@ -712,7 +751,6 @@ trait AssignOpTrait
             // assignment may not execute on every path.
             $this->markNativeObjectNonNull($var);
         }
-        $leftExprType = $this->detectTypeOfExpr($left);
         $rightExprType = $this->detectTypeOfExpr($right);
         if ($propertyWriteTarget !== null && ($propertyDef = $this->getNativePropertyDef($left)) !== null) {
             $effectiveRightType = $rightExprType === Type::VAR && $this->getFixedPropertyTypeCheckHelper($propertyDef) !== null
@@ -720,9 +758,23 @@ trait AssignOpTrait
                 : $rightExprType;
             return $var . ' = ' . $this->convertNativePropertyWriteExpr($propertyDef->type, $effectiveRightType, $rightExpr);
         }
+        $rawAssignedType = $this->getRawVarType($var);
+        if (Type::isTypedRefType($rawAssignedType)
+            && ($rightExprType === Type::VAR || $rightExprType === Type::REF)
+        ) {
+            $rightExpr = match (Type::getReferencedType($rawAssignedType)) {
+                Type::INT => 'php::toIntExact(' . $rightExpr . ')',
+                Type::FLOAT => 'php::toFloatExact(' . $rightExpr . ')',
+                Type::BOOL => 'php::toBoolExact(' . $rightExpr . ')',
+                Type::STR => 'php::toStringExact(' . $rightExpr . ')',
+                Type::ARRAY => 'php::toArrayExact(' . $rightExpr . ')',
+                default => throw new \LogicException('Unsupported typed reference assignment'),
+            };
+            $rightExprType = Type::getReferencedType($rawAssignedType);
+        }
         $assignedExpr = $finalVarType === Type::VAR
             ? $rightExpr
-            : $this->convertExprType($rightExpr, $leftExprType, $rightExprType);
+            : $this->convertExprType($rightExpr, $finalVarType, $rightExprType);
         if ($foldIntoDeclaration) {
             $this->context->localVarInitializers[$var] = $assignedExpr;
             return '';
@@ -864,7 +916,7 @@ trait AssignOpTrait
             return $pythonOperator;
         }
         $propertyWriteTarget = $this->preparePropertyWriteTarget($node->var);
-        $this->guardLiteralDivisionByZero($node->expr, $op);
+        $this->guardLiteralDivisionByZero($node->var, $node->expr, $op);
 
         // A compound division/modulo on a NATIVE scalar slot with a proven
         // zero divisor cannot fall through to the raw C++ operator (SIGFPE
@@ -873,7 +925,7 @@ trait AssignOpTrait
         // lower the whole expression to the PHP-semantics binary operation
         // and leave the target untouched.
         if (($op === '/=' || $op === '%=')
-            && !$this->nativeTypes
+            && $this->varIntTypes
             && $this->isZeroLiteral($node->expr)
             && $this->isVarExpr($node->var)
             && $this->hasVar((string) $this->parseIdentifier($node->var))
@@ -882,7 +934,7 @@ trait AssignOpTrait
             // std::int()/std::float() values are an explicit opt-in to native
             // C++ arithmetic; changing them to PHP semantics here would be as
             // wrong as the undefined raw operation. Keep the compile-time
-            // rejection native_types mode uses.
+            // rejection used by the default native mode.
             if ($this->isExplicitNativeArithmeticExpr($node->var)) {
                 $this->fatalError($node->expr, 'Cannot divide or modulo by zero');
             }
@@ -1173,14 +1225,14 @@ trait AssignOpTrait
 
         $rightType = $this->detectTypeOfExpr($node->expr);
 
-        // In ordinary PHP mode, an int compound assignment must perform the
+        // In varint mode, an int compound assignment must perform the
         // arithmetic before the typed-property write is validated. The result
         // may therefore be a float (division or integer overflow), in which
         // case Zend rejects the write and leaves the old property value intact.
         // A direct zend_long reference would bypass that behavior completely.
         // Native objects cannot cross the Variant boundary and retain their
         // native C++ property access path.
-        if (!$this->nativeTypes
+        if ($this->varIntTypes
             && $def->type === Type::INT
             && !$this->isNativeObjectClass($this->detectClassOfExpr($node->var->var))
             && in_array($op, ['+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '&=', '|=', '^='], true)
@@ -1482,6 +1534,47 @@ trait AssignOpTrait
         $this->assertReadonlyPropertyReferenceForbidden($expr->var, $expr, true);
         $this->assertReadonlyPropertyReferenceForbidden($expr->expr, $expr, false);
 
+        if ($this->isVarExpr($expr->var)) {
+            $existingLeft = $this->parseWritableIdentifier($expr->var);
+            if ($this->hasLocalVar($existingLeft)) {
+                $existingType = $this->getRawVarType($existingLeft);
+                if (Type::isTypedRefType($existingType)
+                    || Type::getReferenceType($existingType) !== null
+                ) {
+                    $this->fatalError(
+                        $expr,
+                        'Cannot rebind fixed or typed reference variable `$'
+                            . $this->unescapeVarName($existingLeft) . '`',
+                    );
+                }
+            }
+        }
+
+        // A new function-local alias of fixed native storage has a stable C++
+        // binding and does not need a Zend reference. References are declared
+        // at function scope, so only an unconditional top-level binding is
+        // accepted. Value expressions continue to see the referenced base type.
+        if ($this->isVarExpr($expr->var) && $this->isVarExpr($expr->expr)) {
+            $leftName = $this->parseWritableIdentifier($expr->var);
+            $rightName = $this->parseIdentifier($expr->expr);
+            if (!$this->hasVar($leftName) && $this->hasLocalVar($rightName)) {
+                $rightBindingType = $this->getRawVarType($rightName);
+                $referenceType = Type::isTypedRefType($rightBindingType)
+                    ? $rightBindingType
+                    : Type::getReferenceType($rightBindingType);
+                if ($referenceType !== null) {
+                    if ($this->context->scopeLevel !== 1) {
+                        $this->fatalError(
+                            $expr,
+                            'A typed reference local must be bound in the top-level scope of the function',
+                        );
+                    }
+                    $this->addTypedRefLocal($leftName, $rightName, $referenceType);
+                    return $expr->getAttribute(self::ATTR_STATEMENT_EXPRESSION, false) ? '' : $leftName;
+                }
+            }
+        }
+
         $propertyReferenceTarget = null;
         $nativeObjectProperty = $expr->var instanceof Expr\PropertyFetch
             && $this->getNativePropertyClassDef($expr->var)?->nativeObject === true;
@@ -1521,7 +1614,7 @@ trait AssignOpTrait
         $rightExpr = '';
 
         if ($this->isVarExpr($expr->expr)) {
-            $rightExpr = $tmpVar . ' = ' . $this->parseIdentifier($expr->expr) . '.toReference()';
+            $rightExpr = $tmpVar . ' = ' . $this->convertToRef($expr->expr);
         } elseif ($expr->expr instanceof Expr\FuncCall && $this->isNameExpr($expr->expr->name)) {
             $name = $this->parseIdentifier($expr->expr->name);
             $function = $this->findNativeFunction($name);

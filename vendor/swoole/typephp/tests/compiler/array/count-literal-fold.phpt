@@ -60,7 +60,7 @@ function main()
     var_dump(count(["{$object->property}"]));
 
     // A by-reference item binds the source variable instead of reading it.
-    $ref = 1;
+    $ref = std::any(1);
     var_dump(count([&$ref]));
 
     // A defined class constant is still evaluated, not discarded.

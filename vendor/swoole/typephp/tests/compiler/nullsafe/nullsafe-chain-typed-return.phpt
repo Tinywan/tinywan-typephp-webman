@@ -2,7 +2,6 @@
 Nullsafe chain preserves typed method returns and member names
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class NullsafeTypedReturnLeaf
 {

@@ -66,7 +66,7 @@ These items should be documented with the exact boundary.
 | Binary mode requires global `main()` | Intentional Rule | This defines the binary entry ABI. |
 | `main()` only accepts no parameters or `(int $argc, array $argv)` | Intentional Rule | Keeps the entry ABI explicit and stable. |
 | `main()` must return `void` | Intentional Rule | An integer exit-code convention could be added later, but current TypePHP rules reject return values. |
-| `declare(strict_types=...)` only supports `strict_types=1` | Intentional Rule | Supporting mixed strict/weak typing is possible, but TypePHP keeps strict behavior predictable. |
+| TypePHP is always strict; `strict_types=0` is rejected | Intentional Rule | Per-file weak typing conflicts with TypePHP's fixed storage and static type guarantees. `strict_types=1` remains accepted as a redundant compatibility directive. |
 | Default parameter before required parameter | Intentional Rule | PHP allows this legacy pattern but ignores the default. TypePHP rejects it to avoid misleading declarations. |
 | Child class overriding parent private property | Intentional Rule / Pending if dynamicized | PHP stores private properties by declaring class. TypePHP native/fixed layouts make this expensive. Rejecting it keeps property layout predictable. |
 | `__construct()` return value | Intentional Rule | PHP constructors should not return values. TypePHP rejects this explicitly. |
@@ -77,7 +77,7 @@ These items should be documented with the exact boundary.
 | Reserved keyword methods such as `toArray()` | Intentional Rule | Conversion keywords are resolved before ordinary object methods to keep conversion lowering static and predictable. |
 | Zero-initialized fixed typed property slots | Intentional Rule / Partial | Native fixed-layout slots use their type's zero value instead of preserving every Zend uninitialized-property transition. |
 | Structural mutation of `std` containers during `foreach` | Intentional Rule | Native C++ iterators may be invalidated by append, insertion, erase or whole-container replacement. TypePHP rejects these operations inside the active loop while allowing non-structural element updates. |
-| Automatic reference inference for dynamic calls | Intentional Rule | A runtime callable may resolve to a function, method, or Closure unknown to the compiler. TypePHP does not mirror callable signatures at runtime; callers must use `refval()` / `toRef()` explicitly. |
+| Automatic reference inference for dynamic calls | Intentional Rule | A runtime callable may resolve to a function, method, or Closure unknown to the compiler. TypePHP does not mirror callable signatures at runtime; callers must use `std::ref()` / `toRef()` explicitly. |
 | By-reference variadic parameters on dynamic Closures | Intentional Rule | Supporting `&...` here would require signature-aware runtime argument packing. Statically resolved ordinary functions and methods support `&...`; dynamic Closures do not. |
 
 ## Implementable but Currently Unsupported
@@ -107,7 +107,7 @@ These items should be documented with the exact boundary.
 | Feature | Classification | Boundary |
 |---|---|---|
 | `eval()` | Partial / Hard Limit | `eval()` can execute PHP code through Zend VM, but it cannot access compiled local variables. Use return values or `$GLOBALS` for data exchange. |
-| Dynamic calls and callbacks | Partial | Zend runtime fallback handles dynamic calls and callbacks. By-reference arguments still need explicit `refval()` / `toRef()`, and native-call optimization is not guaranteed. |
+| Dynamic calls and callbacks | Partial | Zend runtime fallback handles dynamic calls and callbacks. By-reference arguments still need explicit `std::ref()` / `toRef()`, and native-call optimization is not guaranteed. |
 | Dynamic properties and dynamic property chains | Partial | Dynamic property reads and writes use the runtime property API; native property optimization is not guaranteed. |
 | Native typed properties | Partial / Intentional Rule | Fast native paths may not preserve every PHP dynamic state transition. Unknown or incompatible values can fall back to `setProperty()`. |
 | Reflection metadata | Partial | Runtime declarations preserve constructor-promotion and asymmetric-visibility flags; other AOT-specific metadata may still be incomplete. |

@@ -178,18 +178,27 @@ class AstNodeTypeTest extends TestCase
     }
 
     // ========================================================================
-    // isRefvalCall
+    // isStdRefCall
     // ========================================================================
 
-    public function testIsRefvalCall(): void
+    public function testIsStdRefCall(): void
     {
-        $refvalCall = new Expr\FuncCall(new Node\Name('refval'));
-        $this->assertTrue($this->invoke('isRefvalCall', $refvalCall));
+        $stdRefCall = new Expr\StaticCall(new Node\Name('std'), new Node\Identifier('ref'));
+        $this->assertTrue($this->invoke('isStdRefCall', $stdRefCall));
 
-        $otherCall = new Expr\FuncCall(new Node\Name('other'));
-        $this->assertFalse($this->invoke('isRefvalCall', $otherCall));
+        $fullyQualifiedStdRefCall = new Expr\StaticCall(new Node\Name\FullyQualified('std'), new Node\Identifier('ref'));
+        $this->assertTrue($this->invoke('isStdRefCall', $fullyQualifiedStdRefCall));
 
-        $this->assertFalse($this->invoke('isRefvalCall', new Expr\Variable('a')));
+        $relativeStdRefCall = new Expr\StaticCall(new Node\Name\Relative('std'), new Node\Identifier('ref'));
+        $this->assertFalse($this->invoke('isStdRefCall', $relativeStdRefCall));
+
+        $globalRefvalCall = new Expr\FuncCall(new Node\Name('refval'));
+        $this->assertFalse($this->invoke('isStdRefCall', $globalRefvalCall));
+
+        $otherCall = new Expr\StaticCall(new Node\Name('other'), new Node\Identifier('ref'));
+        $this->assertFalse($this->invoke('isStdRefCall', $otherCall));
+
+        $this->assertFalse($this->invoke('isStdRefCall', new Expr\Variable('a')));
     }
 
     // ========================================================================
@@ -396,7 +405,7 @@ class AstNodeTypeTest extends TestCase
         $methods = [
             'isArrayDimFetch', 'isPropertyFetch', 'isStaticPropertyFetch',
             'isClassConstFetch', 'isNewExpr', 'isNameExpr', 'isFullNameExpr',
-            'isFuncCallExpr', 'isRefvalCall', 'isMethodCall', 'isStaticCall',
+            'isFuncCallExpr', 'isStdRefCall', 'isMethodCall', 'isStaticCall',
             'isMatchExpr', 'isAssignExpr',
             'isCallExpr', 'isPlaceholderExpr', 'isReturnExpr', 'isBreakExpr',
             'isThrowExpr', 'isExitExpr', 'isEmptyArray', 'isNull',

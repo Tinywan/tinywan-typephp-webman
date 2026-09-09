@@ -118,11 +118,22 @@ trait NullsafeAccessTrait
                     $code .= $this->formatCapturedStmtLines($argBeforeStmts);
                 }
                 if ($requiresDynamicScope && $this->methodDef) {
-                    $code .= $this->getIndent()
-                        . "{$tmpVar} = php::callScoped({$object}, {$item[1]}, "
-                        . $this->getCallableScopeExpr() . ", {$args});" . PHP_EOL;
+                    if ($this->isNamedMethod($item[4]->name)) {
+                        $code .= $this->getIndent()
+                            . "{$tmpVar} = typephp_call_method_scoped_cached({$object}, {$item[1]}, "
+                            . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache()
+                            . ", {$args});" . PHP_EOL;
+                    } else {
+                        $code .= $this->getIndent() . "{$tmpVar} = php::callScoped({$object}, {$item[1]}, "
+                            . $this->getCallableScopeExpr() . ", {$args});" . PHP_EOL;
+                    }
                 } else {
-                    $code .= $this->getIndent() . "{$tmpVar} = {$object}.call({$item[1]}, {$args});" . PHP_EOL;
+                    if ($this->isNamedMethod($item[4]->name)) {
+                        $code .= $this->getIndent() . "{$tmpVar} = typephp_call_method_cached({$object}, {$item[1]}, "
+                            . $this->getMethodCallCache() . ", {$args});" . PHP_EOL;
+                    } else {
+                        $code .= $this->getIndent() . "{$tmpVar} = {$object}.call({$item[1]}, {$args});" . PHP_EOL;
+                    }
                 }
                 if ($argAfterStmts) {
                     $code .= $this->formatCapturedStmtLines($argAfterStmts);

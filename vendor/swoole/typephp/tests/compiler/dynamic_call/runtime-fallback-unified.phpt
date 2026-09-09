@@ -65,13 +65,13 @@ function main(): void
     $callback = [$box, $method];
     var_dump($callback('ok'));
 
-    $staticClass = any(RuntimeFallbackStatic::class);
-    $staticProperty = any('value');
+    $staticClass = std::any(RuntimeFallbackStatic::class);
+    $staticProperty = std::any('value');
     var_dump($staticClass::$$staticProperty);
     $staticClass::$$staticProperty = 'after';
     var_dump($staticClass::$$staticProperty);
 
-    $staticMethod = any('format');
+    $staticMethod = std::any('format');
     var_dump($staticClass::$staticMethod('ok'));
 }
 ?>

@@ -8,7 +8,6 @@ if (PHP_VERSION_ID < 80500) {
 ?>
 --FILE--
 <?php
-use native_types;
 function main(): void
 {
     $value = 2 ** 80;

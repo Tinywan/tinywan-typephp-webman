@@ -58,7 +58,7 @@ function makeAssignmentReceiver(int &$calls, string $value): AssignmentReceiver
 
 function main(): void
 {
-    $original = new AssignmentReceiver('base');
+    $original = std::any(new AssignmentReceiver('base'));
 
     echo ($assigned = $original)->id(), "\n";
     var_dump($assigned === $original);
@@ -67,7 +67,7 @@ function main(): void
     // control for the no-argument path fixed by this regression.
     echo ($withArgument = $original)->append('-arg'), "\n";
 
-    $calls = 0;
+    $calls = std::any(0);
     echo ($created = makeAssignmentReceiver($calls, 'factory'))->id(), "\n";
     var_dump($calls);
     echo $created->id(), "\n";

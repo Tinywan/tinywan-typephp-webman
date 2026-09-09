@@ -12,13 +12,13 @@ class TypeHitCoalesceProperty
     public function run(): void
     {
         try {
-            $this->union ??= any(null);
+            $this->union ??= std::any(null);
         } catch (TypeError $e) {
             var_dump($e->getMessage());
         }
 
         $this->union = "ok";
-        $this->union ??= any(null);
+        $this->union ??= std::any(null);
         var_dump($this->union);
     }
 }

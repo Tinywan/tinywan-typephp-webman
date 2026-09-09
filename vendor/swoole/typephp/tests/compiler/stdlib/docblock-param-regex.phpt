@@ -5,7 +5,6 @@ docblock param regex with recursive named groups
 
 function parse_doc_param_name(string $value): array
 {
-    $matches = [];
     preg_match('/^\s*(?<type>[\w\|\\\\]+(?<parens>\((?<inparens>(?:(?&parens)|[^(){}[\]<>]*+))++\)|\{(?&inparens)\}|\[(?&inparens)\]|<(?&inparens)>)*+(?::(?&type))?)\s*(\.\.\.)?\$(?<name>\w+).*$/', $value, $matches);
 
     return [

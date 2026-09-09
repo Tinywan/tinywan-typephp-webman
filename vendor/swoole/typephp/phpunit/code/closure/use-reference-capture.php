@@ -1,7 +1,7 @@
 <?php
 function main(): void
 {
-    $arr = [1, 2];
+    $arr = std::any([1, 2]);
     $copy = function () use ($arr) {
         $arr[] = 3;
         return $arr;
@@ -14,7 +14,7 @@ function main(): void
     };
     $ref();
 
-    $value = 'old';
+    $value = std::any('old');
     $returnCapturedRef = function () use (&$value) {
         return $value;
     };

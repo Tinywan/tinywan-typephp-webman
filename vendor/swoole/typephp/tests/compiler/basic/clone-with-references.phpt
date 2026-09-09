@@ -12,7 +12,7 @@ if (PHP_VERSION_ID < 80500) {
 function main(): void
 {
     $source = new stdClass();
-    $value = 'reference';
+    $value = std::any('reference');
     $updates = ['value' => &$value];
 
     try {

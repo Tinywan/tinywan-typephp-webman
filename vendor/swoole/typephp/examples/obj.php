@@ -30,7 +30,7 @@ function main()
     $arr['obj'] = $obj;
     var_dump($obj->test());
 
-    $obj2 = objval($arr['obj'], 'Test');
+    $obj2 = $arr['obj']->toObject(Test::class);
     var_dump($obj2);
     var_dump($obj2->test());
 }

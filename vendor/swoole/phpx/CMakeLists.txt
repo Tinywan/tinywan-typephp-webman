@@ -65,23 +65,6 @@ if (enable_asan AND NOT IS_WINDOWS)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 endif ()
 
-# ============ GitHub Action 配置 ============
-option(GITHUB_ACTION "Enable GitHub Action mode" OFF)
-if(GITHUB_ACTION)
-    message(STATUS "GitHub Action mode enabled")
-    add_definitions(-DGITHUB_ACTION)
-endif()
-
-# ============ Facade API 配置 ============
-# 默认关闭：关闭后 src/class、src/func、src/const 不加入编译
-option(ENABLE_FACADE_API "Enable Facade API (src/class, src/func, src/const)" OFF)
-if(ENABLE_FACADE_API)
-    message(STATUS "Facade API enabled")
-    add_definitions(-DENABLE_FACADE_API)
-else()
-    message(STATUS "Facade API disabled (src/class, src/func, src/const excluded)")
-endif()
-
 # ============ PHP 配置 ============
 if(IS_WINDOWS)
     # Windows 平台：必须设置 PHP_HOME 环境变量
@@ -183,10 +166,12 @@ if(IS_WINDOWS)
 
 else()
     # Unix/Linux/Mac 平台：使用 php-config
-    if (DEFINED php_dir)
-        set(PHP_CONFIG "${php_dir}/bin/php-config")
-    else ()
-        set(PHP_CONFIG "php-config")
+    if (NOT PHP_CONFIG)
+        if (DEFINED php_dir)
+            set(PHP_CONFIG "${php_dir}/bin/php-config")
+        else ()
+            set(PHP_CONFIG "php-config")
+        endif()
     endif()
 
     execute_process(COMMAND ${PHP_CONFIG} --vernum
@@ -196,8 +181,8 @@ else()
     if (NOT PHP_CONFIG_RESULT EQUAL 0)
         message(FATAL_ERROR "Failed to query PHP version from php-config: ${PHP_CONFIG_RESULT}")
     endif()
-    if (PHP_VERSION_ID LESS 80400)
-        message(FATAL_ERROR "PHPX requires PHP 8.4 or later; php-config reports ${PHP_VERSION_ID}")
+    if (PHP_VERSION_ID LESS 80400 OR PHP_VERSION_ID GREATER_EQUAL 80600)
+        message(FATAL_ERROR "PHPX requires PHP 8.4 or 8.5; php-config reports ${PHP_VERSION_ID}")
     endif()
 
     execute_process(COMMAND ${PHP_CONFIG} --includes
@@ -249,7 +234,7 @@ else()
 endif()
 
 # ============ 包含目录 ============
-include_directories(include tests/include src/misc)
+include_directories(include src/misc)
 
 if(IS_WINDOWS)
     include_directories(${PHP_INCLUDE_DIRS})
@@ -282,8 +267,15 @@ else()
     link_directories(${PHP_PREFIX}/lib)
 endif()
 
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
+if(NOT CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
+endif()
+if(NOT CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
+endif()
+if(NOT IS_WINDOWS AND NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
+endif()
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
 if (APPLE)
@@ -413,30 +405,12 @@ else()
     target_compile_options(mpdecimal PRIVATE -fPIC)
 endif()
 
-if(ENABLE_FACADE_API)
-    file(GLOB_RECURSE SRC_FILES src/core/*.cc src/std/*.cc src/typephp/*.cc src/func/*.cc src/class/*.cc src/const/*.cc)
-else()
-    file(GLOB_RECURSE SRC_FILES src/core/*.cc src/std/*.cc src/typephp/*.cc)
-    # Facade API 与 tests 耦合较大，保留最常用的 Facade 实现，避免核心单测大量改写
-    list(APPEND SRC_FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/func/core.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/func/standard.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/func/json.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/func/random.cc
-    )
-endif()
+file(GLOB_RECURSE SRC_FILES src/core/*.cc src/std/*.cc src/typephp/*.cc)
 file(GLOB_RECURSE HEADER_FILES include/*.h)
 
 add_library(phpx SHARED ${SRC_FILES})
-set_target_properties(phpx PROPERTIES
-    CLEAN_DIRECT_OUTPUT 1
-)
 
 if (IS_WINDOWS)
-    target_link_libraries(phpx PRIVATE
-        ${PHP_LIBRARY}
-    )
-
     target_compile_definitions(phpx PUBLIC
         PHP_EXPORTS
         ZEND_WIN32
@@ -451,6 +425,14 @@ if (IS_WINDOWS)
     set_target_properties(phpx PROPERTIES
         OUTPUT_NAME "phpx"
         SUFFIX ".dll"
+        # A Windows DLL is a CMake runtime target. Keep the PHPX runtime in
+        # the build root where TypePHP and existing PHPX consumers expect it;
+        # executable targets continue to use EXECUTABLE_OUTPUT_PATH below.
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_CURRENT_BINARY_DIR}"
     )
 
     copy_mpdecimal_runtime_dlls(phpx)
@@ -492,15 +474,8 @@ if(BUILD_TESTS)
         message(STATUS "Found GTest: ${GTEST_LIBRARIES}")
 
         file(GLOB_RECURSE TEST_FILES tests/src/*.cpp)
-        if(NOT ENABLE_FACADE_API)
-            # 关闭 Facade API 时，排除仅测试 class/func/const facade 的单测文件
-            list(FILTER TEST_FILES EXCLUDE REGEX "tests/src/class_facade\\.cpp$")
-            list(FILTER TEST_FILES EXCLUDE REGEX "tests/src/func_facade\\.cpp$")
-            list(FILTER TEST_FILES EXCLUDE REGEX "tests/src/facade\\.cpp$")
-            list(FILTER TEST_FILES EXCLUDE REGEX "tests/src/caller\\.cpp$")
-        endif()
         add_executable(phpx-tests ${TEST_FILES})
-        add_dependencies(phpx-tests phpx)
+        target_include_directories(phpx-tests PRIVATE tests/include)
 
         if(IS_WINDOWS)
             target_link_libraries(phpx-tests
@@ -551,7 +526,6 @@ if(BUILD_EXT)
     file(GLOB_RECURSE EXT_FILES tests/ext/*.cpp)
     if(EXT_FILES)
         add_library(ext SHARED ${EXT_FILES})
-        add_dependencies(ext phpx)
         target_link_libraries(ext PRIVATE phpx)
 
         set_target_properties(ext PROPERTIES
@@ -588,7 +562,6 @@ if(IS_WINDOWS)
     message(STATUS "Dev directory name: ${PHP_DEV_DIR_NAME}")
 else()
     # Unix/Linux/Mac 安装配置
-    install(CODE "MESSAGE(\"Are you run command using root user?\")")
     install(TARGETS phpx LIBRARY DESTINATION ${PHP_PREFIX}/lib)
     install(FILES ${HEADER_FILES} DESTINATION ${PHP_PREFIX}/include/phpx)
 endif()
@@ -621,6 +594,4 @@ else()
 endif()
 message(STATUS "Build Tests: ${BUILD_TESTS}")
 message(STATUS "Build Extension: ${BUILD_EXT}")
-message(STATUS "GitHub Action: ${GITHUB_ACTION}")
-message(STATUS "Facade API: ${ENABLE_FACADE_API}")
 message(STATUS "=================================")

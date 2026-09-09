@@ -2,9 +2,6 @@
 std::bigInt() and std::decimal() builtin functions
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // std::bigInt from big literal (auto-detected BigInt → no-op pass-through)
     $a = std::bigInt(12345678901234567890);

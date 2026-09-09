@@ -2,7 +2,6 @@
 Unary minus applies to the whole operand expression
 --FILE--
 <?php
-declare(strict_types=1);
 
 function pick(int $a, int $b, int $c): int
 {

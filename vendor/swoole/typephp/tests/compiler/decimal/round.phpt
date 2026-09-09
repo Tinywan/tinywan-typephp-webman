@@ -2,9 +2,6 @@
 Decimal: round
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // round without precision (default 0, round to integer)
     $a = std::decimal("3.4");

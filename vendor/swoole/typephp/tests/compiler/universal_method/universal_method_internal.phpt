@@ -3,8 +3,6 @@ Universal method provider may wrap a PHP internal function
 --FILE--
 <?php
 
-use native_types;
-
 #[MethodsFor(Type::String)]
 final class StringExtensions
 {

@@ -3,7 +3,6 @@ Interface return type covariance with nullable interface and anonymous class
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 interface TestInterface1
 {

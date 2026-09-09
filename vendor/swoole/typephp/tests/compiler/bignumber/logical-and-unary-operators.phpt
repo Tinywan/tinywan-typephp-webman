@@ -2,9 +2,6 @@
 Big numeric unary plus and boolean contexts use numeric truth values
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $bi0 = std::bigInt(0);
     $bi1 = std::bigInt(1);

@@ -40,7 +40,7 @@ function testDeclaredObject(DeclaredObjectContract $object): void
     var_dump($object->name());
 
     try {
-        $object = any(new DeclaredObjectOther());
+        $object = std::any(new DeclaredObjectOther());
     } catch (Throwable $e) {
         echo $e->getMessage(), "\n";
     }

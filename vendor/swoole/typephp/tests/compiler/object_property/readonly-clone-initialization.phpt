@@ -3,8 +3,6 @@ readonly properties may be reinitialized once while cloning
 --FILE--
 <?php
 
-use native_types;
-
 class ReadonlyCloneBase
 {
     public readonly int $base;

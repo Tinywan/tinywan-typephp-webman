@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class NativeProtectedOwner
 {
     protected int $value = 1;

@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class NativePropertyAssignOpClassConstBox
 {
     public int $flags = 7;

@@ -2,7 +2,6 @@
 By-reference variadic signatures remain compatible across interfaces and inheritance
 --FILE--
 <?php
-declare(strict_types=1);
 
 interface IncrementContract
 {
@@ -28,8 +27,8 @@ final class Incrementer extends IncrementBase
 function main(): void
 {
     $incrementer = new Incrementer();
-    $first = 10;
-    $second = 20;
+    $first = std::any(10);
+    $second = std::any(20);
     $incrementer->increment($first, $second);
     var_dump($first, $second);
 }

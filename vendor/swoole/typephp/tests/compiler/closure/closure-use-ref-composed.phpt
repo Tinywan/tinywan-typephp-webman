@@ -4,8 +4,8 @@ closure use by reference should work with nested control flow
 <?php
 
 function main() {
-    $log = [];
-    $counter = 0;
+    $log = std::any([]);
+    $counter = std::any(0);
 
     $push = function (string $label, int $value) use (&$log, &$counter): int {
         $log[] = $label . ':' . $counter;

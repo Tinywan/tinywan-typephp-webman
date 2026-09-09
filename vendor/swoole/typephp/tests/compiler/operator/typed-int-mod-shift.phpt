@@ -2,7 +2,7 @@
 Typed int modulo and shifts follow PHP semantics (errors, boundaries)
 --FILE--
 <?php
-declare(strict_types=1);
+use varint_types;
 
 function modInts(int $a, int $b): int
 {

@@ -2,7 +2,6 @@
 NULL globals in arithmetic should treat NULL as 0
 --FILE--
 <?php
-declare(strict_types=1);
 
 // Test 1: NULL global += float
 function test_global_add() {

@@ -11,7 +11,7 @@ function make_push_values(): array
 
 function main(): void
 {
-    $items = [1];
+    $items = std::any([1]);
     $count = array_push($items, ...make_push_values());
 
     var_dump($count);

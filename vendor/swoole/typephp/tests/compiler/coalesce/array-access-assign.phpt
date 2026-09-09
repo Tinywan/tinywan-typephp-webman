@@ -2,7 +2,6 @@
 ArrayAccess ??= preserves offsetExists, offsetGet, offsetSet and lazy evaluation semantics
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class CoalesceBag implements ArrayAccess
 {
@@ -136,8 +135,8 @@ function main(): void
 
     echo "-- receiver and key once --\n";
     $sideEffect = new CoalesceBag();
-    $receiverCalls = 0;
-    $keyCalls = 0;
+    $receiverCalls = std::any(0);
+    $keyCalls = std::any(0);
     var_dump(coalesceReceiver($sideEffect, $receiverCalls)[coalesceKey($keyCalls)]
         ??= coalesceRhs('side', 55));
     var_dump($receiverCalls, $keyCalls, $sideEffect->data);

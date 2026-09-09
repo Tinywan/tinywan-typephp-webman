@@ -77,7 +77,7 @@ function main() {
     var_dump(factorial(5));
     var_dump(factorial(10));
 
-    $memo = [];
+    $memo = std::any([]);
     var_dump(fib(10, $memo));
     var_dump(fib(15, $memo));
 

@@ -3,9 +3,6 @@ Keyword MethodsFor method with lowerCamelCase name
 --FILE--
 <?php
 
-declare(strict_types=1);
-use native_types;
-
 #[MethodsFor('*')]
 final class KeywordExtensions
 {

@@ -13,7 +13,7 @@
 | --- | --- | --- | --- | --- |
 | `typephp_` | TypePHP 独有的运行时或编译产物支持逻辑 | `typephp_call_parent_constructor()` | TypePHP/PHPX 运行时 | 内部或显式导出 ABI |
 | `php::` | 对 ZendAPI、zval、HashTable、call frame 等 PHP 运行时能力的 C++ 封装 | `php::deindirect()` | PHPX C++ API | PHPX API |
-| `typephp_<project>` | 单个编译项目的私有 C++ 命名空间 | `namespace typephp_tpc` | 当前生成项目 | 非公共 ABI |
+| `typephp_project_<project>` | 单个编译项目的私有 C++ 命名空间 | `namespace typephp_project_tpc` | 当前生成项目 | 非公共 ABI |
 | `php_` | 用户 PHP 函数和类方法映射后的 C++ callable 符号 | `php_app__user__save()` | 链接器可见 | TypePHP/stub callable ABI |
 
 核心约束：
@@ -21,7 +21,7 @@
 1. 不得新增全局的框架 `php_*` helper。
 2. 与 TypePHP 无关、只是包装 ZendAPI 的能力必须放入 `namespace php`。
 3. TypePHP 独有且需要跨生成文件调用的逻辑使用 `typephp_` 前缀。
-4. 只服务于一个编译项目的数据和函数放入 `typephp_<project>` 命名空间。
+4. 只服务于一个编译项目的数据和函数放入 `typephp_project_<project>` 命名空间。
 5. 全局 `php_*` callable 名称保留给用户 PHP 声明的编译 ABI。
 
 ## 2. `typephp_`：TypePHP 独有逻辑
@@ -144,23 +144,23 @@ php::stdCreateObject();
 
 不要把 Zend 的 snake_case 名称机械地保留为全局 C++ 名称。底层调用可以继续使用 Zend 原始 API，例如 `zend_objects_new()`，但对生成代码暴露的包装层应使用 `php::`。
 
-## 4. `typephp_<project>`：项目私有命名空间
+## 4. `typephp_project_<project>`：项目私有命名空间
 
 每个 TypePHP 编译项目拥有独立的 C++ 命名空间：
 
 ```text
-typephp_<target-name>
+typephp_project_<target-name>
 ```
 
 例如项目名为 `tpc`：
 
 ```cpp
-namespace typephp_tpc {
+namespace typephp_project_tpc {
     // Project-private generated state and helpers.
 }
 ```
 
-项目名中的 `-` 和 `*` 会转换为 `_`，其余字符必须满足编译器的 target identifier 校验。由于固定带有 `typephp_` 前缀，即使项目名以数字开头，最终 C++ namespace 仍是合法标识符。
+项目名中的 `-` 和 `*` 会转换为 `_`，其余字符必须满足编译器的 target identifier 校验。独立的 `typephp_project_` 前缀可防止生成 namespace 与全局 `typephp_*` 运行时 helper 冲突；即使项目名以数字开头，最终 C++ namespace 仍是合法标识符。
 
 ### 4.1 应放入该命名空间的内容
 
@@ -175,7 +175,7 @@ namespace typephp_tpc {
 示意：
 
 ```cpp
-namespace typephp_demo {
+namespace typephp_project_demo {
 
 static php::Str literal_strings[] = {
     php::Str{"hello"},
@@ -195,12 +195,12 @@ static void module_init() {
     // Initialize this project's generated state.
 }
 
-}  // namespace typephp_demo
+}  // namespace typephp_project_demo
 ```
 
 ### 4.2 可见性与 ABI
 
-- `typephp_<project>` 内的名称是实现细节，不是 library stub ABI。
+- `typephp_project_<project>` 内的名称是实现细节，不是 library stub ABI。
 - 可限制为 `static` 的对象和函数应继续标记为 `static`。
 - 生成头文件可以声明必须跨 translation unit 使用的项目内部 accessor，但不应暴露底层数组或缓存表。
 - 外部手写 C++ 代码不得依赖 literal index、cache index 或项目内部 storage 名称。
@@ -211,10 +211,10 @@ static void module_init() {
 项目 namespace 中仍可能出现历史生成名称，例如：
 
 ```cpp
-typephp_demo::php_class_entry_App_User
+typephp_project_demo::php_class_entry_App_User
 ```
 
-虽然成员名以 `php_` 开头，但完整符号位于 `typephp_demo` 中，因此它属于项目私有实现，而不是第 5 节所述的全局用户 callable ABI。新增项目内部 helper 应优先使用不带 `php_` 的短名称，例如 `get_class()`、`get_func()` 和 `get_str()`。
+虽然成员名以 `php_` 开头，但完整符号位于 `typephp_project_demo` 中，因此它属于项目私有实现，而不是第 5 节所述的全局用户 callable ABI。新增项目内部 helper 应优先使用不带 `php_` 的短名称，例如 `get_class()`、`get_func()` 和 `get_str()`。
 
 ## 5. `php_`：用户 PHP callable 的 C++ ABI
 
@@ -315,7 +315,7 @@ TypePHP 扩展不得分别编译或静态链接包含进程级 Zend 状态的 PH
 1. **它是否是用户 PHP 函数或类方法的编译本体？**
    - 是：使用既有 `php_` callable ABI 生成器，禁止手写另一套映射。
 2. **它是否只服务于当前一个 TypePHP 项目？**
-   - 是：放入 `typephp_<project>`，并尽可能使用 `static` 或私有 accessor。
+   - 是：放入 `typephp_project_<project>`，并尽可能使用 `static` 或私有 accessor。
 3. **它是否实现 TypePHP 独有语义？**
    - 是：使用 `typephp_` 前缀。
 4. **它是否只是对 Zend/PHP 运行时能力的 C++ 封装？**
@@ -330,7 +330,7 @@ TypePHP 扩展不得分别编译或静态链接包含进程级 Zend 状态的 PH
 - [ ] `typephp_helper.h` 中没有新增全局 `php_*` helper；
 - [ ] ZendAPI 包装位于 `namespace php`；
 - [ ] TypePHP 独有逻辑使用 `typephp_`；
-- [ ] 项目缓存和 storage 位于 `typephp_<project>`；
+- [ ] 项目缓存和 storage 位于 `typephp_project_<project>`；
 - [ ] 项目私有表没有通过生成头文件直接 `extern` 暴露；
 - [ ] 用户 callable 仍使用统一的 `php_` ABI 生成器；
 - [ ] 新名称不会与用户可声明的 PHP 函数或方法发生冲突；
@@ -350,7 +350,7 @@ tests/compiler/basic/helper-symbol-collision.phpt
 | --- | --- |
 | `php_` callable 前缀与组合分隔符 | `src/CompilerBase.php` |
 | callable 组合冲突检测 | `src/Preprocessor.php` |
-| `typephp_<project>` 生成及项目私有表 | `src/Translator.php` |
+| `typephp_project_<project>` 生成及项目私有表 | `src/Translator.php` |
 | TypePHP extension 前缀常量 | `src/Metadata/Constants.php` |
 | PHPX/TypePHP helper 分类 | `vendor/swoole/phpx/include/typephp_helper.h` |
 | embed module accessor 拼接 | `vendor/swoole/phpx/src/misc/typephp_main.cc` |

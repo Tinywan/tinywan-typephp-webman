@@ -13,6 +13,12 @@ use PhpParser\Node;
 use PhpParser\NodeAbstract;
 use TypePhp\Entity\ClassDef;
 
+final class NativeGlobalConstantVisitState
+{
+    /** @var array<string, true> */
+    public array $keys = [];
+}
+
 /**
  * Immutable class metadata used by the Native global pre-pass.
  *
@@ -176,7 +182,7 @@ final class NativeGlobalTypeResolver
             return $expression->value;
         }
 
-        $visiting = [];
+        $visiting = new NativeGlobalConstantVisitState();
         try {
             $value = $this->evaluateConstantExpression($expression, $scopeClass, $visiting, 0);
         } catch (\Throwable) {
@@ -185,11 +191,10 @@ final class NativeGlobalTypeResolver
         return is_string($value) ? $value : null;
     }
 
-    /** @param array<string, true> $visiting */
     private function evaluateConstantExpression(
         NodeAbstract $expression,
         string $scopeClass,
-        array &$visiting,
+        NativeGlobalConstantVisitState $visiting,
         int $depth,
     ): mixed {
         if ($depth > 32 || !$expression instanceof Node\Expr) {
@@ -198,7 +203,7 @@ final class NativeGlobalTypeResolver
 
         $evaluator = new ConstExprEvaluator(function (Node\Expr $node) use (
             $scopeClass,
-            &$visiting,
+            $visiting,
             $depth,
         ): mixed {
             if ($node instanceof Node\Expr\ConstFetch) {
@@ -215,10 +220,10 @@ final class NativeGlobalTypeResolver
                     }
                     if (isset($this->globalConstantExpressions[$name])) {
                         $key = 'global:' . $name;
-                        if (isset($visiting[$key])) {
+                        if (isset($visiting->keys[$key])) {
                             throw new \RuntimeException('Circular constant expression');
                         }
-                        $visiting[$key] = true;
+                        $visiting->keys[$key] = true;
                         try {
                             return $this->evaluateConstantExpression(
                                 $this->globalConstantExpressions[$name],
@@ -227,7 +232,7 @@ final class NativeGlobalTypeResolver
                                 $depth + 1,
                             );
                         } finally {
-                            unset($visiting[$key]);
+                            unset($visiting->keys[$key]);
                         }
                     }
                     if (defined($name)) {
@@ -255,10 +260,10 @@ final class NativeGlobalTypeResolver
                             throw new \RuntimeException('Class constant has no static expression');
                         }
                         $key = 'class:' . $classKey . '::' . $constant;
-                        if (isset($visiting[$key])) {
+                        if (isset($visiting->keys[$key])) {
                             throw new \RuntimeException('Circular class constant expression');
                         }
-                        $visiting[$key] = true;
+                        $visiting->keys[$key] = true;
                         try {
                             return $this->evaluateConstantExpression(
                                 $constantDefinition->valueExpr,
@@ -267,7 +272,7 @@ final class NativeGlobalTypeResolver
                                 $depth + 1,
                             );
                         } finally {
-                            unset($visiting[$key]);
+                            unset($visiting->keys[$key]);
                         }
                     }
                     $parent = $this->parents[$classKey] ?? null;

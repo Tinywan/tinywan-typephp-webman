@@ -2,8 +2,6 @@
 call method overridden in grandchild through base parameter
 --FILE--
 <?php
-use native_types;
-
 class Base
 {
     public function value(): string

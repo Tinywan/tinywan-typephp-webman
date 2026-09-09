@@ -37,7 +37,7 @@ class RefChild extends RefTarget
 
 function main(): void
 {
-    $value = 'start';
+    $value = std::any('start');
     mutate_arg($value);
     $target = new RefTarget($value);
     $target->mutate($value);
@@ -45,10 +45,10 @@ function main(): void
     mutate_named_arg(...['named-function'], value: $value);
     $target->mutateNamed(...['named-method'], value: $value);
     $fn = 'mutate_named_arg';
-    $fn(...['dynamic-refval'], value: refval($value));
+    $fn(...['dynamic-std-ref'], value: std::ref($value));
     echo $value, PHP_EOL;
 }
 
 ?>
 --EXPECT--
-start:function:ctor:method:ctor:named-function:named-method:dynamic-refval
+start:function:ctor:method:ctor:named-function:named-method:dynamic-std-ref

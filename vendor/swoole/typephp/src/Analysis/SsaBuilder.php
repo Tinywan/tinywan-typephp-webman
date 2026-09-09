@@ -372,7 +372,7 @@ class SsaBuilder
      * @param SsaBlock[] $blocks  Reference to the blocks array being built
      * @param SsaBlock  $currentBlock  The current block (already in $blocks)
      */
-    private function splitStmtList(array $stmts, array &$blocks, SsaBlock &$currentBlock): void
+    private function splitStmtList(array $stmts, array &$blocks, SsaBlock $currentBlock): SsaBlock
     {
         for ($i = 0; $i < count($stmts); $i++) {
             $stmt = $stmts[$i];
@@ -414,7 +414,7 @@ class SsaBuilder
 
             // If statement: expand into condition block + body blocks + join
             if ($stmt instanceof Stmt\If_) {
-                $this->expandIfStmt($stmt, $blocks, $currentBlock, $i, $stmts);
+                $currentBlock = $this->expandIfStmt($stmt, $blocks, $currentBlock, $i, $stmts);
                 continue;
             }
 
@@ -431,6 +431,8 @@ class SsaBuilder
             // Regular statement: add to current block
             $currentBlock->stmts[] = $stmt;
         }
+
+        return $currentBlock;
     }
 
     /**
@@ -444,7 +446,7 @@ class SsaBuilder
      *
      * @param SsaBlock[] $blocks
      */
-    private function expandIfStmt(Stmt\If_ $ifStmt, array &$blocks, SsaBlock &$currentBlock, int $stmtIndex, array $allStmts): void
+    private function expandIfStmt(Stmt\If_ $ifStmt, array &$blocks, SsaBlock $currentBlock, int $stmtIndex, array $allStmts): SsaBlock
     {
         // The if statement is the last statement in the current (condition) block
         $currentBlock->stmts[] = $ifStmt;
@@ -473,7 +475,7 @@ class SsaBuilder
                     $currentBlock = $this->newBlock();
                     $blocks[] = $currentBlock;
                 }
-                $this->expandIfStmt($innerIf, $blocks, $currentBlock, 0, [$innerIf]);
+                $currentBlock = $this->expandIfStmt($innerIf, $blocks, $currentBlock, 0, [$innerIf]);
             }
         }
         if ($ifStmt->else) {
@@ -514,6 +516,8 @@ class SsaBuilder
         if ($stmtIndex < count($allStmts) - 1) {
             $currentBlock = $joinBlock;
         }
+
+        return $currentBlock;
     }
 
     /**
@@ -1373,9 +1377,9 @@ class SsaBuilder
      *
      * Two mechanisms in TypePHP:
      *   1. Explicit &$var at call site: func(&$x) — detected via $arg->byRef
-     *   2. refval() pseudo-function: func(refval($x)) — used for dynamic calls
+     *   2. std::ref() pseudo-function: func(std::ref($x)) — used for dynamic calls
      *      where the compiler can't statically determine if the parameter is byRef.
-     *      The compiler detects refval() via isRefvalCall() and unwraps it during codegen.
+     *      The compiler detects std::ref() via isStdRefCall() and unwraps it during codegen.
      *
      * When a variable is passed by reference to a function call, the function
      * may modify it. We model this as:
@@ -1453,7 +1457,7 @@ class SsaBuilder
      *
      * Handles both:
      *   - Explicit &$var (arg->byRef === true)
-     *   - refval($var) pseudo-function wrapping
+     *   - std::ref($var) pseudo-function wrapping
      *
      * @param Node\Arg[] $args
      */
@@ -1470,10 +1474,8 @@ class SsaBuilder
                 $varName = $arg->value->name;
             }
 
-            // Case 2: refval($var) — TypePHP convention for dynamic calls
-            if ($varName === null && $arg->value instanceof Expr\FuncCall
-                && $arg->value->name instanceof Node\Name
-                && $arg->value->name->toLowerString() === 'refval'
+            // Case 2: std::ref($var) — TypePHP convention for dynamic calls
+            if ($varName === null && $this->isStdRefCall($arg->value)
                 && !empty($arg->value->args)) {
                 $inner = $arg->value->args[0]->value;
                 if ($inner instanceof Expr\Variable && is_string($inner->name)) {

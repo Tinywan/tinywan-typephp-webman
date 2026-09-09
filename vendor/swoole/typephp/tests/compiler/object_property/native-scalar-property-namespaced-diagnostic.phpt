@@ -3,8 +3,6 @@ Native scalar property diagnostics escape namespaced class names in generated C+
 --FILE--
 <?php
 namespace Px\C4129Repro {
-    use native_types;
-
     class NamespacedScalarProperty
     {
         public int $intValue = 0;

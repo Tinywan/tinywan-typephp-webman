@@ -114,7 +114,7 @@ function main() {
     var_dump($assoc['first']); // 110
 
     // Test with array references
-    $original = ['value' => 50];
+    $original = std::any(['value' => 50]);
     $xref =& $original;
     $xref['value'] += 25;
     var_dump($original['value']); // 75

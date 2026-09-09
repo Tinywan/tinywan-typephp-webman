@@ -4,7 +4,7 @@ ref 003
 <?php
 function main()
 {
-    $a = [1, 2, 3];
+    $a = std::any([1, 2, 3]);
     $c = $d = $e = &$a;
 
     $e[] = 5;

@@ -9,7 +9,7 @@ namespace {
 
         public function run()
         {
-            $v = 0;
+            $v = std::any(0);
             $this->abc($v);
             var_dump($v);
         }

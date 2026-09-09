@@ -4,7 +4,7 @@ static closure use by reference through internal callback
 <?php
 function main(): void
 {
-    $seen = [];
+    $seen = std::any([]);
     $values = [1, 2, 3];
 
     $result = array_map(

@@ -4,6 +4,14 @@
 
 **AOT 编译器支持 6 种原生/高精度类型**:
 
+从 TypePHP 0.8 起，推断出的 `int`、`float`、`bool` 局部变量默认分别使用
+`php::Int`、`php::Float`、`php::Bool` 原生存储。原有 `use native_types` 已移除，
+编译器也绝不会在后续流程中把原生局部变量静默提升为 `php::Var`。
+
+只有文件确实需要 Zend PHP 的整数扩展语义时才使用 `use varint_types`；它只装箱
+推断出的整数，不影响 float 和 bool。只有单个值需要动态或引用语义时，使用
+`std::any($value)`。
+
 ### 基础原生类型
 1. ✅ `std::int` - 原生整数类型 (zend_long, 8 字节)
 2. ✅ `std::float` - 原生浮点类型 (double, 8 字节)
@@ -24,7 +32,6 @@ AOT 编译器要求对象属性在整个生命周期内始终保持声明时的�
 
 ```php
 <?php
-use native_types;
 
 class User {
     public int $id = 0;
@@ -52,21 +59,18 @@ $user->profile = null; // ✅ 对象属性可显式设置为 null
 
 ---
 
-## 🎯 objval 编译期函数
+## 🎯 `toObject()` 关键词方法
 
 ### 使用场景
 
-当从数组、函数返回值等来源获取对象时，变量会丢失类型上下文信息。此时需要使用 `objval()` 显式声明对象的类。
+当从数组、函数返回值等来源获取对象时，变量会丢失类型上下文信息。此时使用 `toObject()` 关键词方法断言对象类型。
 
 ### 基本语法
 
 ```php
 <?php
-// objval 接收两个参数：
-// 1. 对象变量（必须是 PHP variable 表达式）
-// 2. 类名（必须是字面量字符串）
-
-$obj = objval($array['object'], 'ClassName');
+// 接收者是待检查值，参数是编译期可确定的类名
+$obj = $array['object']->toObject(ClassName::class);
 ```
 
 ### 典型场景
@@ -83,9 +87,9 @@ $data = [
 // ❌ 错误：类型丢失
 $user = $data['user'];  // AOT 无法推断类型
 
-// ✅ 正确：使用 objval 声明类型
-$user = objval($data['user'], 'User');
-$product = objval($data['product'], 'Product');
+// ✅ 正确：使用 toObject() 声明类型
+$user = $data['user']->toObject(User::class);
+$product = $data['product']->toObject(Product::class);
 ```
 
 #### 场景二：函数返回对象
@@ -99,8 +103,8 @@ function get_object() {
 // ❌ 类型丢失
 $obj = get_object();
 
-// ✅ 使用 objval 声明
-$obj = objval(get_object(), 'stdClass');
+// ✅ 使用 toObject() 声明
+$obj = get_object()->toObject(stdClass::class);
 ```
 
 #### 场景三：工厂模式
@@ -123,8 +127,8 @@ class Factory {
 $factory = new Factory();
 
 // ✅ 明确指定返回的对象类型
-$user = objval($factory->create('user'), 'User');
-$product = objval($factory->create('product'), 'Product');
+$user = $factory->create('user')->toObject(User::class);
+$product = $factory->create('product')->toObject(Product::class);
 ```
 
 ### 注意事项
@@ -134,46 +138,45 @@ $product = objval($factory->create('product'), 'Product');
 ```php
 <?php
 // ✅ 正确：字面量类名
-$obj = objval($value, 'MyClass');
+$obj = $value->toObject(MyClass::class);
 
 // ❌ 错误：变量类名（编译期无法分析）
 $className = 'MyClass';
-$obj = objval($value, $className);  // 编译错误
+$obj = $value->toObject($className);  // 编译错误
 
 // ❌ 错误：常量类名（编译期可能无法解析）
 const CLASS_NAME = 'MyClass';
-$obj = objval($value, CLASS_NAME);  // 可能失败
+$obj = $value->toObject(CLASS_NAME);  // 可能失败
 ```
 
-⚠️ **第一个参数必须是 variable 表达式**:
+接收者可以是受支持的任意值表达式：
 
 ```php
 <?php
 // ✅ 正确：variable 表达式
-$obj = objval($array['key'], 'MyClass');
-$obj = objval($object->property, 'MyClass');
-$obj = objval(get_object(), 'MyClass');
+$obj = $array['key']->toObject(MyClass::class);
+$obj = $object->property->toObject(MyClass::class);
+$obj = get_object()->toObject(MyClass::class);
 
-// ❌ 错误：非 variable 表达式
-$obj = objval(new MyClass(), 'MyClass');  // 不需要
+// ✅ 合法，但表达式已经具备精确类型，因此没有必要
+$obj = (new MyClass())->toObject(MyClass::class);  // 不需要
 ```
 
 ### 性能影响
 
-- ✅ `objval()` 是**编译期函数**
-- ✅ 不会产生运行时开销
-- ✅ 仅在编译阶段进行类型推断
-- ✅ 生成的 C++ 代码与普通变量赋值相同
+- ✅ `toObject()` 是 TypePHP 关键词方法
+- ✅ 为编译器提供目标类信息
+- ✅ 当运行时类型不能被静态证明时，生成 PHPX 对象转换/类型检查
 
 ### 与 std:: 类型的区别
 
-| 特性 | std::int/float/bool | objval |
+| 特性 | std::int/float/bool | toObject |
 |------|---------------------|--------|
 | **用途** | 数值/布尔类型优化 | 对象类型声明 |
 | **性能** | ⚡ 高性能（原生类型） | 🐢 标准（ZVAL） |
 | **内存** | 8B/1B | 指针（16B+） |
-| **时机** | 运行时优化 | 编译期推断 |
-| **语法** | `std::int(值)` | `objval(变量，'类名')` |
+| **时机** | 运行时优化 | 编译期降级，必要时运行时检查 |
+| **语法** | `std::int(值)` | `$value->toObject(ClassName::class)` |
 
 ---
 
@@ -267,8 +270,6 @@ BigInt、Decimal、BigFloat 均继承自 `php::Box`，存储于 `php::Variant` �
 ### 声明与构造
 
 ```php
-use native_types;
-
 // 从整数字面量构造 BigInt
 $a = std::bigInt(100);
 $b = std::bigInt("123456789012345678901234567890");  // 超长整数字符串
@@ -500,11 +501,14 @@ BigFloat / Decimal / BigInt 参与
 
 ### 规则一：Var 主导
 
-当运算数中至少有一边是 `Var` 类型（非 `use native_types` 声明），两边均作为 `Var` 处理，使用 ZendVM 的 `add_function` / `div_function` 等运算函数，完全遵循 PHP 原生类型转换（type juggling）语义。
+当至少一个运算数为 `Var` 时，两边都进入 PHPX/Zend 算术路径，遵循 PHP 的类型
+转换语义。`Var` 可以来自 `std::any(...)`、动态运行时值，或声明了
+`use varint_types` 的文件中推断出的整数。
 
 ```php
+use varint_types;
 $a = 10;        // Var，存 int(10)
-$b = 2.5;       // Var，存 float(2.5)
+$b = 2.5;       // php::Float（varint_types 只影响推断整数）
 $c = $a + $b;   // 两边为 Var → ZendVM 运算 → float(12.5)
 ```
 
@@ -512,10 +516,10 @@ C++ 代码生成：`int64_t` 和 `double` 值通过 `php::Variant` 的模板构�
 
 ### 规则二：Float 优先于 Int
 
-当两边均为原生类型（通过 `use native_types` 或 `std::int()`/`std::float()` 声明），如果任一边是 Float，则两边均转为 Float 运算。仅当两边都是 Int 才使用整数运算。
+当两边均为原生类型（默认行为，或在 varint 文件中显式使用 `std::int()` /
+`std::float()`）时，Float 优先。仅当两边都是 Int 才使用整数运算。
 
 ```php
-use native_types;
 $a = 10;        // php::Int
 $b = 2.5;       // php::Float
 $c = $a + $b;   // Float + Float → double 加法
@@ -525,7 +529,9 @@ $e = 3;         // php::Int
 $f = $d + $e;   // Int + Int → int64_t 加法
 ```
 
-> **注意**：原生类型变量在运算中**不会改变自身类型**。如 `Int += Float` 在 C++ 中执行 `int64_t += double`，结果截断为 int64_t，与 PHP 行为不同（PHP 中变量会变为 float）。这是 `use native_types` 有意为之的语义。
+> **注意**：原生变量在运算中**不会改变存储类型**。例如 `Int += Float` 的结果仍是
+> Int。这种固定类型行为现在是默认规则；需要动态整数扩展时应显式选择
+> `use varint_types` 或 `std::any()`。
 
 ### 规则三：高精度类型的安全提升
 
@@ -564,15 +570,15 @@ $f = $d + $e;   // Int + Int → int64_t 加法
 `+=`、`-=`、`*=`、`/=`、`%=` 等复合赋值运算符遵循相同的类型提升规则，但 RHS 会被转换为 LHS 变量的类型。若 LHS 为 Var，RHS 保持原类型（Var 的 `operator+=` 接管）；若 LHS 为原生类型，RHS 显式转换为该类型。
 
 ```php
-$a = 10;        // Var
+use varint_types;
+$a = 10;        // 该文件启用 varint_types，因此为 Var
 $a += 2.5;      // Var::operator+=(float) → ZendVM → $a 变为 float(12.5)
 
-use native_types;
-$b = 10;        // php::Int
+$b = std::int(10); // varint_types 文件中显式声明 php::Int
 $b += 2.5;      // int64_t += double → C++ 隐式截断 → $b = 12 (Int)
 ```
 
 ---
 
-**最后更新**: 2026 年 5 月 26 日  
-**适用版本**: PHP AOT Compiler v1.x
+**最后更新**: 2026 年 9 月 6 日
+**适用版本**: TypePHP 0.8+

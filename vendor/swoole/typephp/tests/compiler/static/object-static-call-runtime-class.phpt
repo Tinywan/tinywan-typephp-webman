@@ -63,7 +63,7 @@ function callOnClassString(string $class): array
 
 function callReferenceArgument(ObjectStaticCallBase $object): array
 {
-    $value = 1;
+    $value = std::any(1);
     $class = $object::increment($value);
     return [$class, $value];
 }

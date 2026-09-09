@@ -2,8 +2,6 @@
 Native scalar object property assignment checks var RHS before native write
 --FILE--
 <?php
-use native_types;
-
 class NativeScalarAssignVarBox
 {
     public int $intValue = 0;
@@ -16,16 +14,16 @@ function main(): void
 {
     $box = new NativeScalarAssignVarBox();
 
-    $intValue = any(12);
+    $intValue = std::any(12);
     $box->intValue = $intValue;
 
-    $floatValue = any(3.5);
+    $floatValue = std::any(3.5);
     $box->floatValue = $floatValue;
 
-    $boolValue = any(false);
+    $boolValue = std::any(false);
     $box->boolValue = $boolValue;
 
-    $stringValue = any("123");
+    $stringValue = std::any("123");
     $box->stringValue = $stringValue;
 
     var_dump($box->intValue);
@@ -34,7 +32,7 @@ function main(): void
     var_dump($box->stringValue);
 
     try {
-        $badIntValue = any("12");
+        $badIntValue = std::any("12");
         $box->intValue = $badIntValue;
     } catch (TypeError $e) {
         var_dump($e->getMessage());

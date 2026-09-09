@@ -7,7 +7,7 @@
 当前 AOT 编译器核心类承担了过多职责，尤其是 `CompilerBase`、`Translator` 等类同时包含 AST 分发、类型推导、属性访问解析、调用解析、代码生成、诊断信息、上下文状态维护等逻辑。随着功能持续增加，这种结构会带来以下问题：
 
 - 封装性不足，修改一个语义点时容易影响多个代码路径。
-- 代码复用不足，同类逻辑在普通属性、静态属性、nullsafe、assignment、isset/empty/refval 等路径中重复实现。
+- 代码复用不足，同类逻辑在普通属性、静态属性、nullsafe、assignment、isset/empty/`std::ref()` 等路径中重复实现。
 - 编译期检查容易出现绕过路径，例如某些动态 fallback 没有复用静态 resolver。
 - 单个类代码量过大，review、测试定位和长期维护成本持续升高。
 - 设计边界不清晰，类型系统、符号解析、属性访问、调用生成之间耦合过深。
@@ -143,7 +143,7 @@
 - `static::$prop`
 - `isset($obj->prop)`
 - `empty($obj->prop)`
-- `refval($obj->prop)`
+- `std::ref($obj->prop)`
 - 普通赋值、复合赋值、自增自减、unset。
 
 第一优先级建议从本模块开始，因为近期问题集中在属性访问和可见性绕过，测试边界相对清晰。
@@ -169,7 +169,7 @@
 设计要求：
 
 - 静态 function 和内置 function 参数信息明确时，可以自动转引用。
-- 动态调用、closure、编译期无法获取参数 by-ref 信息时，必须要求显式 `refval()`。
+- 动态调用、closure、编译期无法获取参数 by-ref 信息时，必须要求显式 `std::ref()`。
 - 使用 unpack 并追加尾部 named args 时，应退化为 dynamic call，不能走 native call。
 
 ### 5. ExpressionEmitter
@@ -255,7 +255,7 @@
 状态：
 
 - 阶段 1 已基本收尾。后续除非发现属性读取 resolver 绕过或行为回归，否则不再继续扩大阶段 1 范围。
-- 阶段 2 已开始；属性写入相关的 assignment、compound assignment、inc/dec、unset、refval 路径仍需继续统一。
+- 阶段 2 已开始；属性写入相关的 assignment、compound assignment、inc/dec、unset、`std::ref()` 路径仍需继续统一。
 
 验证：
 
@@ -297,7 +297,7 @@
 - dynamic object property 的 `getProperty()` / `setProperty()` 生成已收敛到 `emitDynamicPropertyRead()` / `emitDynamicPropertyWrite()` helper；普通动态属性赋值、复合赋值、自增自减已复用该入口。
 - 复合赋值的动态属性路径已接入 `preparePropertyWriteTarget()`，先统一完成属性写入 target 准备和静态检查。
 - `PropertyWriteTarget` 已开始携带安全动态属性写入目标的 object/property 表达式；普通动态属性赋值、复合赋值、自增自减已优先通过 target 级 read/write helper 发射代码。
-- 动态属性 `unset`、属性数组维度写入、引用参数/refval/引用赋值中的安全对象属性引用路径已开始复用 target 级 unset/ref helper。
+- 动态属性 `unset`、属性数组维度写入、引用参数/`std::ref()`/引用赋值中的安全对象属性引用路径已开始复用 target 级 unset/ref helper。
 - 对象属性引用表达式的 target/ref 生成已收敛到 `emitDynamicPropertyFetchRef()`；未使用的旧静态属性赋值入口已删除，静态属性赋值继续走统一 assignment target 路径。
 - `PropertyWriteTarget` 的动态 object/property 字段已封装为 getter；属性数组维度写入已接入 target 级 append/update emitter。
 - 已建立 `emitDynamicPropertyFetchRead/Write/Unset/AppendArray/UpdateArray()` 包装层，调用方只传入属性访问 AST 与可选 target，由 `CompilerBase` 统一选择 target 路径或旧 fallback 路径。

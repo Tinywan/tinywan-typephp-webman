@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 class TypedObjectPropBase
 {
 }

@@ -48,14 +48,11 @@ AOT 编译器提供了三种高精度类型，底层基于成熟的 C/C++ 数学
 
 使用高精度类型的前提条件：
 
-1. 文件头部声明 `declare(strict_types=1)`
-2. 导入原生类型声明 `use native_types`
-3. 系统已安装对应的 C++ 库（`libgmp-dev`、`libmpdec-dev`、`libmpfr-dev`）
+- 系统已安装对应的 C++ 库（`libgmp-dev`、`libmpdec-dev`、`libmpfr-dev`）。
+- TypePHP 始终使用严格类型，无需声明 `declare(strict_types=1)`。
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // 你的高精度计算代码
@@ -74,7 +71,8 @@ php bin/tpc.php my_program.php -o my_program
 ./my_program
 ```
 
-> **提示**：和所有 native_types 一样，Big* 类型只能在 AOT 编译模式下使用，不能在普通 PHP 解释器中运行。AOT 编译器会对 `std::bigInt()` 等函数进行编译期求值，直接生成 C++ 代码。
+> **提示**：Big* 类型只能在 AOT 编译模式下使用，不能在普通 PHP 解释器中运行。
+> 编译器会识别 `std::bigInt()` 等函数并直接生成 C++ 代码。
 
 ---
 
@@ -133,11 +131,9 @@ $g = std::bigFloat("3.14159265358979323846");             // 从字符串（精�
 
 ### 4.2 类型标注
 
-在 `use native_types` 下，Big* 类型变量自动获得原生 C++ 存储类型：
+Big* 构造函数始终产生对应的专用 C++ 装箱存储类型：
 
 ```php
-use native_types;
-
 // 编译器自动推断类型为 php::BigInt / php::Decimal / php::BigFloat
 $a = std::bigInt(100);         // → C++: php::Variant(new BigInt(100))
 $b = std::decimal("100.50");   // → C++: php::Variant(new Decimal("100.50"))
@@ -586,9 +582,10 @@ $c = $a + std::bigFloat($b->toString());  // ✅
 
 Big* 类型是 AOT 编译器的专有特性，依赖编译期代码生成和 C++ 底层库。源码不能被 `php` 命令直接解释执行。
 
-### 12.8 启用 `use native_types`
+### 12.8 无需文件级开关
 
-忘记添加 `use native_types` 会导致 Big* 变量被当作 Var（通用类型），失去原生类型的大部分性能优势。
+Big* 构造函数会直接确定结果类型，不需要文件级原生类型声明。`use varint_types`
+只影响推断出的普通整数，不改变 BigInt、Decimal 或 BigFloat 的存储。
 
 ---
 
@@ -598,8 +595,6 @@ Big* 类型是 AOT 编译器的专有特性，依赖编译期代码生成和 C++
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 /**
  * 计算 n 的阶乘，支持任意大的结果
@@ -625,8 +620,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // 使用 Decimal 精确表示金额
@@ -661,8 +654,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // 使用 BigFloat 进行高精度数学运算
@@ -690,8 +681,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // BigInt — 大整数运算

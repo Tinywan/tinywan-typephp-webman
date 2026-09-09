@@ -1,9 +1,7 @@
 --TEST--
-Static properties with native_types keep defaults and local slots
+Static properties with native scalar storage keep defaults and local slots
 --FILE--
 <?php
-use native_types;
-
 class StaticNativeDefaults {
     public static int $i = 42;
     public static float $f = 3.5;

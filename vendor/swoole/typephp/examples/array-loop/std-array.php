@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 function main()
 {
     $array = std::array(std::array(std::array(Type::Int, 13), 16), 19);

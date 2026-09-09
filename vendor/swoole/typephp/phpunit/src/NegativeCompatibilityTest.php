@@ -405,7 +405,7 @@ PHP,
 
         yield 'disabled strict types declare' => [
             'convert',
-            'declare(strict_types=0) is not allowed, only strict_types=1 is supported',
+            'TypePHP always uses strict types; declare(strict_types=0) is not allowed',
             <<<'PHP'
 <?php
 declare(strict_types=0); // @diagnostic

@@ -34,7 +34,7 @@ function handle_preprocessor_conditions(array &$conds, array $comments): ?string
 
 function main(): void
 {
-    $conds = [];
+    $conds = std::any([]);
     var_dump(handle_preprocessor_conditions($conds, ['#ifdef PHP_WIN32', '#if PHP_VERSION_ID >= 80400']));
     var_dump(handle_preprocessor_conditions($conds, ['#else']));
     var_dump(handle_preprocessor_conditions($conds, ['#endif', '#endif']));

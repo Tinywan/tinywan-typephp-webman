@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 const OCEAN_WEATHER_SUNNY = 0;
 const OCEAN_WEATHER_CLOUDY = 1;

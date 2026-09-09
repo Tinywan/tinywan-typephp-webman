@@ -48,14 +48,11 @@ The AOT compiler provides three high-precision types, built on mature C/C++ math
 
 Prerequisites for using high-precision types:
 
-1. Declare `declare(strict_types=1)` at the top of the file
-2. Import the native type declaration `use native_types`
-3. The system must have the corresponding C++ libraries installed (`libgmp-dev`, `libmpdec-dev`, `libmpfr-dev`)
+- The system must have the corresponding C++ libraries installed (`libgmp-dev`, `libmpdec-dev`, `libmpfr-dev`).
+- TypePHP always uses strict typing; no `declare(strict_types=1)` directive is required.
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // Your high-precision computation code
@@ -74,7 +71,9 @@ php bin/tpc.php my_program.php -o my_program
 ./my_program
 ```
 
-> **Tip**: Like all native_types, the Big* types can only be used in AOT compile mode and cannot run in the normal PHP interpreter. The AOT compiler performs compile-time evaluation of functions such as `std::bigInt()` and directly generates C++ code.
+> **Tip**: Big* types can only be used in AOT compile mode and cannot run in
+> the normal PHP interpreter. The compiler recognizes functions such as
+> `std::bigInt()` and directly generates C++ code.
 
 ---
 
@@ -133,11 +132,9 @@ $g = std::bigFloat("3.14159265358979323846");             // from string (exact)
 
 ### 4.2 Type Annotation
 
-Under `use native_types`, Big* type variables automatically get native C++ storage types:
+Big* constructors always produce their dedicated boxed C++ storage type:
 
 ```php
-use native_types;
-
 // The compiler automatically infers the type as php::BigInt / php::Decimal / php::BigFloat
 $a = std::bigInt(100);         // → C++: php::Variant(new BigInt(100))
 $b = std::decimal("100.50");   // → C++: php::Variant(new Decimal("100.50"))
@@ -586,9 +583,11 @@ This restriction also applies to comparison operations. Before comparing, both s
 
 Big* types are a proprietary feature of the AOT compiler, relying on compile-time code generation and C++ underlying libraries. The source code cannot be directly interpreted and executed by the `php` command.
 
-### 12.8 Enabling `use native_types`
+### 12.8 No file-level opt-in required
 
-Forgetting to add `use native_types` causes Big* variables to be treated as Var (generic type), losing most of the performance advantages of native types.
+Big* constructors determine their result type directly. No file-level native
+type declaration is required. `use varint_types` affects only inferred ordinary
+integers and does not change BigInt, Decimal, or BigFloat storage.
 
 ---
 
@@ -598,8 +597,6 @@ Forgetting to add `use native_types` causes Big* variables to be treated as Var 
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 /**
  * Compute the factorial of n, supporting arbitrarily large results
@@ -625,8 +622,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // use Decimal to represent amounts exactly
@@ -661,8 +656,6 @@ total: 64.7676
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // use BigFloat for high-precision math computation
@@ -690,8 +683,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // BigInt — large integer operations

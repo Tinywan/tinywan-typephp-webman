@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 class NativePropertyWriteConversionBox
 {
     public int $value = 0;

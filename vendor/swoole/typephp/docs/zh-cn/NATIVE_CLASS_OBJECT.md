@@ -799,7 +799,7 @@ void php_move(php_app__point *point, php::Float x);
 ```php
 function replace(Point &$point): void; // FatalError
 $alias =& $point;                       // FatalError
-refval($point);                         // FatalError
+std::ref($point);                         // FatalError
 $point->toRef();                        // FatalError
 ```
 

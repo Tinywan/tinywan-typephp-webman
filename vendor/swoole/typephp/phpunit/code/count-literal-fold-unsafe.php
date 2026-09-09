@@ -31,7 +31,7 @@ function main(): void
     $rest = [1, 2, 3, 4, 5];
     $i = 0;
     $plain = 1;
-    $ref = 1;
+    $ref = std::any(1);
     $object = new MagicHolder();
 
     echo count([bump(), bump()]), "\n";

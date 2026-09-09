@@ -11,14 +11,14 @@ function main(): void
 {
     $box = new NativeIntStringVarBox();
 
-    $numeric = any("123");
+    $numeric = std::any("123");
     try {
         $box->value = $numeric;
     } catch (TypeError $e) {
         var_dump($e->getMessage());
     }
 
-    $bad = any("abc");
+    $bad = std::any("abc");
     try {
         $box->value = $bad;
     } catch (TypeError $e) {

@@ -4,6 +4,8 @@ Namespaced PHP_INT_MAX shadows the global constant in unqualified fetches
 <?php
 
 namespace N {
+    use varint_types;
+
     const PHP_INT_MAX = 5;
 
     function shadowed(): int
@@ -18,6 +20,8 @@ namespace N {
 }
 
 namespace {
+    use varint_types;
+
     function main(): void
     {
         var_dump(\N\shadowed());

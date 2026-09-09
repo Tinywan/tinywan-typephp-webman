@@ -5,7 +5,7 @@ array_search keys with array_slice and array_reverse preserving keys
 
 function select_version_flags(array $flagsByVersions, int $minVersion, ?int $maxVersion): array
 {
-    ksort($flagsByVersions);
+    $flagsByVersions->keySort();
 
     $index = array_search($minVersion, array_keys($flagsByVersions));
     if ($index === false) {

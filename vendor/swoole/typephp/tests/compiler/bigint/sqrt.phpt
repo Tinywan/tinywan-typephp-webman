@@ -2,9 +2,6 @@
 BigInt: sqrt
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::bigInt(0);
     echo $a->sqrt()->toString(); echo "\n";

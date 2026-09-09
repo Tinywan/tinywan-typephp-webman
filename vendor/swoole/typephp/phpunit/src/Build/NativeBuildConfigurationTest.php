@@ -5,6 +5,8 @@ namespace TypePhp\Tests\Build;
 use PHPUnit\Framework\TestCase;
 use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
+use TypePhp\Platform\Ios;
+use TypePhp\Platform\Android;
 use TypePhp\Platform\Linux;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\PlatformBase;
@@ -78,6 +80,77 @@ final class NativeBuildConfigurationTest extends TestCase
         } finally {
             $restore();
         }
+    }
+
+    public function testIosResolvesPhpxArchiveFromIntegratedPhpxSdk(): void
+    {
+        $phpxDir = $this->temporaryDirectory('phpx-ios-host');
+        mkdir($phpxDir . '/lib', 0777, true);
+        // A host-side archive with the same name must never win.
+        touch($phpxDir . '/lib/libphpx.a');
+
+        $iosSdk = $phpxDir . '/ios/iphoneos-arm64';
+        mkdir($iosSdk . '/lib', 0777, true);
+        file_put_contents($iosSdk . '/.typephp-ios-sdk-abi', "typephp-iphoneos-arm64-sdk-abi-v1\n");
+        $targetArchive = $iosSdk . '/lib/libphpx.a';
+        touch($targetArchive);
+
+        $restorePhpx = $this->withEnvironment('PHPX_HOME', $phpxDir);
+        $restorePhp = $this->withEnvironment('PHP_HOME', $this->temporaryDirectory('unrelated-host-php'));
+        try {
+            $compiler = $this->newCompiler(new Ios());
+            self::assertSame($targetArchive, $compiler->findPhpxLibraryForTest());
+            self::assertSame($iosSdk, $compiler->getPhpDir());
+            self::assertSame([$iosSdk . '/lib'], $compiler->getLibraryPathsForTest());
+            self::assertSame($iosSdk . '/include/phpx', $compiler->getIncludePathsForTest()[0]);
+            self::assertNotContains($phpxDir . '/include', $compiler->getIncludePathsForTest());
+            self::assertSame(
+                [$targetArchive, 'php', 'gmp', 'gmpxx', 'mpfr', 'c++'],
+                $compiler->getLibrariesForTest(),
+            );
+            self::assertContains('PHPX_IOS=1', $compiler->getCommonCompileOptionsForTest()['user_defines']);
+        } finally {
+            $restorePhp();
+            $restorePhpx();
+        }
+    }
+
+    public function testAndroidResolvesSelfContainedSdkAndSystemLibraries(): void
+    {
+        $phpxDir = $this->temporaryDirectory('phpx-android-host');
+        $androidSdk = $this->temporaryDirectory('phpx-android-sdk');
+        mkdir($androidSdk . '/lib', 0777, true);
+        mkdir($androidSdk . '/include/phpx', 0777, true);
+        file_put_contents(
+            $androidSdk . '/.typephp-android-sdk-abi',
+            "typephp-android-arm64-v8a-api24-phpx-sdk-abi-v1\n",
+        );
+        $phpxArchive = $androidSdk . '/lib/libphpx.a';
+        $phpArchive = $androidSdk . '/lib/libphp.a';
+        touch($phpxArchive);
+        touch($phpArchive);
+
+        $restorePhpx = $this->withEnvironment('PHPX_HOME', $phpxDir);
+        $restoreSdk = $this->withEnvironment('PHPX_ANDROID_SDK_DIR', $androidSdk);
+        try {
+            $compiler = $this->newCompiler(new Android());
+            self::assertSame($phpxArchive, $compiler->findPhpxLibraryForTest());
+            self::assertSame($androidSdk, $compiler->getPhpDir());
+            self::assertSame([$androidSdk . '/lib'], $compiler->getLibraryPathsForTest());
+            self::assertSame($androidSdk . '/include/phpx', $compiler->getIncludePathsForTest()[0]);
+            self::assertSame(
+                [$phpxArchive, $phpArchive, 'log', 'android', 'dl', 'm'],
+                $compiler->getLibrariesForTest(),
+            );
+            self::assertContains('PHPX_ANDROID=1', $compiler->getCommonCompileOptionsForTest()['user_defines']);
+        } finally {
+            $restoreSdk();
+            $restorePhpx();
+        }
+
+        self::assertTrue(Android::supportsTarget('aarch64-linux-android24'));
+        self::assertFalse(Android::supportsTarget('x86_64-linux-android24'));
+        self::assertSame(24, Android::getApiLevel('aarch64-linux-android24'));
     }
 
     public function testNativeModulesDoNotFallBackToStaticPhpx(): void
@@ -175,6 +248,21 @@ final class NativeBuildConfigurationTest extends TestCase
             {
                 return $this->getLibraries();
             }
+
+            public function getIncludePathsForTest(): array
+            {
+                return $this->getIncludePaths();
+            }
+
+            public function getLibraryPathsForTest(): array
+            {
+                return $this->getLibraryPaths();
+            }
+
+            public function getCommonCompileOptionsForTest(): array
+            {
+                return $this->getCommonCompileCommandOptions()->toArray();
+            }
         };
 
         return $compiler->withPlatform($platform);
@@ -182,13 +270,18 @@ final class NativeBuildConfigurationTest extends TestCase
 
     private function withPhpxHome(string $dir): callable
     {
-        $previous = getenv('PHPX_HOME');
-        putenv('PHPX_HOME=' . $dir);
-        return static function () use ($previous): void {
+        return $this->withEnvironment('PHPX_HOME', $dir);
+    }
+
+    private function withEnvironment(string $name, string $value): callable
+    {
+        $previous = getenv($name);
+        putenv($name . '=' . $value);
+        return static function () use ($name, $previous): void {
             if ($previous === false) {
-                putenv('PHPX_HOME');
+                putenv($name);
             } else {
-                putenv('PHPX_HOME=' . $previous);
+                putenv($name . '=' . $previous);
             }
         };
     }

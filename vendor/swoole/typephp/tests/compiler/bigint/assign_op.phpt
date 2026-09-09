@@ -2,9 +2,6 @@
 BigInt compound assignment operators (+=, -=, *=, /=, %=)
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // BigInt +=
     $a = std::bigInt(100);

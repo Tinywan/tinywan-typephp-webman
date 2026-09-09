@@ -2,8 +2,6 @@
 SSA object prop: object argument can turn property slot into reference
 --FILE--
 <?php
-use native_types;
-
 class RefSlotFoo {
     public int $a;
 }

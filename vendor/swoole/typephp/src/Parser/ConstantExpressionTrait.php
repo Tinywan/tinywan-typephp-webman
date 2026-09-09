@@ -161,7 +161,7 @@ trait ConstantExpressionTrait
                     $this->fatalError($expr, 'The magic constant `__CLASS__` is not allowed in global scope');
                 }
                 if ($this->classDef->trait) {
-                    return Symbol::getCalledClass();
+                    return $this->getCalledClassExpr();
                 }
                 return '"' . $this->escapeString($class) . '"';
             case 'Scalar_MagicConst_Trait':

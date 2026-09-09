@@ -21,7 +21,7 @@
     "marcj/topsort": "^2.0",
     "symfony/var-dumper": "^8.0",
     "symfony/yaml": "^8.0",
-    "swoole/phpx": "~2.7.0",
+    "swoole/phpx": "~2.8.0",
     "ajaxray/ansikit": "^0.3",
     "ext-dom": "*"
   },

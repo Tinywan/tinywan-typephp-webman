@@ -3,7 +3,6 @@ Trait protected __construct is accessible from a subclass
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 trait TestTrait
 {

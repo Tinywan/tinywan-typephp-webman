@@ -3,8 +3,6 @@ MethodsFor method chaining with typed returns
 --FILE--
 <?php
 
-use native_types;
-
 #[MethodsFor(Type::Int)]
 final class IntExtensions
 {

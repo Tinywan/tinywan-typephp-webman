@@ -143,8 +143,8 @@ final class Type
     public const string Box = 'box';
 }
 
-/** @deprecated Compiler directive retained independently of public type symbols. */
-class native_types
+/** Compiler directive that opts inferred integer locals into Variant storage. */
+class varint_types
 {
 }
 
@@ -180,6 +180,26 @@ class std
         return $value;
     }
 
+    public static function any(mixed $value): mixed
+    {
+        return $value;
+    }
+
+    public static function &ref(mixed &$var): mixed
+    {
+        return $var;
+    }
+
+    public static function expected(mixed $condition): bool
+    {
+        return (bool) $condition;
+    }
+
+    public static function unexpected(mixed $condition): bool
+    {
+        return (bool) $condition;
+    }
+
     public static function array(mixed $type, int $size): array
     {
         return [];
@@ -199,36 +219,4 @@ class std
     {
         return [];
     }
-}
-
-
-function &refval(&$var)
-{
-    return $var;
-}
-
-function any(mixed $var): mixed
-{
-    return $var;
-}
-
-function expected(mixed $condition): bool
-{
-    return (bool) $condition;
-}
-
-function unexpected(mixed $condition): bool
-{
-    return (bool) $condition;
-}
-
-/**
- * @throws Exception
- */
-function objval(mixed $var, string $className): mixed
-{
-    if (!$var instanceof $className) {
-        throw new \Exception("Invalid object type: " . get_class($var) . " expected " . $className);
-    }
-    return $var;
 }

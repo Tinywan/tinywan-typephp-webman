@@ -2,7 +2,6 @@
 Dynamic property statement writes preserve scope, evaluation and reference value semantics
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class DynamicWriter
 {
@@ -42,11 +41,11 @@ function main(): void
     $writer->write($name, 17);
     var_dump($writer->value());
 
-    $calls = 0;
+    $calls = std::any(0);
     $writer->writeComputed($name, $calls);
     var_dump($writer->value(), $calls);
 
-    $source = 42;
+    $source = std::any(42);
     $writer->writeFromReference($name, $source);
     $source = 43;
     var_dump($writer->value(), $source);

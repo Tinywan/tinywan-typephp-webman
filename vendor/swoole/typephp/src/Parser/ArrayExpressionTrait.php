@@ -64,7 +64,16 @@ trait ArrayExpressionTrait
         $this->indentLevel++;
         foreach ($items as $item) {
             $this->assertExprCanBeUsedAsValue($item->value, 'array value');
-            $value = $this->materializeRefReturnAsValue($item->value, $this->parseIdentifier($item->value));
+            // A call may bridge a fixed typed value through php::Ref. Finish
+            // the call and its RefWrap::commit() before evaluating the next
+            // array item, because PHP makes the writeback observable there:
+            // `[mutate($value), $value]`. C++ initializer ordering alone is
+            // insufficient when the commit is otherwise queued for the end
+            // of the containing PHP statement.
+            $value = $this->materializeRefReturnAsValue(
+                $item->value,
+                $this->parseOrderedOperand($item->value, false),
+            );
             if ($item->key) {
                 $this->assertExprCanBeUsedAsValue($item->key, 'array key');
                 $key = $this->parseArrayKey($item->key);
@@ -290,7 +299,10 @@ trait ArrayExpressionTrait
                 }
                 $value = $this->convertToRef($item->value);
             } else {
-                $value = $this->materializeRefReturnAsValue($item->value, $this->parseIdentifier($item->value));
+                $value = $this->materializeRefReturnAsValue(
+                    $item->value,
+                    $this->parseOrderedOperand($item->value, false),
+                );
             }
             if ($item->unpack) {
                 $this->context->beforeStmtLines[] = $this->getIndent() . $tmpVar . '.merge(' . $value . ');';

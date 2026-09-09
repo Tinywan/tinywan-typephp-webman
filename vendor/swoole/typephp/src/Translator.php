@@ -11,6 +11,7 @@ namespace TypePhp;
 use Ajaxray\AnsiKit\AnsiTerminal;
 use Ajaxray\AnsiKit\Components\Progressbar;
 use MJS\TopSort\Implementations\StringSort;
+use TypePhp\Analysis\LocalClosureAnalyzer;
 use TypePhp\Analysis\SsaBuilder;
 use TypePhp\Backend\CompilerFactory;
 use TypePhp\Build\CompileOptions;
@@ -42,6 +43,8 @@ use TypePhp\Generator\LibraryImportStubGenerator;
 use TypePhp\Generator\Symbol;
 use TypePhp\Metadata\Constants;
 use TypePhp\Platform\PlatformFactory;
+use TypePhp\Platform\Ios;
+use TypePhp\Platform\Android;
 use TypePhp\Platform\Wasi;
 use TypePhp\Platform\Windows;
 use TypePhp\Resolver\Reflection;
@@ -73,7 +76,7 @@ class Translator extends Preprocessor
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
-    public const string VERSION = '0.7.0';
+    public const string VERSION = '0.8.0';
     public const string APP_NAME = 'TypePHP Compiler (AOT)';
 
     protected bool $hasExplicitOutput = false;
@@ -143,6 +146,11 @@ class Translator extends Preprocessor
             }
             $this->internalFunctions[$functionName] = true;
         }
+        foreach ($this->getFuncCallConfig() as $functionName => $config) {
+            if (is_array($config) && ($config['intrinsic'] ?? false)) {
+                $this->internalFunctions[$functionName] = true;
+            }
+        }
         unset($this->internalFunctions[self::ENTRY_FUNCTION]);
         $this->internalConstants = $this->loadInternalConstants();
         if ($this->climate->arguments->defined('help')) {
@@ -208,7 +216,14 @@ class Translator extends Preprocessor
             if ($targetPlatform === 'wasm32-wasip1' || $targetPlatform === 'wasm32-wasi') {
                 throw new \RuntimeException('WASI Preview 1 is not supported; use wasm32-wasip2');
             }
-            if ($targetPlatform === 'wasm32-wasip2' || $targetPlatform === 'wasm32-unknown-wasip2') {
+            if (Ios::supportsTarget($targetPlatform)) {
+                if (strtoupper(substr(PHP_OS, 0, 6)) !== 'DARWIN') {
+                    throw new \RuntimeException('The iOS target requires a macOS build host with Xcode');
+                }
+                $this->platform = new Ios();
+            } elseif (Android::supportsTarget($targetPlatform)) {
+                $this->platform = new Android();
+            } elseif ($targetPlatform === 'wasm32-wasip2' || $targetPlatform === 'wasm32-unknown-wasip2') {
                 $detectedTarget = getenv('TYPEPHP_WASI_TARGET');
                 $this->platform = new Wasi(
                     is_string($detectedTarget) && $detectedTarget !== '' ? $detectedTarget : $targetPlatform,
@@ -1021,7 +1036,7 @@ class Translator extends Preprocessor
             $code .= 'extern "C" void save_ps_args(int, char **) {}' . PHP_EOL;
         }
 
-        if ($this->isBuildModeBin() && !$this->isWasiTarget()) {
+        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
             $cliHeaders = [
                 '#include "php_cli_process_title.h"',
                 '#include "php_cli_process_title_arginfo.h"',
@@ -1200,7 +1215,10 @@ CODE;
                 && !$classDef->trait
                 && !$classDef->enum
             ) {
-                $code .= 'static zend_object* (*create_object_' . $classDef->getNamespacedName() . ")(zend_class_entry *class_type);\n";
+                if ($classDef->requireCtor) {
+                    $code .= 'static zend_object* (*create_object_' . $classDef->getNamespacedName()
+                        . ")(zend_class_entry *class_type);\n";
+                }
                 $code .= 'static zend_object_handlers property_handlers_' . $classDef->getNamespacedName() . ";\n";
             }
             foreach ($classDef->constants as $constant) {
@@ -1217,7 +1235,7 @@ CODE;
 
         $code .= "// clang-format off\n";
         $code .= "static const zend_function_entry ext_functions[] = {\n";
-        if ($this->isBuildModeBin() && !$this->isWasiTarget()) {
+        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
             $code .= $this->getIndent() . "PHP_FE(cli_set_process_title,        arginfo_cli_set_process_title)\n";
             $code .= $this->getIndent() . "PHP_FE(cli_get_process_title,        arginfo_cli_get_process_title)\n";
         }
@@ -1592,7 +1610,7 @@ CODE;
 
     public function getProjectNamespace(): string
     {
-        return $this->getModuleName();
+        return Constants::CPP_PROJECT_NAMESPACE_PREFIX . $this->targetName;
     }
 
     /**
@@ -1800,7 +1818,7 @@ CODE;
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
         }
 
-        if ($this->isBuildModeBin() && !$this->isWasiTarget()) {
+        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/php_cli_process_title.c';
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/ps_title.c';
         }
@@ -2851,6 +2869,20 @@ CODE;
         $targetPlatform = $cfg['target-platform'] ?? null;
         if (!empty($targetPlatform)) {
             $this->targetPlatform = (string) $targetPlatform;
+            if (Ios::supportsTarget($this->targetPlatform)) {
+                if (strtoupper(substr(PHP_OS, 0, 6)) !== 'DARWIN') {
+                    $this->error('The iOS target requires a macOS build host with Xcode');
+                }
+                $this->platform = new Ios();
+                $this->compilerBackend = null;
+                $this->cppCompiler = $this->platform->getDefaultCompiler();
+                $this->initializeNewArchitecture();
+            } elseif (Android::supportsTarget($this->targetPlatform)) {
+                $this->platform = new Android();
+                $this->compilerBackend = null;
+                $this->cppCompiler = $this->platform->getDefaultCompiler();
+                $this->initializeNewArchitecture();
+            }
         }
 
         // Read build-dir
@@ -3252,7 +3284,7 @@ CODE;
                 }
             } elseif ($key === 'strict_types') {
                 if (!($declare->value instanceof Node\Scalar\Int_) or $declare->value->value !== 1) {
-                    $this->fatalError($v, 'declare(strict_types=0) is not allowed, only strict_types=1 is supported');
+                    $this->fatalError($v, 'TypePHP always uses strict types; declare(strict_types=0) is not allowed');
                 }
             } else {
                 $this->fatalError($v, 'declare(' . $key . '=' . $value . ') is not supported');
@@ -4586,9 +4618,14 @@ CODE;
         // separate pass so one trait method can call another method declared
         // later in the same or a nested trait.
         foreach ($composedTraitMethods as [$stmt, $origin]) {
-            $this->withTraitNameContext($origin, function () use ($stmt, &$methodCodes): void {
-                $this->parseClassMethod($stmt, $methodCodes);
+            $traitMethodCodes = $this->withTraitNameContext($origin, function () use ($stmt): array {
+                $codes = [];
+                $this->parseClassMethod($stmt, $codes);
+                return $codes;
             });
+            foreach ($traitMethodCodes as $methodName => $methodCode) {
+                $methodCodes[$methodName] = $methodCode;
+            }
         }
         if (!$class instanceof Node\Stmt\Trait_) {
             $this->validateOverrideAttributes($class);
@@ -4743,6 +4780,7 @@ CODE;
         }
 
         $callParams = '';
+        $refWrapVars = [];
         foreach ($functionDef->argInfoList as $k => $argInfo) {
             $var = 'arg_' . $argInfo->name;
             if ($argInfo->variadic) {
@@ -4783,7 +4821,18 @@ CODE;
                 }
                 $cppType = $this->getDefaultArgumentType($argInfo);
                 $declaredClass = $argInfo->declaredClass ?: $argInfo->class;
-                if ($this->isStrictScalarType($argInfo->type)) {
+                $expr = '';
+                if (Type::isTypedRefType($argInfo->type)) {
+                    $referencedType = Type::getReferencedType($argInfo->type);
+                    $refVar = 'ref_' . $var;
+                    $wrapVar = 'wrap_' . $var;
+                    $refWrapVars[] = $wrapVar;
+                    $cppCode .= $this->getIndent() . Type::REF . ' ' . $refVar . ' = ' . $argExpr . ';' . PHP_EOL;
+                    $cppCode .= $this->getIndent() . 'php::RefWrap<' . $referencedType . '> '
+                        . $wrapVar . '(' . $refVar . ');' . PHP_EOL;
+                    $cppCode .= $this->getIndent() . $cppType . ' ' . $var . ' = '
+                        . $wrapVar . '.typed();' . PHP_EOL;
+                } elseif ($this->isStrictScalarType($argInfo->type)) {
                     $rawVar = 'raw_' . $var;
                     $cppCode .= $this->getIndent() . Type::VAR . ' ' . $rawVar . ' = ' . $argExpr . ';' . PHP_EOL;
                     $cppCode .= $this->genStrictScalarParamCheck(
@@ -4798,7 +4847,9 @@ CODE;
                 } else {
                     $expr = $this->convertExprFromType($argInfo->type, $argExpr);
                 }
-                $cppCode .= $this->getIndent() . $cppType . ' ' . $var . ' = ' . $expr . ';' . PHP_EOL;
+                if (!Type::isTypedRefType($argInfo->type)) {
+                    $cppCode .= $this->getIndent() . $cppType . ' ' . $var . ' = ' . $expr . ';' . PHP_EOL;
+                }
             }
             $callParam = $var;
             if ($this->canConsumeForwardedArgument($argInfo)) {
@@ -4824,12 +4875,18 @@ CODE;
 
         if ($functionDef->returnType !== Type::VOID) {
             $cppCode .= $this->getIndent() . 'auto retval = ' . $fn . '(' . $callParams . ');' . PHP_EOL;
+            foreach ($refWrapVars as $refWrapVar) {
+                $cppCode .= $this->getIndent() . $refWrapVar . '.commit();' . PHP_EOL;
+            }
             $cppCode .= $this->getIndent() . 'php::move(retval, return_value);' . PHP_EOL;
             if (!$functionDef->returnsByRef) {
                 $cppCode .= $this->getIndent() . 'php::deref(return_value);' . PHP_EOL;
             }
         } else {
             $cppCode .= $this->getIndent() . $fn . '(' . $callParams . ');' . PHP_EOL;
+            foreach ($refWrapVars as $refWrapVar) {
+                $cppCode .= $this->getIndent() . $refWrapVar . '.commit();' . PHP_EOL;
+            }
         }
         $this->indentLevel--;
         $cppCode .= $this->getIndent() . '} catch (zend_object *) {' . PHP_EOL;
@@ -5018,11 +5075,11 @@ CODE;
             $ssaBuilder->build();
             $this->context->ssaBuilder = $ssaBuilder;
             $this->analyzeStableObjects($ssaBuilder);
-            // Range-proven loop counters are safe to narrow even without
-            // `use native_types`: the optimizer rejects counters whose PHP
+            // Range-proven loop counters are safe to narrow even with
+            // `use varint_types`: the optimizer rejects counters whose PHP
             // integer semantics could widen to float or otherwise escape.
             $optimizedLoopVars = $this->optimizeLoopVars($ssaBuilder);
-            if ($this->nativeTypes) {
+            if (!$this->varIntTypes) {
                 // Narrow local variable types based on SSA analysis.
                 $this->optimizeVarTypes($ssaBuilder);
                 // Narrow native property accesses.
@@ -5038,6 +5095,10 @@ CODE;
             foreach ($optimizedLoopVars as $varName => $type) {
                 $this->context->localVars[$varName] = $type;
             }
+        }
+
+        if ($v->stmts && !$this->class && $this->methodDef === null) {
+            $this->context->localClosureCandidates = (new LocalClosureAnalyzer())->analyze($v->stmts);
         }
 
         $stmts = '';
@@ -5825,7 +5886,9 @@ CODE;
         }
 
         $declaredClass = $arg->declaredClass ?: $arg->class;
-        return match ($arg->type) {
+        // Typed-ref is a native ABI detail. Signature compatibility is based
+        // on the PHP value type plus the independently checked byRef flag.
+        return match (Type::getReferencedType($arg->type)) {
             Type::INT => [['kind' => 'isInt']],
             Type::FLOAT => [['kind' => 'isFloat']],
             Type::BOOL => [['kind' => 'isBool']],

@@ -27,7 +27,7 @@ class CompositeEdgeBox
 function main(): void
 {
     var_dump(float_or_string(1));
-    var_dump(float_or_string(any(2)));
+    var_dump(float_or_string(std::any(2)));
     var_dump(variadic_float_or_string(3, "ok"));
     $closure = fn (float|string $value): float|string => $value;
     var_dump($closure(5));

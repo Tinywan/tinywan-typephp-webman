@@ -3,8 +3,8 @@ array_multisort() function - normal arguments
 --FILE--
 <?php
 function main() {
-    $ar1 = array("row1" => 2, "row2" => 1, "row3" => 1);
-    $ar2 = array("row1" => 2, "row2" => "aa", "row3" => "1");
+    $ar1 = std::any(array("row1" => 2, "row2" => 1, "row3" => 1));
+    $ar2 = std::any(array("row1" => 2, "row2" => "aa", "row3" => "1"));
 
     echo "\n-- Testing array_multisort() function with all normal arguments --\n";
     var_dump(array_multisort($ar1, SORT_ASC, SORT_REGULAR, $ar2, SORT_DESC, SORT_STRING) );

@@ -19,14 +19,14 @@ function ensure_option(array &$options, object $platform): void
 
 function main(): void
 {
-    $options = [];
+    $options = std::any([]);
     ensure_option($options, new CoalescePlatform());
     var_dump($options);
 
     ensure_option($options, new CoalescePlatform());
     var_dump($options);
 
-    $options = [];
+    $options = std::any([]);
     ensure_option($options, new stdClass());
     var_dump($options);
 }

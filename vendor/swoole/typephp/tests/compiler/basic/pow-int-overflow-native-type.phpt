@@ -2,7 +2,6 @@
 pow int overflow
 --FILE--
 <?php
-use native_types;
 function main()
 {
     // PHP 8.5 warns when the overflowing float is narrowed to a native int.

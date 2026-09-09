@@ -78,16 +78,17 @@ AST，待全部项目符号就绪后再在 convert 阶段解析。这一两阶�
   （`$s->upper()`、`$arr->contains()`、`$big->mul(2)`）；静态类型已知时在编译期
   直接解析调用。
 - **混合 C++ / PHP 编程** —— 在性能关键内核中直接调用 C++ 函数（反之亦然）。
-- **编译期函数与关键词** —— `any()`、`refval()`、`objval()`、`expected()`、
-  `unexpected()`，以及 `toInt()`、`toString()`、`toArray()` 等。
+- **编译期函数与关键词** —— `std::any()`、`std::ref()`、`std::expected()`、
+  `std::unexpected()`，以及 `toObject()`、`toInt()`、`toString()`、`toArray()` 等。
 - **编译期安全检查** —— `#[Immutable]` 只读契约和 `#[ArrayDef]` 数组结构元数据，
   在编译期检查，零运行时开销。
 - **编译期代码生成** —— `#[Getter]`、`#[Setter]`、`#[With]`、`#[Constructor]`、
   `#[Printer]` 和 `#[Arrayable]` 根据属性声明生成类型安全的方法。
 - **现代 PHP 支持** —— PHP 8.4 property hooks、非对称可见性、PHP 8.5
   `clone()`-with 以及 `(void)` 丢弃表达式。
-- **跨平台与 WASM** —— 面向 x64 和 ARM64 的 Linux、Windows、macOS 目标，
-  以及 WASI 0.2 和浏览器（Jco）输出。
+- **跨平台、移动原生与 WASM** —— 面向 x64 和 ARM64 的 Linux、Windows、macOS
+  目标，使用 Android NDK 和 iOS SDK 开发 Android/iOS 原生应用，以及生成 WASI 0.2
+  和浏览器（Jco）输出。
 - **Python 桥接** —— 为 Python 模块生成 IDE helper，并将 Python 脚本转换为 TypePHP。
 
 ## 为什么选择 TypePHP？
@@ -109,8 +110,11 @@ AST，待全部项目符号就绪后再在 convert 阶段解析。这一两阶�
 - **原生进程入口。** 二进制模式直接启动原生可执行文件，不需要 PHP CLI 或独立的
   解释器进程。可执行文件仍会嵌入或链接 PHPX、`libphp` 及项目配置的原生库，部署包
   中必须提供这些运行时依赖。
-- **渐进式类型，真正带来收益。** 只在性能关键处添加 `use native_types`、`std::`
-  容器和类型声明，其余保持普通 PHP。
+- **默认使用强标量类型。** 推断出的 `int`、`float`、`bool` 局部变量直接使用
+  C++ 原生存储。单个动态值使用 `std::any()`；只有文件确实依赖 PHP 整数扩展语义时，
+  才使用 `use varint_types`。
+- **始终严格调用。** TypePHP 不启用 PHP 的弱标量类型转换，无需声明
+  `declare(strict_types=1)`。
 - **Zend 生态互通。** 扩展模式以标准 PHP 扩展形式加载，项目可以调用受支持的
   内置函数，并显式声明依赖的其他 Zend 扩展。
 
@@ -138,9 +142,12 @@ sudo pacman -S base-devel cmake pkgconf gmp mpfr
 > GMP 用于 `bigInt`，MPFR 用于 `bigFloat`。`decimal` 底层是 libmpdec，
 > 已随 PHPX 内置，无需单独安装。
 
-Linux x64 是主要开发及全量测试 CI 平台。编译器也提供 Windows、macOS、ARM64 和
-WASI 后端；具体主机能否构建某个目标，仍取决于 PHP embed、工具链和第三方库是否
-可用。
+Linux x64 是主要开发及全量测试 CI 平台。编译器也提供 Windows、macOS、ARM64、
+Android `arm64-v8a`、iPhoneOS `arm64` 和 WASI 后端；具体主机能否构建某个目标，
+仍取决于 PHP embed、平台 SDK、工具链和第三方库是否可用。移动端可以将界面结构、
+应用状态和业务逻辑编写为 TypePHP，仅使用轻量的平台原生 UI 桥接，参见
+[Android 原生应用示例](examples/android-native/)和
+[iOS/macOS 原生应用示例](examples/apple-native/)。
 
 原生 Release Assets 默认使用 PHP 8.5 ZTS 的最新版本构建，提供 Linux x64、Linux
 ARM64、macOS ARM64 和 Windows x64 四个平台包；不提供原生 NTS 或 32 位 x86 包。
@@ -299,7 +306,9 @@ TypePHP 会在适合 AOT 编译的范围内保持 PHP 语法和运行行为，�
 
 - 全局作用域只允许声明，可执行语句必须位于函数或方法内；
 - 二进制模式对 `main()` 使用严格签名；
-- `use native_types` 会让标量声明使用固定原生存储，之后不能改为不兼容类型；
+- 推断出的 `int`、`float`、`bool` 默认使用固定原生存储，之后不能改为不兼容类型；
+- `use varint_types` 使推断出的整数存入 `php::Var`，保留 PHP 的整数溢出和除法语义；
+  `std::any()` 则只擦除单个表达式的静态类型；
 - 静态可确定的调用和属性会直接编译，受支持的动态操作则通过 PHPX/Zend runtime
   fallback 执行；
 - `.stub.php` 用于声明 C++ 或外部库 API，函数体必须为空，stub 文件禁止声明
@@ -367,7 +376,6 @@ function main(): void
 
 ```php
 <?php
-use native_types;
 
 function fib(int $n): int
 {
@@ -391,15 +399,14 @@ bin/tpc.php fib.php -O3 -o fib
 ./fib 30
 ```
 
-使用 `use native_types` 后，`int` 变量变为 C++ `int64_t`，算术运算直接编译为
-CPU 指令，而不是 ZendVM 调用。
+默认情况下，推断和声明的 `int` 变量都会变为 C++ `int64_t`，算术运算直接编译为
+CPU 指令，而不是 ZendVM 调用。仅当本文件需要 PHP 的整数溢出转浮点、整数除法产生
+非整数结果等语义时，才添加 `use varint_types`。
 
 ### 2. 高精度数值
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void
 {
@@ -425,7 +432,6 @@ function main(): void
 
 ```php
 <?php
-use native_types;
 
 function main(): void
 {
@@ -673,6 +679,7 @@ GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。�
 ## 文档
 
 - [快速入门](docs/zh-cn/QUICKSTART.md) —— 最小编译流程
+- [变更记录](CHANGELOG.md) —— 破坏性变更与 1.0 前升级说明
 - [编译模式](docs/zh-cn/COMPILATION_MODES.md) —— `bin`、`ext`、`lib`
 - [编译器命令行](docs/zh-cn/COMPILER_CLI.md) —— CLI 参数与项目配置
 - [不兼容 PHP 特性清单](docs/zh-cn/INCOMPATIBLE_PHP_FEATURES.md) —— 当前限制
@@ -680,7 +687,7 @@ GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。�
 - [高精度类型](docs/zh-cn/HIGH_PRECISION_TYPES.md) —— BigInt / Decimal / BigFloat
 - [Std 容器](docs/zh-cn/STD_CONTAINERS.md) —— 强类型容器
 - [通用方法](docs/zh-cn/UNIVERSAL_METHODS.md) —— 编译期方法解析
-- [编译期函数](docs/zh-cn/COMPILE_TIME_FUNCTIONS.md) —— `any()`、`refval()`、`objval()` 等
+- [编译期函数](docs/zh-cn/COMPILE_TIME_FUNCTIONS.md) —— `std::any()`、`std::ref()`、`std::expected()` 等
 - [混合 C++/PHP](docs/zh-cn/MIXED_CPP_PHP.md) —— C++/PHP 互操作
 - [`#[Immutable]`](docs/zh-cn/IMMUTABLE.md) —— 编译期只读契约
 - [`#[ArrayDef]`](docs/zh-cn/ARRAY_DEF.md) —— 强类型数组属性契约

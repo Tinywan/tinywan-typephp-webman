@@ -2,6 +2,8 @@
 pow int overflow
 --FILE--
 <?php
+use varint_types;
+
 function main()
 {
     $a = 2 ** 80;

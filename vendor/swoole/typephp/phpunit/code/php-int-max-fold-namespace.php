@@ -2,6 +2,8 @@
 
 namespace FoldNs;
 
+use varint_types;
+
 const PHP_INT_MAX = 5;
 
 function shadowedFold(): int

@@ -2,8 +2,6 @@
 WASM PHPX archive links high precision types and std containers
 --FILE--
 <?php
-use native_types;
-
 function main(): void
 {
     $integer = std::bigInt('12345678901234567890');

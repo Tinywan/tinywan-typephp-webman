@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 function main(): void
 {
     $bigint = std::bigInt('2');

@@ -10,8 +10,8 @@ class RefSource
 
 function main()
 {
-    $x = 10;
-    $y = 20;
+    $x = std::any(10);
+    $y = std::any(20);
     $arr = [1, 2, 3];
     $arr[0] = &$x;   // 覆盖已有元素为引用
     $arr[5] = &$y;   // 新建元素为引用
@@ -25,7 +25,7 @@ function main()
     var_dump($x, $y); // 111, 222
 
     // 嵌套：引用赋值到多维数组元素
-    $z = 7;
+    $z = std::any(7);
     $m = [[1], [2]];
     $m[0][0] = &$z;
     $z = 77;

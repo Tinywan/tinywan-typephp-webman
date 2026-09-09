@@ -3,8 +3,6 @@ is_null returns false for fixed native scalars and preserves operand side effect
 --FILE--
 <?php
 
-use native_types;
-
 function checkInt(int $value): bool
 {
     return is_null($value);

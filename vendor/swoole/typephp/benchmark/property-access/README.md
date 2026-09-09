@@ -13,4 +13,6 @@ php benchmark/property-access/run.php
 
 To reuse an existing binary, add `--skip-build`. For local regression checks,
 `--max-ratio=1.5` exits unsuccessfully when a dynamic read or write takes more
-than 1.5 times the corresponding Zend PHP result.
+than 1.5 times the corresponding Zend PHP result. Use
+`--case=dynamic_write`, `--case=dynamic_read`, `--case=static_write`, or
+`--case=static_read` to isolate one workload while profiling.

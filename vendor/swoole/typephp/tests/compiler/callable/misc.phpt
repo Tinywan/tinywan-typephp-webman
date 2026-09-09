@@ -48,7 +48,7 @@ function main() {
     var_dump($squared);
 
     // Test callable with usort
-    $unsorted = [5, 2, 8, 1, 9];
+    $unsorted = std::any([5, 2, 8, 1, 9]);
     usort($unsorted, fn($a, $b) => $a <=> $b);
     var_dump($unsorted);
 }

@@ -1,6 +1,6 @@
 <?php
+use varint_types;
 
-declare(strict_types=1);
 
 function main(): void
 {

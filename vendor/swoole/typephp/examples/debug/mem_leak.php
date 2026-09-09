@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 function gen_random (int $n) {
     global $LAST;
     return( ($n * ($LAST = ($LAST * IA + IC) % IM)) / IM );

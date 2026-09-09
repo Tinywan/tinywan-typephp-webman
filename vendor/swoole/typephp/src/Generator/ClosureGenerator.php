@@ -31,7 +31,7 @@ trait ClosureGenerator
             // PHP flattens a trait method into the consuming class. A closure
             // declared in that method therefore uses the consuming class as
             // its lexical scope, never the trait's own class entry.
-            $scope = 'php::getCalledCe(this_)';
+            $scope = $this->getCalledCeExpr();
         } else {
             $scope = $this->class
                 ? $this->getClassEntryPtr($this->getFullClassName())
@@ -54,6 +54,12 @@ trait ClosureGenerator
 
     protected function parseArrowFunction(Expr\ArrowFunction $expr): string
     {
+        return $this->genClosure($expr, $expr->params, $this->collectArrowFunctionUses($expr));
+    }
+
+    /** @return list<Node\ClosureUse> */
+    private function collectArrowFunctionUses(Expr\ArrowFunction $expr): array
+    {
         $nodeFinder = new NodeFinder();
         $vars = $nodeFinder->findInstanceOf($expr->expr, Variable::class);
         $uses = [];
@@ -75,14 +81,249 @@ trait ClosureGenerator
             }
             $uses[$varName] = new Node\ClosureUse($var);
         }
-        $uses = array_values($uses);
-
-        return $this->genClosure($expr, $expr->params, $uses);
+        return array_values($uses);
     }
 
     protected function parseClosure(Expr\Closure $expr): string
     {
         return $this->genClosure($expr, $expr->params, $expr->uses);
+    }
+
+    /**
+     * Lower a proven non-escaping local Closure at its PHP creation site.
+     * Returning null deliberately selects the ordinary Zend Closure path.
+     */
+    protected function parseNativeLocalClosureAssignment(Expr\Assign $assign): ?string
+    {
+        if (!$this->isVarExpr($assign->var) || !is_string($assign->var->name)) {
+            return null;
+        }
+
+        $sourceName = $assign->var->name;
+        $name = $this->parseIdentifier($assign->var);
+        $candidate = $this->context->localClosureCandidates[$sourceName] ?? null;
+        if ($candidate === null || $candidate['assignment'] !== $assign) {
+            return null;
+        }
+
+        $expr = $candidate['closure'];
+        $uses = $expr instanceof Expr\ArrowFunction
+            ? $this->collectArrowFunctionUses($expr)
+            : $expr->uses;
+        $capturePlan = $this->buildNativeLocalClosureCapturePlan($uses);
+        if ($capturePlan === null) {
+            return null;
+        }
+
+        // The local lambda no longer crosses a Zend boundary, but its declared
+        // PHP signature remains observable at each direct call.
+        foreach ($expr->params as $param) {
+            if (!$param->type instanceof Node\Name) {
+                $this->resolveTypeDecl($param->type, self::DECL_TYPE_OF_PARAM);
+            }
+        }
+        if (!$expr->returnType instanceof Node\Name) {
+            $this->resolveTypeDecl($expr->returnType, self::DECL_TYPE_OF_RETURN);
+        }
+
+        $entryContext = $this->context;
+        $entryIndent = $this->indentLevel;
+        $entryInGeneratorBody = $this->inGeneratorBody;
+        $parameters = [];
+        foreach ($expr->params as $param) {
+            $parameters[] = Type::VAR . ' ' . $this->parseIdentifier($param->var);
+        }
+
+        $code = 'auto ' . $name . ' = [' . implode(', ', $capturePlan['cpp']) . ']('
+            . implode(', ', $parameters) . ') mutable -> ' . Type::VAR . ' {' . PHP_EOL;
+
+        try {
+            $this->context = new FunctionContext();
+            $this->context->inClosure = true;
+            $this->inGeneratorBody = false;
+            $this->indentLevel = $entryIndent + 1;
+
+            $returnType = $expr->returnType;
+            $returnTypeName = $returnType instanceof Node\Identifier
+                ? strtolower($returnType->name)
+                : '';
+            if ($returnType !== null && $returnTypeName !== 'void') {
+                $returnTypeInfo = $this->buildTypeCheckFromNode($returnType, true);
+                if (!empty($returnTypeInfo['check'])) {
+                    $this->context->closureReturnTypeCheck = $returnTypeInfo['check'];
+                    $this->context->closureReturnTypeStr = $returnTypeInfo['typeStr'];
+                }
+            }
+
+            $parameterChecks = '';
+            foreach ($expr->params as $index => $param) {
+                $paramName = $this->parseIdentifier($param->var);
+                $this->addArgument($paramName, Type::VAR);
+                if (CompileTimeAttribute::consume($param, 'Immutable')) {
+                    $this->context->immutableVars[$paramName] = true;
+                    if ($this->immutableTypeNodeMayBeObject($param->type)) {
+                        $this->context->immutableObjectVars[$paramName] = true;
+                    }
+                    if ($param->type !== null) {
+                        [, $parameterClass] = $this->resolveTypeDecl(
+                            $param->type,
+                            self::DECL_TYPE_OF_PARAM,
+                        );
+                        if ($parameterClass !== '') {
+                            $this->addObject($paramName, $parameterClass);
+                        }
+                    }
+                }
+                $parameterChecks .= $this->genNativeLocalClosureParamTypeCheck($param, $paramName, $index);
+            }
+
+            foreach ($capturePlan['bindings'] as $binding) {
+                $this->addArgument($binding['name'], $binding['type']);
+                if ($binding['class'] !== '') {
+                    $this->addObject($binding['name'], $binding['class']);
+                }
+                if ($binding['immutable']) {
+                    $this->context->immutableVars[$binding['name']] = true;
+                    if ($binding['immutableObject']) {
+                        $this->context->immutableObjectVars[$binding['name']] = true;
+                    }
+                }
+            }
+
+            $body = $this->genClosureBody($expr);
+            if ($this->context->needsUserCodeCallableScope) {
+                $body = $this->genUserCodeCallableScopeGuard() . $body;
+            }
+            $code .= $this->genScopeVarDecl() . $parameterChecks . $body;
+            if (!str_ends_with($code, PHP_EOL)) {
+                $code .= PHP_EOL;
+            }
+            $code .= $this->getIndent(0) . '}';
+        } finally {
+            $this->context = $entryContext;
+            $this->indentLevel = $entryIndent;
+            $this->inGeneratorBody = $entryInGeneratorBody;
+        }
+
+        $this->addLocalVar($name, Type::OBJECT);
+        $this->context->nativeLocalClosures[$name] = true;
+        return $code;
+    }
+
+    /**
+     * @param list<Node\ClosureUse> $uses
+     * @return array{
+     *     cpp: list<string>,
+     *     bindings: list<array{name: string, type: string, class: string, immutable: bool, immutableObject: bool}>
+     * }|null
+     */
+    private function buildNativeLocalClosureCapturePlan(array $uses): ?array
+    {
+        $cpp = [];
+        $bindings = [];
+        foreach ($uses as $useItem) {
+            if (!$this->isVarExpr($useItem->var) || !is_string($useItem->var->name)) {
+                return null;
+            }
+            $name = $this->parseIdentifier($useItem->var);
+            if (!$this->hasLocalVar($name)
+                || $this->isNativeObjectVar($name)
+                || $this->isStdContainer($name)
+            ) {
+                return null;
+            }
+
+            $rawType = $this->getRawVarType($name);
+            $valueType = Type::getReferencedType($rawType);
+            if ($useItem->byRef) {
+                $captureType = Type::getReferenceType($valueType);
+                if ($captureType === null) {
+                    return null;
+                }
+                $cpp[] = '&' . $name;
+            } else {
+                if ($rawType === Type::REF || !in_array($valueType, [
+                    Type::VAR,
+                    Type::BOOL,
+                    Type::INT,
+                    Type::FLOAT,
+                    Type::OBJECT,
+                    Type::ARRAY,
+                    Type::STR,
+                ], true)) {
+                    return null;
+                }
+                $captureType = $valueType;
+                $cpp[] = $name . ' = ' . $name;
+            }
+
+            $bindings[] = [
+                'name' => $name,
+                'type' => $captureType,
+                'class' => $valueType === Type::OBJECT ? $this->getDeclaredObjectType($name) : '',
+                'immutable' => isset($this->context->immutableVars[$name]),
+                'immutableObject' => isset($this->context->immutableObjectVars[$name]),
+            ];
+        }
+        return ['cpp' => $cpp, 'bindings' => $bindings];
+    }
+
+    private function genNativeLocalClosureParamTypeCheck(Node\Param $param, string $var, int $index): string
+    {
+        if ($param->type === null) {
+            return '';
+        }
+        $typeInfo = $this->buildTypeCheckFromNode($param->type, true);
+        if (empty($typeInfo['check'])) {
+            return '';
+        }
+
+        $argInfo = new ArgInfo();
+        $argInfo->name = $var;
+        $argInfo->phpName = is_string($param->var->name)
+            ? $param->var->name
+            : $this->unescapeVarName($var);
+        $argInfo->type = Type::VAR;
+        $argInfo->typeCheck = $typeInfo['check'];
+        $argInfo->typeStr = $typeInfo['typeStr'];
+        $argInfo->typeNode = $param->type;
+        return $this->genClosureParamCheck($argInfo, $index);
+    }
+
+    protected function parseNativeLocalClosureCall(Expr\FuncCall $expr, string $name): ?string
+    {
+        if (!isset($this->context->nativeLocalClosures[$name])) {
+            return null;
+        }
+
+        $arguments = [];
+        $forceMaterialize = count($expr->args) > 1;
+        foreach ($expr->args as $argument) {
+            $this->assertExprCanBeUsedAsValue($argument->value, 'function argument');
+            if ($this->isVarExpr($argument->value)) {
+                $this->assertStdContainerDoesNotEscapeNativeObjects(
+                    $argument,
+                    $this->parseIdentifier($argument->value),
+                );
+            }
+            $class = $this->detectClassOfExpr($argument->value);
+            if ($class !== '' && $this->isNativeObjectClass($class)) {
+                $this->fatalError(
+                    $argument,
+                    'Native objects cannot cross a local Closure php::Var parameter boundary',
+                );
+            }
+
+            if ($this->isVarExpr($argument->value)
+                && $this->isStdContainer($this->parseIdentifier($argument->value))
+            ) {
+                $value = $this->parseOrderedArg($argument);
+            } else {
+                $value = $this->parseOrderedOperand($argument->value, false, $forceMaterialize);
+            }
+            $arguments[] = $this->materializeCallArgValue($argument->value, $value);
+        }
+        return $name . '(' . implode(', ', $arguments) . ')';
     }
 
     protected function isReturnStmtInLastLine(array $stmts): bool
@@ -174,6 +415,26 @@ trait ClosureGenerator
                     $param,
                     'By-reference variadic parameters are not supported on dynamic Closures',
                 );
+            }
+            if ($param->byRef && $param->type !== null) {
+                [$paramType, $paramClass] = $this->resolveTypeDecl(
+                    $param->type,
+                    self::DECL_TYPE_OF_PARAM,
+                );
+                if ($paramClass !== '' || in_array($paramType, [
+                    Type::OBJECT,
+                    Type::STREAM,
+                    Type::BOX,
+                    Type::STD_ARRAY,
+                    Type::STD_VECTOR,
+                    Type::STD_MAP,
+                    Type::STD_ORDERED_MAP,
+                ], true)) {
+                    $this->fatalError(
+                        $param,
+                        'References are only supported for int, string, float, bool, array, mixed, or union types',
+                    );
+                }
             }
         }
         $tmpVar = $this->genTmpVarName();
@@ -291,6 +552,11 @@ trait ClosureGenerator
         $this->context->inClosure = false;
         $code .= '};' . PHP_EOL;
 
+        // Capture expressions belong to the enclosing function. Restore its
+        // type table before validating references; the closure body registers
+        // every captured value as php::Var and must not hide a native outer
+        // variable that cannot legally acquire reference semantics.
+        $this->context = $oriContext;
         $useVars = [];
         if ($uses) {
             foreach ($uses as $useItem) {
@@ -313,7 +579,6 @@ trait ClosureGenerator
             }
         }
 
-        $this->context = $oriContext;
         $this->context->beforeStmtLines[] = $code;
 
         // Even a static closure inherits the outer called scope for late

@@ -340,7 +340,25 @@ class Preprocessor extends CompilerBase
             return $objectDir . $separator . $info['filename'] . $ext;
         }
 
-        return $info['dirname'] . $this->getPlatform()->getPathSeparator() . $info['filename'] . $ext;
+        $filename = $info['filename'];
+        if (!$this->isGeneratedCppFile($cppFile)) {
+            // Native sources keep their original paths, so their extensions
+            // distinguish files such as foo.c and foo.cpp in one directory.
+            $filename .= '.' . $info['extension'];
+        }
+
+        return $info['dirname'] . $this->getPlatform()->getPathSeparator() . $filename . $ext;
+    }
+
+    private function isGeneratedCppFile(string $file): bool
+    {
+        if (pathinfo($file, PATHINFO_EXTENSION) !== 'cc') {
+            return false;
+        }
+
+        $normalizedFile = str_replace('\\', '/', $file);
+        $normalizedBuildDir = rtrim(str_replace('\\', '/', $this->buildDir), '/') . '/';
+        return str_starts_with($normalizedFile, $normalizedBuildDir);
     }
 
     protected function isProjectRuntimeEntryFile(string $file): bool
@@ -1087,11 +1105,52 @@ class Preprocessor extends CompilerBase
         // Record late-bound parameter type keywords so they can be re-resolved
         // to the consuming class when a trait method is flattened into a class.
         $argInfo->typeKeyword = $typeKeyword;
-        // Ordinary PHP references use php::Ref at the native ABI. Native
-        // object references are rejected after the complete signature has
-        // been parsed: a typed pointer already shares object identity, while
-        // PHP & would additionally expose caller-slot rebinding.
-        return $param->byRef ? Type::REF : $type;
+        if (!$param->byRef) {
+            return $type;
+        }
+
+        // A precise scalar/string/array reference is represented by a C++ T&.
+        // Nullable, union, variadic and defaulted reference parameters still
+        // require a Zend reference because their active value/storage cannot
+        // be represented by one fixed native ABI type.
+        $referenceType = Type::getReferenceType($type);
+        if (!$param->variadic
+            && $param->default === null
+            && !$param->type instanceof NullableType
+            && !$param->type instanceof UnionType
+            && !$param->type instanceof IntersectionType
+            && $referenceType !== null
+        ) {
+            return $referenceType;
+        }
+
+        // The same five value families may still need the ordinary Zend
+        // reference ABI when a default, nullable/union declaration, or
+        // variadic collection prevents a single C++ T& signature.
+        if ($referenceType !== null) {
+            return Type::REF;
+        }
+
+        // Keep Native-object references on the ordinary reference ABI long
+        // enough for assertNativeObjectFunctionSignature() to issue the more
+        // precise Native-class diagnostic. They are still rejected before
+        // code generation.
+        if ($class !== '' && $this->isNativeObjectClass($class)) {
+            return Type::REF;
+        }
+
+        // Object-like values already have identity/reference semantics. A PHP
+        // reference would expose replacement of the strongly typed handle and
+        // is deliberately unsupported by TypePHP.
+        if ($class !== '' || (!in_array($type, [Type::VAR, Type::REF], true)
+                && !$param->type instanceof NullableType
+                && !$param->type instanceof UnionType
+                && !$param->type instanceof IntersectionType
+        )) {
+            $this->fatalError($param, 'References are only supported for int, string, float, bool, array, mixed, or union types');
+        }
+
+        return Type::REF;
     }
 
     /**
@@ -1169,7 +1228,7 @@ class Preprocessor extends CompilerBase
             if ($param->type === null || $param->type instanceof NullableType) {
                 $argInfo->nullable = true;
             }
-            if (($param->byRef && $param->type !== null)
+            if (($param->byRef && $param->type !== null && !Type::isTypedRefType($type))
                 || $param->type instanceof NullableType
                 || $param->type instanceof UnionType
                 || $param->type instanceof IntersectionType

@@ -2,7 +2,6 @@
 any
 --FILE--
 <?php
-declare(strict_types=1);
 
 interface I { function o(): string; }
 

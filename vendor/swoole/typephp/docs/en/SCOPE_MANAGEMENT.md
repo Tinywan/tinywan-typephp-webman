@@ -103,11 +103,15 @@ If a method never uses scoped dynamic calls, first-class callables, or scoped ca
 
 ### 3.5 Usage Entry Points
 
-#### `php::callScoped()`
+#### `typephp_call_cached()` / `typephp_call_method_cached()`
 
-Used for dynamic function or object method calls. Internally, `call_function_impl()` uses `CallableScope::resolve()` to obtain a `zend_fcall_info_cache`, then executes `zend_call_function()`.
+TypePHP assigns one request-local slot to each unresolved function or object-method call site. String callables cache their resolved `zend_function`; method calls additionally guard the receiver class. Non-string callables, transient magic trampolines, and relative `self::` / `parent::` / `static::` strings continue through Zend's full resolver.
 
-The typical scenario is when the compiler cannot resolve an object method into a Native Call, but still needs to preserve access to the current class's private/protected members.
+#### `typephp_call_method_scoped_cached()`
+
+Used for dynamic object method calls. It uses `CallableScope::resolve()` to obtain a `zend_fcall_info_cache`, retains cacheable results in a request-local call-site slot, then executes `zend_call_function()`.
+
+The typical scenario is when the compiler cannot resolve an object method into a Native Call, but still needs to preserve access to the current class's private/protected members. A hit must match the target class, method name, lexical scope, called scope, and caller `$this` class. Trampolines and changing call sites continue through full scoped resolution.
 
 #### `php::makeScopedCallable()`
 
@@ -287,9 +291,9 @@ Likewise, `EG(fake_scope)` must not be unconditionally set at the entry of every
 ```text
 AOT method entry
   -> lazily generated CallableScope
-  -> php::callScoped()
-  -> CallableScope::resolve()
-  -> zend_is_callable_at_frame(synthetic frame)
+  -> typephp_call_method_scoped_cached()
+  -> call-site cache hit, or CallableScope::resolve()
+  -> zend_is_callable_at_frame(synthetic frame) on cache miss
   -> zend_call_function()
 ```
 
@@ -339,13 +343,17 @@ save EG(fake_scope)
 7. When adding a PHP built-in function that synchronously invokes callbacks, update the callback argument description table, noting the position, argument name, and whether it is a callback map.
 8. Functions that save a callback but do not invoke it immediately must not mark the scope fallback merely because they receive a callable, for example `spl_autoload_register()`.
 9. When adding a `FakeScopeGuard` usage that crosses a Zend bailout, code review must check whether `zend_catch` explicitly restores it.
+10. Request-local call slots must be destroyed before project request symbols are cleared. Do not retain Closure objects, receiver objects, or trampolines in those slots.
 
 ## 8. Performance Model
 
 | Path | Main Cost | Optimization Strategy |
 | --- | --- | --- |
 | `CallableScope` | Initializing one synthetic frame | At most once per AOT method, reused across loops |
-| `callScoped()` | Dynamic resolution by `zend_is_callable_at_frame()` | Used only for dynamic calls; resolvable Native Calls do not enter this path |
+| `typephp_call_cached()` | Resolving a dynamic string callable | One request-local slot per call site; non-string and relative callables remain dynamic |
+| `typephp_call_method_cached()` | Resolving a method name against a runtime object | Cache only a guarded monomorphic target; disable the slot after its class or name changes |
+| `typephp_call_method_scoped_cached()` | Guarded cache lookup; `zend_is_callable_at_frame()` on a miss | One request-local slot per dynamic call site; resolvable Native Calls do not enter this path |
+| Stable static property | Resolving class/property metadata and its Zend slot | Lazily cache only the final `zval*` in the generated C++ function; rebuild a lightweight `Variant` view on every access |
 | `prepareScopedCallback()` | One callable resolution | Public absolute callbacks do not create a Closure |
 | `makeScopedCallable()` | Callable resolution and Closure allocation | Used only for first-class callables |
 | `UserCodeScopeGuard` | One pointer lookup and write at method entry, plus restoration at exit | Generated only for `call_user_func*`, callback maps, or unresolved unpack callbacks |

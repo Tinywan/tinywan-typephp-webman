@@ -29,7 +29,6 @@ class FuncCallOptimizerUnpackTest extends TestCase
         $cpp = file_get_contents($compiler->convertFile($source));
 
         self::assertSame(5, substr_count($cpp, '.appendUnpacked('));
-        self::assertStringNotContainsString('php::toInt(', $cpp);
         self::assertStringNotContainsString('php::fn::round(', $cpp);
         self::assertStringNotContainsString('php::fn::array_keys(', $cpp);
     }

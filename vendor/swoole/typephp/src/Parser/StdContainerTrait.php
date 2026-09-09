@@ -31,12 +31,12 @@ trait StdContainerTrait
         if (!$expr instanceof StaticCall
             || !$this->isNameExpr($expr->class)
             || !$this->isIdExpr($expr->name)
-            || $this->parseIdentifier($expr->class) !== 'std'
+            || !$this->isStdClassExpr($expr->class)
         ) {
             return '';
         }
 
-        $method = $expr->name->toString();
+        $method = strtolower($expr->name->toString());
         if (!in_array($method, ['array', 'vector', 'map', 'ordered_map'], true)) {
             return '';
         }
@@ -46,8 +46,8 @@ trait StdContainerTrait
             while ($factory instanceof StaticCall
                 && $this->isNameExpr($factory->class)
                 && $this->isIdExpr($factory->name)
-                && $this->parseIdentifier($factory->class) === 'std'
-                && $factory->name->toString() === 'array'
+                && $this->isStdClassExpr($factory->class)
+                && strtolower($factory->name->toString()) === 'array'
             ) {
                 if (count($factory->args) !== 2) {
                     return '';
@@ -899,7 +899,7 @@ trait StdContainerTrait
             }
             if ($this->isStaticCall($typeExpr)) {
                 $tmp = $typeExpr;
-                if (!$this->isNameExpr($tmp->class) || !$this->isIdExpr($tmp->name) || $tmp->class->toString() !== 'std' || $tmp->name->toString() !== 'array') {
+                if (!$this->isStdClassExpr($tmp->class) || !$this->isIdExpr($tmp->name) || strtolower($tmp->name->toString()) !== 'array') {
                     $this->fatalError($tmp, 'An incorrect `std::array` definition');
                 }
             } else {

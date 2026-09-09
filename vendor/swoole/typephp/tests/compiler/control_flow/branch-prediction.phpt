@@ -11,23 +11,23 @@ function predicted_condition(int &$calls, bool $result): bool
 
 function main(): void
 {
-    $calls = 0;
+    $calls = std::any(0);
 
-    if (expected(predicted_condition($calls, true))) {
+    if (std::expected(predicted_condition($calls, true))) {
         echo "expected\n";
     }
 
-    if (unexpected(predicted_condition($calls, false))) {
+    if (std::unexpected(predicted_condition($calls, false))) {
         echo "unexpected-true\n";
     } else {
         echo "unexpected-false\n";
     }
 
-    if (\expected(condition: predicted_condition($calls, true))) {
+    if (\std::expected(condition: predicted_condition($calls, true))) {
         echo "fully-qualified\n";
     }
 
-    var_dump(expected(1), unexpected(0), $calls);
+    var_dump(std::expected(1), std::unexpected(0), $calls);
 }
 ?>
 --EXPECT--

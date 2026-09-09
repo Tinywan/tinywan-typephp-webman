@@ -2,8 +2,6 @@
 missing method on typed object dispatches to __call
 --FILE--
 <?php
-use native_types;
-
 class DynamicHandler
 {
     public function __call(string $name, array $args): string

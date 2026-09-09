@@ -2,7 +2,6 @@
 integer, boolean and double remain class names in PHP type declarations
 --FILE--
 <?php
-declare(strict_types=1);
 
 class integer {}
 class boolean {}

@@ -2,7 +2,6 @@
 Named magic property cache preserves polymorphism, dynamic names, and receiver evaluation
 --FILE--
 <?php
-declare(strict_types=1);
 
 class FirstMagicProperty
 {
@@ -161,7 +160,7 @@ function main(): void
     var_dump(readNamedProperty($throwing), $throwing->getCalls);
 
     // A parenthesized receiver is cacheable, but is still evaluated once.
-    $calls = 0;
+    $calls = std::any(0);
     namedPropertyReceiver($first, $calls)->value = 50;
     var_dump($calls, namedPropertyReceiver($first, $calls)->value, $calls);
 }

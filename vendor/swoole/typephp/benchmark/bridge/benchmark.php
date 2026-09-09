@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 const BRIDGE_ITERATIONS = 10_000_000;
 const BRIDGE_CONTAINER_ITERATIONS = 1_000_000;

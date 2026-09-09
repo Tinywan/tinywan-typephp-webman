@@ -3,8 +3,6 @@ Readonly native properties remain initialized when read across classes
 --FILE--
 <?php
 
-use native_types;
-
 class ReadonlyDimensions
 {
     public readonly int $x;

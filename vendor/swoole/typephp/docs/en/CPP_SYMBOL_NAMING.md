@@ -13,7 +13,7 @@ This document is the internal C++ naming convention for TypePHP, PHPX, and TypeP
 | --- | --- | --- | --- | --- |
 | `typephp_` | TypePHP-specific runtime or compiled-artifact support logic | `typephp_call_parent_constructor()` | TypePHP/PHPX runtime | Internal or explicitly exported ABI |
 | `php::` | C++ wrappers for PHP runtime capabilities such as ZendAPI, zval, HashTable, and call frames | `php::deindirect()` | PHPX C++ API | PHPX API |
-| `typephp_<project>` | The private C++ namespace of a single compiled project | `namespace typephp_tpc` | Current generated project | Non-public ABI |
+| `typephp_project_<project>` | The private C++ namespace of a single compiled project | `namespace typephp_project_tpc` | Current generated project | Non-public ABI |
 | `php_` | C++ callable symbols mapped from user PHP functions and class methods | `php_app__user__save()` | Visible to the linker | TypePHP/stub callable ABI |
 
 Core constraints:
@@ -21,7 +21,7 @@ Core constraints:
 1. Do not add new global framework `php_*` helpers.
 2. Capabilities that are unrelated to TypePHP and only wrap ZendAPI must be placed in `namespace php`.
 3. Logic that is unique to TypePHP and needs to be called across generated files uses the `typephp_` prefix.
-4. Data and functions that serve only one compiled project go into the `typephp_<project>` namespace.
+4. Data and functions that serve only one compiled project go into the `typephp_project_<project>` namespace.
 5. Global `php_*` callable names are reserved for the compiled ABI of user PHP declarations.
 
 ## 2. `typephp_`: TypePHP-specific Logic
@@ -144,23 +144,23 @@ php::stdCreateObject();
 
 Do not mechanically preserve Zend's snake_case names as global C++ names. Lower-level calls can continue to use the original Zend API, such as `zend_objects_new()`, but the wrapper layer exposed to generated code should use `php::`.
 
-## 4. `typephp_<project>`: Project-private Namespace
+## 4. `typephp_project_<project>`: Project-private Namespace
 
 Each TypePHP compiled project has an independent C++ namespace:
 
 ```text
-typephp_<target-name>
+typephp_project_<target-name>
 ```
 
 For example, if the project name is `tpc`:
 
 ```cpp
-namespace typephp_tpc {
+namespace typephp_project_tpc {
     // Project-private generated state and helpers.
 }
 ```
 
-The `-` and `*` in the project name are converted to `_`, and the remaining characters must satisfy the compiler's target identifier validation. Because of the fixed `typephp_` prefix, the final C++ namespace is a valid identifier even if the project name starts with a digit.
+The `-` and `*` in the project name are converted to `_`, and the remaining characters must satisfy the compiler's target identifier validation. The distinct `typephp_project_` prefix prevents generated namespaces from colliding with global `typephp_*` runtime helpers. It also keeps the final C++ namespace valid when the project name starts with a digit.
 
 ### 4.1 Content That Should Go into This Namespace
 
@@ -175,7 +175,7 @@ The `-` and `*` in the project name are converted to `_`, and the remaining char
 Illustration:
 
 ```cpp
-namespace typephp_demo {
+namespace typephp_project_demo {
 
 static php::Str literal_strings[] = {
     php::Str{"hello"},
@@ -195,12 +195,12 @@ static void module_init() {
     // Initialize this project's generated state.
 }
 
-}  // namespace typephp_demo
+}  // namespace typephp_project_demo
 ```
 
 ### 4.2 Visibility and ABI
 
-- Names inside `typephp_<project>` are implementation details, not library stub ABI.
+- Names inside `typephp_project_<project>` are implementation details, not library stub ABI.
 - Objects and functions that can be limited to `static` should continue to be marked `static`.
 - Generated headers may declare project-internal accessors that must be used across translation units, but must not expose underlying arrays or cache tables.
 - External handwritten C++ code must not depend on literal indexes, cache indexes, or project-internal storage names.
@@ -211,10 +211,10 @@ static void module_init() {
 Historical generated names may still appear in the project namespace, for example:
 
 ```cpp
-typephp_demo::php_class_entry_App_User
+typephp_project_demo::php_class_entry_App_User
 ```
 
-Although the member name starts with `php_`, the full symbol resides in `typephp_demo`, so it is a project-private implementation rather than the global user callable ABI described in Section 5. New project-internal helpers should prefer short names without `php_`, such as `get_class()`, `get_func()`, and `get_str()`.
+Although the member name starts with `php_`, the full symbol resides in `typephp_project_demo`, so it is a project-private implementation rather than the global user callable ABI described in Section 5. New project-internal helpers should prefer short names without `php_`, such as `get_class()`, `get_func()`, and `get_str()`.
 
 ## 5. `php_`: The C++ ABI of User PHP Callables
 
@@ -315,7 +315,7 @@ When adding a C++ API, judge in the following order:
 1. **Is it the compiled body of a user PHP function or class method?**
    - Yes: use the existing `php_` callable ABI generator; do not handwrite another mapping.
 2. **Does it serve only one current TypePHP project?**
-   - Yes: place it in `typephp_<project>`, and use `static` or private accessors where possible.
+   - Yes: place it in `typephp_project_<project>`, and use `static` or private accessors where possible.
 3. **Does it implement TypePHP-specific semantics?**
    - Yes: use the `typephp_` prefix.
 4. **Is it only a C++ wrapper of Zend/PHP runtime capabilities?**
@@ -330,7 +330,7 @@ When adding or modifying generated helpers, check:
 - [ ] No new global `php_*` helpers in `typephp_helper.h`;
 - [ ] ZendAPI wrappers are in `namespace php`;
 - [ ] TypePHP-specific logic uses `typephp_`;
-- [ ] Project caches and storage are in `typephp_<project>`;
+- [ ] Project caches and storage are in `typephp_project_<project>`;
 - [ ] Project-private tables are not exposed directly via `extern` through generated headers;
 - [ ] User callables still use the unified `php_` ABI generator;
 - [ ] New names do not collide with user-declarable PHP functions or methods;
@@ -350,7 +350,7 @@ tests/compiler/basic/helper-symbol-collision.phpt
 | --- | --- |
 | `php_` callable prefix and combination separator | `src/CompilerBase.php` |
 | Callable combination collision detection | `src/Preprocessor.php` |
-| `typephp_<project>` generation and project-private tables | `src/Translator.php` |
+| `typephp_project_<project>` generation and project-private tables | `src/Translator.php` |
 | TypePHP extension prefix constants | `src/Metadata/Constants.php` |
 | PHPX/TypePHP helper classification | `vendor/swoole/phpx/include/typephp_helper.h` |
 | Embed module accessor concatenation | `vendor/swoole/phpx/src/misc/typephp_main.cc` |

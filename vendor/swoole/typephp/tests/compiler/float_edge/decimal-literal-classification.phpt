@@ -2,7 +2,6 @@
 Auto-Decimal literal classification: significant digits, hex, float mixing
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main(): void
 {

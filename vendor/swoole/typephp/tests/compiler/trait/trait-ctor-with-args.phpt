@@ -3,7 +3,6 @@ Trait __construct with arguments and $this property access
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 trait TestTrait
 {

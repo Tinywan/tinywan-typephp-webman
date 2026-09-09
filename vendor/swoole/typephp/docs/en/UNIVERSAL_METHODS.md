@@ -917,8 +917,6 @@ Format: `{type_prefix}_{snake_case_method_name}`
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 /**
  * Extension method: determine whether an Int is prime
@@ -974,8 +972,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     $raw = "  <h1>Hello World!</h1>  \n";
@@ -998,8 +994,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     $data = [5, 2, 8, 1, 9, 3, 7];
@@ -1034,8 +1028,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // Factorial of a large integer (using compound assignment for brevity)
@@ -1072,8 +1064,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // Write to the file

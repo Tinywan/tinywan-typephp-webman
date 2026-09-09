@@ -2,7 +2,6 @@
 Array compound assignment evaluates a side-effecting offset once
 --FILE--
 <?php
-declare(strict_types=1);
 
 function nextCompoundOffset(int &$index): int
 {
@@ -41,7 +40,7 @@ function main(): void
 
     var_dump($nestedIndex, $nestedValues[0][1], $nestedValues[1][0], $nestedResult);
 
-    $callIndex = 0;
+    $callIndex = std::any(0);
     $callValues = [[10, 20], [30, 40]];
     $callResult = ($callValues[nextCompoundOffset($callIndex)][nextCompoundOffset($callIndex)] *= 2);
 
@@ -53,7 +52,7 @@ function main(): void
 
     var_dump($rhsIndex, $rhsValues[0], $rhsValues[1], $rhsResult);
 
-    $offsetPart = 'a';
+    $offsetPart = std::any('a');
     $interpolatedValues = ['a0' => 10, 'b0' => 20];
     $interpolatedResult = ($interpolatedValues["{$offsetPart}0"] += changeCompoundOffsetPart($offsetPart));
 

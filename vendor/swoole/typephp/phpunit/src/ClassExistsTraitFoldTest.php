@@ -24,7 +24,7 @@ class ClassExistsTraitFoldTest extends TestCase
         // The trait is known at compile time, so the call is still folded -
         // just to the answer PHP gives, which is false for a trait.
         self::assertStringNotContainsString('php::fn::class_exists(', $cpp);
-        self::assertStringContainsString('= false;', $cpp);
+        self::assertStringContainsString('= php::toBool(false);', $cpp);
     }
 
     public function testClassAndEnumNamesStillFoldToTrue(): void
@@ -32,7 +32,7 @@ class ClassExistsTraitFoldTest extends TestCase
         $cpp = $this->compileToCpp('class-exists-class-and-enum.php');
 
         self::assertStringNotContainsString('php::fn::class_exists(', $cpp);
-        self::assertStringNotContainsString('= false;', $cpp);
+        self::assertStringNotContainsString('= php::toBool(false);', $cpp);
     }
 
     public function testExplicitAutoloadArgumentUsesNormalCallPath(): void

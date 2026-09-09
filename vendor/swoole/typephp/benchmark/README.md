@@ -13,6 +13,7 @@ machine instead of committing absolute timing expectations.
   call-site cache changes can be evaluated independently from direct AOT calls.
 - `property-access/` builds and compares dynamic/static property access under
   Zend PHP and TypePHP.
+- `static-cache/` measures static-array caches and late-static method dispatch.
 
 Run the property benchmark from the repository root:
 

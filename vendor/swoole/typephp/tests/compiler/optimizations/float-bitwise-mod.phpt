@@ -4,12 +4,12 @@ SSA narrowing: bitwise/mod on float prevents narrowing
 <?php
 function main(): void {
     // %= on float: PHP converts to int → $a stays Var
-    $a = 10.5;
+    $a = std::any(10.5);
     $a %= 3;
     var_dump($a);
 
     // |= on float: PHP converts to int → $b stays Var
-    $b = 6.7;
+    $b = std::any(6.7);
     $b |= 2;
     var_dump($b);
 

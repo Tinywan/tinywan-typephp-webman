@@ -6,7 +6,7 @@ Null coalescing (??) on unset reference variable
 function main()
 {
     // Test 1: unset reference variable then ?? with int
-    $a = 1;
+    $a = std::any(1);
     $b = &$a;
     $b = 2;
     var_dump($a, $b);
@@ -16,7 +16,7 @@ function main()
     var_dump($b ?? 123);
 
     // Test 2: unset reference variable then ?? with string
-    $c = 'hello';
+    $c = std::any('hello');
     $d = &$c;
     $d = 'world';
     var_dump($c, $d);
@@ -26,18 +26,18 @@ function main()
     var_dump($d ?? 'default');
 
     // Test 3: ?? on reference without unset (should return value)
-    $e = 42;
+    $e = std::any(42);
     $f = &$e;
     var_dump($f ?? 999);
 
     // Test 4: chained ?? with unset reference
-    $g = 'first';
+    $g = std::any('first');
     $h = &$g;
     unset($h);
     var_dump($h ?? null ?? 'fallback');
 
     // Test 5: ??= on unset reference (assign coalesce)
-    $i = 10;
+    $i = std::any(10);
     $j = &$i;
     $j = 20;
     unset($j);
@@ -46,7 +46,7 @@ function main()
     var_dump($i);
 
     // Test 6: reference reassignment after unset
-    $k = 100;
+    $k = std::any(100);
     $l = &$k;
     unset($l);
     var_dump($l ?? 200);
@@ -55,18 +55,18 @@ function main()
     var_dump($k);
 
     // Test 7: normal variable unset + ??
-    $m = 50;
+    $m = std::any(50);
     unset($m);
     var_dump($m ?? 777);
 
     // Test 8: isset after unset of reference
-    $n = 'test';
+    $n = std::any('test');
     $o = &$n;
     unset($o);
     var_dump(isset($o));
 
     // Test 9: elvis (?:) on unset reference
-    $p = 5;
+    $p = std::any(5);
     $q = &$p;
     $q = 6;
     unset($q);

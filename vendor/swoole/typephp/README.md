@@ -90,8 +90,8 @@ This two-phase design keeps multi-file and self-hosted builds deterministic.
   are resolved directly at compile time.
 - **Mixed C++ / PHP** — call C++ functions from PHP (and vice versa) for
   performance-critical kernels.
-- **Compile-time functions & keywords** — `any()`, `refval()`, `objval()`,
-  `expected()`, `unexpected()`, plus `toInt()`, `toString()`, `toArray()` and
+- **Compile-time functions & keywords** — `std::any()`, `std::ref()`,
+  `std::expected()`, `std::unexpected()`, plus `toObject()`, `toInt()`, `toString()`, `toArray()` and
   friends.
 - **Compile-time safety** — `#[Immutable]` read-only contracts and `#[ArrayDef]`
   array-shape metadata, checked at compile time with zero runtime cost.
@@ -100,8 +100,9 @@ This two-phase design keeps multi-file and self-hosted builds deterministic.
   from property declarations.
 - **Modern PHP support** — PHP 8.4 property hooks, asymmetric visibility,
   PHP 8.5 `clone()`-with, and `(void)` discard expressions.
-- **Cross-platform & WASM** — Linux, Windows, and macOS targets for x64 and
-  ARM64, plus WASI 0.2 and browser (Jco) output.
+- **Cross-platform, mobile native & WASM** — Linux, Windows, and macOS targets
+  for x64 and ARM64; native Android/iOS application development with the
+  Android NDK and iOS SDK; plus WASI 0.2 and browser (Jco) output.
 - **Python bridge** — generate IDE helpers for Python modules and convert
   Python scripts to TypePHP.
 
@@ -127,9 +128,11 @@ This two-phase design keeps multi-file and self-hosted builds deterministic.
   executable and does not require the PHP CLI or a separate interpreter
   process. The executable still embeds/links PHPX, `libphp`, and any configured
   native libraries, which must be available in the deployment package.
-- **Gradual typing that actually pays off.** Add `use native_types`, `std::`
-  containers, and type declarations only where performance matters; the rest
-  stays ordinary PHP.
+- **Strong scalar types by default.** Inferred `int`, `float`, and `bool`
+  locals use native C++ storage. Use `std::any()` for an individual dynamic
+  value, or `use varint_types` when a file requires PHP integer widening.
+- **Always-strict calls.** TypePHP never enables PHP's weak scalar coercion;
+  `declare(strict_types=1)` is unnecessary.
 - **Zend ecosystem interop.** Extension mode loads as a standard PHP extension,
   and projects can call supported internal functions and require other Zend
   extensions explicitly.
@@ -159,9 +162,13 @@ sudo pacman -S base-devel cmake pkgconf gmp mpfr
 > by libmpdec, which is bundled with PHPX — no separate install required.
 
 Linux x64 is the primary development and full-test CI platform. The compiler
-also has Windows, macOS, ARM64, and WASI backends; availability of PHP embed,
-toolchain, and third-party libraries still determines which target can be
-built on a given host.
+also has Windows, macOS, ARM64, Android `arm64-v8a`, iPhoneOS `arm64`, and WASI
+backends; availability of PHP embed, platform SDKs, toolchains, and third-party
+libraries still determines which target can be built on a given host. Mobile
+apps can implement their UI structure, application state, and business logic
+in TypePHP while keeping only a thin platform-native UI bridge. See the
+[Android native app example](examples/android-native/) and the
+[iOS/macOS native app example](examples/apple-native/).
 
 Native release assets are built with the latest PHP 8.5 ZTS release. TypePHP
 publishes Linux x64, Linux ARM64, macOS ARM64, and Windows x64 packages. Native
@@ -331,8 +338,10 @@ ahead-of-time compilation, but it also makes several deliberate restrictions:
 - global scope is declaration-only; executable statements must be inside a
   function or method;
 - binary mode has a strict `main()` signature;
-- `use native_types` opts scalar declarations into fixed native storage, so a
-  value cannot later change to an incompatible type;
+- inferred `int`, `float`, and `bool` values use fixed native storage by
+  default and cannot later change to an incompatible type;
+- `use varint_types` stores inferred integers in `php::Var` for PHP-compatible
+  overflow and division behavior; `std::any()` erases one expression's type;
 - statically-known calls and properties are compiled directly, while supported
   dynamic operations use PHPX/Zend runtime fallbacks;
 - `.stub.php` files declare C++ or imported-library APIs and must contain empty
@@ -405,7 +414,6 @@ inherited final method is a compile-time error.
 
 ```php
 <?php
-use native_types;
 
 function fib(int $n): int
 {
@@ -429,15 +437,15 @@ bin/tpc.php fib.php -O3 -o fib
 ./fib 30
 ```
 
-With `use native_types`, `int` variables become C++ `int64_t` and arithmetic
-compiles to plain CPU instructions instead of ZendVM calls.
+By default, inferred and declared `int` variables become C++ `int64_t`, and
+arithmetic compiles to plain CPU instructions instead of ZendVM calls. Add
+`use varint_types` only when a file requires PHP's overflow-to-float and
+non-integral integer-division behavior.
 
 ### 2. High-precision numerics
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void
 {
@@ -464,7 +472,6 @@ See [High-precision types](docs/en/HIGH_PRECISION_TYPES.md) and
 
 ```php
 <?php
-use native_types;
 
 function main(): void
 {
@@ -724,6 +731,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 ## Documentation
 
 - [Quick Start](docs/en/QUICKSTART.md) — minimal compilation flow
+- [Change log](CHANGELOG.md) — breaking changes and pre-1.0 upgrade notes
 - [Compilation modes](docs/en/COMPILATION_MODES.md) — `bin`, `ext`, `lib`
 - [Compiler CLI](docs/en/COMPILER_CLI.md) — CLI arguments and project config
 - [Incompatible PHP features](docs/en/INCOMPATIBLE_PHP_FEATURES.md) — current limits
@@ -731,7 +739,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 - [High-precision types](docs/en/HIGH_PRECISION_TYPES.md) — BigInt / Decimal / BigFloat
 - [Std containers](docs/en/STD_CONTAINERS.md) — strongly-typed containers
 - [Universal methods](docs/en/UNIVERSAL_METHODS.md) — compile-time method resolution
-- [Compile-time functions](docs/en/COMPILE_TIME_FUNCTIONS.md) — `any()`, `refval()`, `objval()`, …
+- [Compile-time functions](docs/en/COMPILE_TIME_FUNCTIONS.md) — `std::any()`, `std::ref()`, `std::expected()`, …
 - [Mixed C++/PHP](docs/en/MIXED_CPP_PHP.md) — C++/PHP interop
 - [`#[Immutable]`](docs/en/IMMUTABLE.md) — compile-time read-only contracts
 - [`#[ArrayDef]`](docs/en/ARRAY_DEF.md) — typed array-property contracts

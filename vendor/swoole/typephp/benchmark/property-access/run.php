@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 $root = dirname(__DIR__, 2);
 $source = __DIR__ . '/benchmark.php';
@@ -8,9 +7,13 @@ $project = __DIR__ . '/project.yml';
 $binary = __DIR__ . '/property_access';
 $skipBuild = in_array('--skip-build', $argv, true);
 $maximumRatio = null;
+$selectedCase = null;
 foreach ($argv as $argument) {
     if (str_starts_with($argument, '--max-ratio=')) {
         $maximumRatio = (float) substr($argument, strlen('--max-ratio='));
+    }
+    if (str_starts_with($argument, '--case=')) {
+        $selectedCase = substr($argument, strlen('--case='));
     }
 }
 
@@ -82,20 +85,23 @@ if (!is_file($binary)) {
     throw new RuntimeException('Benchmark binary does not exist: ' . $binary);
 }
 
+$benchmarkEnvironment = getenv();
+if ($selectedCase !== null && $selectedCase !== '') {
+    $benchmarkEnvironment['PROPERTY_ACCESS_CASE'] = $selectedCase;
+}
 $php = parseResults(runCommand([
     PHP_BINARY,
     '-d',
     'opcache.enable_cli=0',
     '-r',
     'require ' . var_export($source, true) . '; main();',
-], $root, true));
-$typephpEnvironment = null;
+], $root, true, $benchmarkEnvironment));
+$typephpEnvironment = $benchmarkEnvironment;
 if (PHP_OS_FAMILY !== 'Windows') {
     $phpxHome = getenv('PHPX_HOME');
     if (!is_string($phpxHome) || $phpxHome === '') {
         $phpxHome = $root . '/vendor/swoole/phpx';
     }
-    $typephpEnvironment = getenv();
     $loaderVariable = PHP_OS_FAMILY === 'Darwin' ? 'DYLD_LIBRARY_PATH' : 'LD_LIBRARY_PATH';
     $existingPath = $typephpEnvironment[$loaderVariable] ?? '';
     $typephpEnvironment[$loaderVariable] = $phpxHome . '/lib'
@@ -106,7 +112,11 @@ $typephp = parseResults(runCommand([$binary], $root, true, $typephpEnvironment))
 echo "Metric                  PHP ns/op  TypePHP ns/op  TypePHP/PHP\n";
 echo "------------------------------------------------------------\n";
 $failed = false;
-foreach (['dynamic_write_ns', 'dynamic_read_ns', 'static_write_ns', 'static_read_ns'] as $metric) {
+$metrics = ['dynamic_write_ns', 'dynamic_read_ns', 'static_write_ns', 'static_read_ns'];
+if ($selectedCase !== null && $selectedCase !== '') {
+    $metrics = [$selectedCase . '_ns'];
+}
+foreach ($metrics as $metric) {
     if (!isset($php[$metric], $typephp[$metric])) {
         throw new RuntimeException('Missing benchmark metric: ' . $metric);
     }

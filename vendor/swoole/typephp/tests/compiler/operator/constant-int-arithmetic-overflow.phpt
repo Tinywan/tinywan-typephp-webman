@@ -2,7 +2,7 @@
 Constant integer arithmetic overflow promotes to float like PHP
 --FILE--
 <?php
-declare(strict_types=1);
+use varint_types;
 
 function overflowInferred()
 {

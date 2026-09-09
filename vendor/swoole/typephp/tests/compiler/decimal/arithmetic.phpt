@@ -2,9 +2,6 @@
 Decimal arithmetic operations
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::decimal("100.50");
     $b = std::decimal("50.25");

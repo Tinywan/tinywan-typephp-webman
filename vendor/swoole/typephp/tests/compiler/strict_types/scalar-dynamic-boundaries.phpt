@@ -5,7 +5,6 @@ USE_ZEND_ALLOC=0
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 function acceptsInt(int $value): int { return $value; }
 function acceptsFloat(float $value): float { return $value; }

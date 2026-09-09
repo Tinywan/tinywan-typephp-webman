@@ -1,13 +1,15 @@
 --TEST--
-Ordinary typed scalars use PHP arithmetic; std::int()/std::float() stay native
+varint_types typed scalars use PHP arithmetic; std::int()/std::float() stay native
 --FILE--
 <?php
+use varint_types;
+
 function phpDiv(int $a, int $b): mixed { return $a / $b; }
 function phpMod(int $a, int $b): mixed { return $a % $b; }
 
 function main(): void
 {
-    // Ordinary typed parameters follow PHP semantics.
+    // varint_types selects PHP arithmetic for ordinary typed parameters.
     var_dump(phpDiv(7, 2));
     var_dump(phpMod(-7, 2));
 

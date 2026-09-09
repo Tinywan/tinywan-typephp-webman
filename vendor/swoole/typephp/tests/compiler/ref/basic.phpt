@@ -6,7 +6,7 @@ function main()
 {
     require __DIR__ . '/../../../src/Assert.php';
 
-    $a = [1, 2, 3];
+    $a = std::any([1, 2, 3]);
     $b = &$a;
     $b[] = 5;
 
@@ -17,7 +17,7 @@ function main()
     Assert::eq(count($b), 5);
     Assert::eq(count($c), 5);
 
-    $array = [1, 2, 3];
+    $array = std::any([1, 2, 3]);
 
     $ref = &$array;
     $ref[1] = 2026;

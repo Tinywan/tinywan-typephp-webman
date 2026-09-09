@@ -2,7 +2,7 @@
 Runtime integer overflow is checked at an int return boundary
 --FILE--
 <?php
-declare(strict_types=1);
+use varint_types;
 
 final class OverflowProperties
 {

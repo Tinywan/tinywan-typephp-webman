@@ -1,5 +1,11 @@
 --TEST--
 ref call arg
+--SKIPIF--
+<?php
+if (!class_exists('ZipArchive')) {
+    die('skip zip extension is required');
+}
+?>
 --FILE--
 <?php
 function main()
@@ -14,8 +20,10 @@ function main()
     $zip->close();
 
     if ($zip->open($path) === TRUE) {
+        $opsys = std::any(null);
+        $attr = std::any(null);
         for ($idx = 0; $s = $zip->statIndex($idx); $idx++) {
-            $rs = $zip->getExternalAttributesIndex($idx, $opsys, $attr);
+            $rs = $zip->getExternalAttributesIndex($idx, std::ref($opsys), std::ref($attr));
             var_dump($rs, $idx, $opsys, $attr);
         }
         $zip->close();

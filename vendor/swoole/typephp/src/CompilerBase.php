@@ -67,6 +67,8 @@ use TypePhp\Parser\UnaryExpressionTrait;
 use TypePhp\Parser\UniversalMethodCall;
 use TypePhp\Optimizer\FuncCallOptimizer;
 use TypePhp\Platform\Linux;
+use TypePhp\Platform\Ios;
+use TypePhp\Platform\Android;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\PlatformBase;
 use TypePhp\Platform\PlatformFactory;
@@ -488,7 +490,8 @@ class CompilerBase implements PropertyAccessContext
     protected array $nativeClassDeclarations = [];
     /** @var array<string, true> Request-reset initialization flags for Native static locals. */
     protected array $nativeStaticInitializers = [];
-    protected bool $nativeTypes = false;
+    /** Box inferred integer locals in php::Var to retain Zend integer widening semantics. */
+    protected bool $varIntTypes = false;
     protected bool $decimalTypes = false;
     protected bool $bigintTypes = false;
     protected string $rootPath;
@@ -678,6 +681,16 @@ class CompilerBase implements PropertyAccessContext
         return $this->getPlatform() instanceof Macos;
     }
 
+    public function isIosTarget(): bool
+    {
+        return $this->getPlatform() instanceof Ios;
+    }
+
+    public function isAndroidTarget(): bool
+    {
+        return $this->getPlatform() instanceof Android;
+    }
+
     public function isWasiTarget(): bool
     {
         $target = strtolower($this->targetPlatform);
@@ -723,6 +736,15 @@ class CompilerBase implements PropertyAccessContext
 
     public function getPhpDir(): string
     {
+        if ($this->isIosTarget()) {
+            // iPhoneOS is a cross target. Its PHP headers and archive are part
+            // of the integrated PHPX SDK, never the host PHP installation.
+            return $this->getIosSdkDir();
+        }
+        if ($this->isAndroidTarget()) {
+            return $this->getAndroidSdkDir();
+        }
+
         try {
             return $this->getPlatform()->getPhpDir();
         } catch (\RuntimeException $e) {
@@ -763,8 +785,11 @@ class CompilerBase implements PropertyAccessContext
         if (isset($this->context->declaredObjects[$object])) {
             return $this->context->declaredObjects[$object];
         }
-        if (isset($this->context->objects[$object]) || isset($this->context->stableObjects[$object])) {
-            return $this->getObjectType($object);
+        if (isset($this->context->objects[$object])) {
+            return $this->context->objects[$object];
+        }
+        if (isset($this->context->stableObjects[$object])) {
+            return $this->context->stableObjects[$object];
         }
         return '';
     }
@@ -976,7 +1001,7 @@ class CompilerBase implements PropertyAccessContext
         return $this->getPlatform()->removeCommonPrefix($short, $long);
     }
 
-    protected function getVarType(string $name): string
+    protected function getRawVarType(string $name): string
     {
         if ($this->hasLocalVar($name)) {
             return $this->context->localVars[$name];
@@ -986,6 +1011,16 @@ class CompilerBase implements PropertyAccessContext
         }
 
         return Type::VAR;
+    }
+
+    /**
+     * Return the value type visible to expressions. A native C++ reference has
+     * the same operators and assignment rules as its referenced value; only
+     * ABI/binding code should inspect getRawVarType().
+     */
+    protected function getVarType(string $name): string
+    {
+        return Type::getReferencedType($this->getRawVarType($name));
     }
 
     /**
@@ -1050,7 +1085,7 @@ class CompilerBase implements PropertyAccessContext
     protected function resetFile(): void
     {
         $this->indentLevel = 0;
-        $this->nativeTypes = false;
+        $this->varIntTypes = false;
         $this->decimalTypes = false;
         $this->bigintTypes = false;
         $this->classesDefineInFile = [];
@@ -1327,6 +1362,21 @@ class CompilerBase implements PropertyAccessContext
         return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
     }
 
+    /** Return the function-local late-static-bound class entry. */
+    protected function getCalledCeExpr(): string
+    {
+        $this->context->needsCalledCe = true;
+        return '_typephp_called_ce';
+    }
+
+    /** Return the function-local late-static-bound class name. */
+    protected function getCalledClassExpr(): string
+    {
+        $this->context->needsCalledCe = true;
+        $this->context->needsCalledClass = true;
+        return '_typephp_called_class';
+    }
+
     protected function getClassEntryPtr(string $className): string
     {
         $id = $this->getClassId($className);
@@ -1546,13 +1596,16 @@ class CompilerBase implements PropertyAccessContext
         return $list;
     }
 
-    protected function parseArrayKey(NodeAbstract $expr): string
+    protected function parseArrayKey(NodeAbstract $expr, bool $keepStringObject = false): string
     {
         $this->assertNotNativeObjectArrayKey($expr);
         $key = $this->parseIdentifier($expr);
         if (str_starts_with($key, self::LITERAL_STRING_GETTER . '(')) {
-            $key = "{$key}.str()";
-        } elseif ($this->isZeroLiteral($expr)) {
+            // Array initializers and setters use zend_string* keys, while item()
+            // uses php::String to avoid an ambiguous conversion to Variant.
+            return $keepStringObject ? $key : "{$key}.str()";
+        }
+        if ($this->isZeroLiteral($expr)) {
             $key = self::VALUE_ZERO;
         }
         return $key;
@@ -2122,9 +2175,6 @@ class CompilerBase implements PropertyAccessContext
         }
         if ($this->isFuncCallExpr($expr) and $this->isNameExpr($expr->name)) {
             $fn = $this->parseIdentifier($expr->name);
-            if (count($expr->args) === 2 and $fn === 'objval') {
-                return $this->resolveClassNameArg($expr->args[1]->value);
-            }
             if ($this->hasFunction($fn)) {
                 return $this->getFunction($fn)->returnClass;
             }
@@ -2375,21 +2425,7 @@ class CompilerBase implements PropertyAccessContext
                 if (!$this->hasVar($name)) {
                     $this->errorUndefinedVariable($v->expr);
                 }
-                if ($this->hasLocalVar($name) && $this->getVarType($name) !== Type::VAR && $this->getVarType($name) !== Type::REF) {
-                    $isParameter = false;
-                    foreach ($this->functionDef->argInfoList as $argInfo) {
-                        if ($argInfo->name === $name) {
-                            $isParameter = true;
-                            break;
-                        }
-                    }
-                    if ($isParameter) {
-                        $this->fatalError($v, 'A function returning by reference cannot return a native typed parameter');
-                    }
-                    // The declaration is emitted after parsing the body, so a local can
-                    // be promoted to Variant before C++ is generated.
-                    $this->context->localVars[$name] = Type::VAR;
-                }
+                $this->assertVariableReferenceStorage($v->expr, $v, $name);
                 return 'return ' . $name . '.toReference();';
             }
             if ($this->isPropertyFetch($v->expr)) {
@@ -2463,7 +2499,10 @@ class CompilerBase implements PropertyAccessContext
                     $remainingVariableUses[$name]--;
                     // Only consume a local on its final occurrence. Globals and
                     // statics outlive the function and must never be emptied.
-                    if ($remainingVariableUses[$name] === 0 && $this->hasLocalVar($name)) {
+                    if ($remainingVariableUses[$name] === 0
+                        && $this->hasLocalVar($name)
+                        && !Type::isTypedRefType($this->getRawVarType($name))
+                    ) {
                         $value = 'std::move(' . $value . ')';
                     }
                 }
@@ -2474,13 +2513,12 @@ class CompilerBase implements PropertyAccessContext
         }
         // The return value of the actual function.
         $type = $this->detectTypeOfExpr($v->expr);
-        // In ordinary PHP mode, int +/−/* int is only conditionally an int:
+        // In varint mode, int +/−/* int is only conditionally an int:
         // runtime overflow promotes the result to float. Keep the Variant
         // representation through the return boundary so a declared scalar
         // return type observes and rejects that float exactly as PHP does.
-        // `use native_types` intentionally opts into native C++ arithmetic
-        // semantics and is therefore excluded from this check.
-        if (!$this->nativeTypes && $type === Type::INT && $this->exprCanOverflowInt($v->expr)) {
+        // Native C++ arithmetic is the default and is therefore excluded.
+        if ($this->varIntTypes && $type === Type::INT && $this->exprCanOverflowInt($v->expr)) {
             $type = Type::VAR;
         }
         $nativeExpressionClass = $this->detectClassOfExpr($v->expr);
@@ -2994,7 +3032,7 @@ class CompilerBase implements PropertyAccessContext
             case 'Expr_UnaryPlus':
                 $innerType = $this->detectTypeOfExpr($expr->expr);
                 if (
-                    !$this->nativeTypes
+                    $this->varIntTypes
                     && $exprType === 'Expr_UnaryMinus'
                     && $innerType === Type::INT
                     && $this->constantIntValue($expr->expr) === PHP_INT_MIN
@@ -3082,7 +3120,7 @@ class CompilerBase implements PropertyAccessContext
                 if ($leftType === Type::FLOAT || $rightType === Type::FLOAT) {
                     return Type::FLOAT;
                 }
-                if (!$this->nativeTypes && $leftType === Type::INT && $rightType === Type::INT) {
+                if ($this->varIntTypes && $leftType === Type::INT && $rightType === Type::INT) {
                     $op = match ($exprType) {
                         'Expr_BinaryOp_Plus' => '+',
                         'Expr_BinaryOp_Minus' => '-',
@@ -3138,9 +3176,6 @@ class CompilerBase implements PropertyAccessContext
                     if (in_array($name, self::STREAM_FUNCTIONS)) {
                         return Type::STREAM;
                     }
-                    if ($globalName === 'expected' || $globalName === 'unexpected') {
-                        return Type::BOOL;
-                    }
                     if (count($expr->args) === 1 and $this->isPlaceholderExpr($expr->args[0])) {
                         return Type::OBJECT;
                     }
@@ -3194,7 +3229,7 @@ class CompilerBase implements PropertyAccessContext
                         return Type::OBJECT;
                     }
                     $className = $this->parseIdentifier($expr->class);
-                    if (strtolower($className) === 'std') {
+                    if (strtolower(ltrim($className, '\\')) === 'std') {
                         $method = strtolower($this->parseIdentifier($expr->name));
                         return match ($method) {
                             'int' => Type::INT,
@@ -3203,6 +3238,7 @@ class CompilerBase implements PropertyAccessContext
                             'bigint' => Type::BIGINT,
                             'decimal' => Type::DECIMAL,
                             'bigfloat' => Type::BIGFLOAT,
+                            'expected', 'unexpected' => Type::BOOL,
                             default => Type::VAR,
                         };
                     }
@@ -3258,6 +3294,13 @@ class CompilerBase implements PropertyAccessContext
                     if ($def) {
                         return $def->type;
                     }
+                }
+                break;
+            case 'Expr_ClassConstFetch':
+                if ($this->isIdExpr($expr->name)
+                    && strtolower($this->parseIdentifier($expr->name)) === 'class'
+                ) {
+                    return Type::STR;
                 }
                 break;
             case 'Expr_ArrayDimFetch':
@@ -3418,16 +3461,27 @@ class CompilerBase implements PropertyAccessContext
     protected function checkInternalFunctionArgCount(string $funcName, Node\Expr\FuncCall $expr): void
     {
         $ref = Reflection::getFunction($funcName);
-        if (!$ref) {
+        if ($ref) {
+            $this->validateInternalNamedCallArgs($ref, $expr->args);
+        }
+        if ($this->hasUnpackCallArg($expr->args)) {
             return;
         }
-        $this->validateInternalNamedCallArgs($ref, $expr->args);
-        if ($this->hasUnpackCallArg($expr->args)) {
+        $actualArgCount = count($expr->args);
+        $config = $this->getFuncCallConfig()[ltrim($funcName, '\\')] ?? null;
+        $allowedArgCounts = is_array($config) ? ($config['argCounts'] ?? null) : null;
+        if (is_array($allowedArgCounts) && !in_array($actualArgCount, $allowedArgCounts, true)) {
+            $expected = implode(' or ', $allowedArgCounts);
+            $this->fatalError(
+                $expr,
+                "{$funcName}() expects exactly {$expected} arguments, {$actualArgCount} given",
+            );
+        }
+        if (!$ref) {
             return;
         }
         $minArgs = $ref->getNumberOfRequiredParameters();
         $maxArgs = $ref->getNumberOfParameters();
-        $actualArgCount = count($expr->args);
         if ($minArgs > 0 && $actualArgCount < $minArgs) {
             $this->fatalError($expr, "{$funcName}() expects at least {$minArgs} argument(s), {$actualArgCount} given");
         }
@@ -3904,7 +3958,7 @@ class CompilerBase implements PropertyAccessContext
                     if ($this->classDef?->nativeObject) {
                         $this->fatalError($expr, 'Native classes do not support `new static()`');
                     }
-                    $cePtr = Symbol::getCalledCe();
+                    $cePtr = $this->getCalledCeExpr();
                 } else {
                     if ($className === 'self') {
                         $className = $this->getFullClassName();
@@ -4102,7 +4156,7 @@ class CompilerBase implements PropertyAccessContext
             if (!$this->classDef) {
                 $this->fatalError($class, 'Cannot use "static" outside a class');
             }
-            return Symbol::getCalledCe();
+            return $this->getCalledCeExpr();
         } else {
             $className = $this->getNamespacedClassName($className);
         }
@@ -4367,6 +4421,7 @@ class CompilerBase implements PropertyAccessContext
         if ($op === self::OP_REFVAL) {
             $this->assertNativeArrayAccessReferenceForbidden($node);
             $this->assertNativeObjectReferenceForbidden($node, $node);
+            $this->assertVariableReferenceStorage($node, $node);
         }
         if ($node instanceof Expr\ArrayDimFetch
             && $this->isNativeObjectClass($this->detectClassOfExpr($node->var))
@@ -4378,6 +4433,25 @@ class CompilerBase implements PropertyAccessContext
             if ($nativePresence !== null) {
                 return $nativePresence;
             }
+        }
+        if ($op === self::OP_ISSET
+            && $node instanceof Expr\ArrayDimFetch
+            && $node->dim !== null
+            && $node->var instanceof Expr\StaticPropertyFetch
+            && $this->detectTypeOfExpr($node->var) === Type::ARRAY
+        ) {
+            // A single offset on a statically known array property needs no
+            // materialized operation chain. The TypePHP array helper reads the
+            // element directly and still applies isset's null semantics. Keep
+            // the general walker for deeper/dynamic chains.
+            $array = $this->parseStaticPropertyFetch($node->var);
+            $key = $this->parseIdentifier($node->dim);
+            if ($getValue) {
+                $result = $this->addTmpVar(Type::VAR);
+                $node->setAttribute('chainOpResult', $result);
+                return 'typephp_array_isset(' . $array . ', ' . $key . ', &' . $result . ')';
+            }
+            return 'typephp_array_isset(' . $array . ', ' . $key . ')';
         }
         // The TypePHP compiler disallows operating on undefined variables;
         // in PHP, isset($var) may be used with an undefined $var.
@@ -4665,6 +4739,10 @@ class CompilerBase implements PropertyAccessContext
     protected function detectFuncCallReturnType(string $name): string
     {
         $name = ltrim($name, '\\');
+        $config = $this->getFuncCallConfig()[$name] ?? null;
+        if (is_array($config) && isset($config['returnType'])) {
+            return $config['returnType'];
+        }
         $returnType = Reflection::getFunctionReturnType($name);
         if ($returnType !== null) {
             return $this->getTypeFromZendType($returnType);
@@ -4682,16 +4760,6 @@ class CompilerBase implements PropertyAccessContext
         return Type::VAR;
     }
 
-    protected function genObjvalCall(Expr\FuncCall $expr): string
-    {
-        if (count($expr->args) !== 2) {
-            $this->fatalError($expr, 'objval() requires exactly 2 arguments');
-        }
-        $receiver = $this->parseExpr($expr->args[0]->value);
-        $className = $this->resolveClassNameArg($expr->args[1]->value);
-        return 'php::toObject(' . $receiver . ', ' . $this->getClassEntryPtr($className) . ')';
-    }
-
     protected function identifierToStr(NodeAbstract $node, bool $require = true, bool $literal = false): string
     {
         $id = $this->parseIdentifier($node);
@@ -4704,7 +4772,7 @@ class CompilerBase implements PropertyAccessContext
         if ($id === 'self') {
             $id = $this->getFullClassName();
         } elseif ($id === 'static') {
-            return Symbol::getCalledClass();
+            return $this->getCalledClassExpr();
         }
         if ($this->isNameExpr($node) or $this->isIdExpr($node)) {
             return $literal ? $this->getLiteralString($id) : $this->genCharPtr($id, true);
@@ -4953,7 +5021,9 @@ class CompilerBase implements PropertyAccessContext
         if ($toType === Type::VAR or $fromType === Type::VAR) {
             return true;
         }
-        // References currently carry no type information, so treat them as var.
+        $toType = Type::getReferencedType($toType);
+        $fromType = Type::getReferencedType($fromType);
+        // Dynamic references carry no compile-time target type, so treat them as var.
         if ($toType === Type::REF or $fromType === Type::REF) {
             return true;
         }
@@ -4976,6 +5046,29 @@ class CompilerBase implements PropertyAccessContext
             $varName = '`$' . $this->parseIdentifier($left) . '`';
         }
         $this->fatalError($left, "Cannot re-assign $varName from `{$fromType}` to `{$toType}`");
+    }
+
+    protected function checkTypedReferenceAssignExpr(
+        NodeAbstract $left,
+        string $referenceType,
+        string $fromType,
+    ): void {
+        $targetType = Type::getReferencedType($referenceType);
+        $fromType = Type::getReferencedType($fromType);
+        if ($fromType === Type::VAR || $fromType === Type::REF) {
+            return;
+        }
+        $compatible = $targetType === Type::FLOAT
+            ? ($fromType === Type::FLOAT || $fromType === Type::INT)
+            : $fromType === $targetType;
+        if ($compatible) {
+            return;
+        }
+
+        $varName = $this->isVarExpr($left)
+            ? '`$' . $this->parseIdentifier($left) . '`'
+            : 'typed reference';
+        $this->fatalError($left, "Cannot re-assign {$varName} from `{$fromType}` to `{$targetType}`");
     }
 
     /**
@@ -5100,6 +5193,9 @@ class CompilerBase implements PropertyAccessContext
     {
         $code = '';
         foreach ($localVars as $name => $type) {
+            if (isset($this->context->nativeLocalClosures[$name])) {
+                continue;
+            }
             if (isset($this->context->arguments[$name])) {
                 continue;
             }
@@ -5191,6 +5287,16 @@ class CompilerBase implements PropertyAccessContext
                 . $this->getMethodPtr($this->getFullClassName(), $this->methodDef->name)
                 . ', this_);' . PHP_EOL;
         }
+        if ($this->context->needsCalledCe) {
+            $code .= $this->getIndent()
+                . 'zend_class_entry *const _typephp_called_ce = typephp_get_called_ce(this_);'
+                . PHP_EOL;
+        }
+        if ($this->context->needsCalledClass) {
+            $code .= $this->getIndent()
+                . 'const php::Str _typephp_called_class = typephp_get_called_class(_typephp_called_ce);'
+                . PHP_EOL;
+        }
         $code .= $this->genLocalVarDecl($this->context->localVars);
         foreach ($this->context->classEntryPtrs as $className => $entry) {
             $code .= $this->getIndent() . 'zend_class_entry *' . $entry . ' = '
@@ -5238,13 +5344,11 @@ class CompilerBase implements PropertyAccessContext
                 $code .= $this->getIndent() . $info['type'] . ' &' . $name . ' = ' . $zvalMacro . '(' . $info['getter'] . '.unwrap_ptr());' . PHP_EOL;
             }
         }
-        foreach ($this->context->staticPropRefs as $name => $info) {
-            $getter = Symbol::getStaticProperty() . '(' . $info['classPtr'] . ', ' . $info['offsetExpr'] . ')';
-            if (($info['kind'] ?? 'zval') === 'var') {
-                $code .= $this->getIndent() . Type::VAR . ' ' . $name . ' = ' . $getter . ';' . PHP_EOL;
-            } else {
-                $code .= $this->getIndent() . 'zval *' . $name . ' = ' . $getter . '.unwrap_ptr();' . PHP_EOL;
-            }
+        foreach ($this->context->staticPropRefs as $info) {
+            $code .= $this->getIndent() . 'zval *' . $info['name'] . ' = nullptr;' . PHP_EOL;
+            $code .= $this->getIndent() . 'const auto ' . $info['accessorName'] . ' = [&]() {'
+                . ' return typephp_get_static_property_cached(' . $info['name'] . ', [&]() {'
+                . ' return ' . $info['resolver'] . '; }); };' . PHP_EOL;
         }
         return $code;
     }

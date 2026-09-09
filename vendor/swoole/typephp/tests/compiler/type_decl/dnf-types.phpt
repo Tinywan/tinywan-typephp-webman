@@ -89,7 +89,7 @@ function main(): void
     $box->value = $both;
     var_dump($box->value instanceof DnfBoth);
 
-    $dynamicBox = any(new DnfBox($fallback));
+    $dynamicBox = std::any(new DnfBox($fallback));
     dnf_dynamic_property_write($dynamicBox, $both);
     var_dump($dynamicBox->value instanceof DnfBoth);
     echo (new ReflectionProperty(DnfBox::class, 'value'))->getType(), "\n";
@@ -106,7 +106,7 @@ function main(): void
         return $value;
     };
 
-    $invalid = any(new DnfOnlyLeft());
+    $invalid = std::any(new DnfOnlyLeft());
     try {
         dnf_label($invalid);
     } catch (TypeError $error) {

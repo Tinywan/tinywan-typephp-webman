@@ -2,8 +2,6 @@
 call overridden method on sibling subclasses through parent parameter
 --FILE--
 <?php
-use native_types;
-
 class Base
 {
     public function name(): string

@@ -86,10 +86,19 @@ trait AstNodeType
         return $expr instanceof Expr\FuncCall;
     }
 
-    /** @phpstan-assert-if-true Expr\FuncCall $expr */
-    protected function isRefvalCall(Node $expr): bool
+    protected function isStdRefCall(Node $expr): bool
     {
-        return $this->isFuncCallExpr($expr) and $this->isNameExpr($expr->name) and $expr->name->toString() === 'refval';
+        return $this->isStaticCall($expr)
+            && $this->isStdClassExpr($expr->class)
+            && $this->isIdExpr($expr->name)
+            && strtolower($expr->name->toString()) === 'ref';
+    }
+
+    protected function isStdClassExpr(Node $expr): bool
+    {
+        return $this->isNameExpr($expr)
+            && !$expr instanceof Node\Name\Relative
+            && strtolower(ltrim($expr->toString(), '\\')) === 'std';
     }
 
     /** @phpstan-assert-if-true Expr\MethodCall $expr */

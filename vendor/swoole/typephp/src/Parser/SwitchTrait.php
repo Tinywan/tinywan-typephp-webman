@@ -38,11 +38,29 @@ trait SwitchTrait
         $var_def .= $type . ' ' . $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
         $var_def .= $this->formatCapturedStmtLines($condAfterStmts);
 
-        // Save the scope; switch parsing may fail partway and add variables in the process, so it must be reset
-        $localVars = $this->context->localVars;
-        $code      = $this->parseBeforeStmtLines() . PHP_EOL;
+        $code = $this->parseBeforeStmtLines() . PHP_EOL;
 
         if ($type === Type::INT or $type === Type::BOOL) {
+            // Check all labels before lowering any bodies. C++ requires integer
+            // labels; for bool subjects, only 0 and 1 preserve PHP comparison.
+            $nativeCaseValues = [];
+            foreach ($v->cases as $case) {
+                $caseCond = $case->cond;
+                if ($caseCond === null) {
+                    continue;
+                }
+                if (!$caseCond instanceof Node\Scalar\Int_
+                    || ($type === Type::BOOL && $caseCond->value !== 0 && $caseCond->value !== 1)
+                ) {
+                    goto _fail;
+                }
+                if (isset($nativeCaseValues[$caseCond->value])) {
+                    // PHP permits duplicate case values and selects the first
+                    // matching label, while C++ rejects duplicate case labels.
+                    goto _fail;
+                }
+                $nativeCaseValues[$caseCond->value] = true;
+            }
             $code .= 'do {' . PHP_EOL;
             $this->indentLevel++;
             $code .= $this->getIndent() . 'switch (' . $tmp_var . ') {' . PHP_EOL;
@@ -51,12 +69,6 @@ trait SwitchTrait
                 if (empty($case->cond)) {
                     $code .= $this->getIndent() . 'default: {' . PHP_EOL;
                 } else {
-                    $condType = $case->cond->getType();
-                    if ($condType !== 'Scalar_Int' and $condType !== 'Scalar_Float') {
-                        $this->context->localVars = $localVars;
-                        $this->indentLevel -= 2;
-                        goto _fail;
-                    }
                     $code .= $this->getIndent() . 'case ' . $this->parseScalar($case->cond) . ': {' . PHP_EOL;
                 }
                 $code .= $this->parseBlockStmts($case->stmts);
@@ -112,8 +124,15 @@ trait SwitchTrait
             $caseConds = [];
             $hasDefault = false;
         }
+        if (!empty($caseConds) || $hasDefault) {
+            $target = count($caseGroups);
+            if ($hasDefault) {
+                $defaultTarget = $target;
+            }
+            $caseGroups[] = [$caseConds, $hasDefault, []];
+        }
 
-        foreach ($caseGroups as $target => [$conds]) {
+        foreach ($caseGroups as $groupIndex => [$conds]) {
             if (!empty($conds)) {
                 $groupMatched = $this->genTmpVarName();
                 $code .= $this->getIndent() . 'bool ' . $groupMatched . ' = false;' . PHP_EOL;
@@ -135,12 +154,15 @@ trait SwitchTrait
                         $code .= $this->formatCapturedStmtLines($caseAfterStmts);
                         $caseCondExpr = $caseTmpVar;
                     }
+                    if ($type === Type::BOOL) {
+                        $caseCondExpr = 'php::toBool(' . $caseCondExpr . ')';
+                    }
                     $code .= $this->getIndent() . $groupMatched . ' = php::equals(' . $tmp_var . ', ' . $caseCondExpr . ');' . PHP_EOL;
                     $code .= $this->getIndent() . '}' . PHP_EOL;
                 }
                 $code .= $this->getIndent() . 'if (' . $groupMatched . ') {' . PHP_EOL;
                 $code .= $this->getIndent() . $switchMatched . ' = true;' . PHP_EOL;
-                $code .= $this->getIndent() . $switchTarget . ' = ' . $target . ';' . PHP_EOL;
+                $code .= $this->getIndent() . $switchTarget . ' = ' . $groupIndex . ';' . PHP_EOL;
                 $code .= $this->getIndent() . '}' . PHP_EOL;
             }
         }
@@ -150,20 +172,12 @@ trait SwitchTrait
             $code .= $this->getIndent() . '}' . PHP_EOL;
         }
 
-        foreach ($caseGroups as $target => [, , $stmts]) {
-            $code .= $this->getIndent() . 'if (' . $switchTarget . ' == ' . $target . ') {' . PHP_EOL;
+        foreach ($caseGroups as $groupIndex => [, , $stmts]) {
+            $code .= $this->getIndent() . 'if (' . $switchTarget . ' == ' . $groupIndex . ') {' . PHP_EOL;
             $this->indentLevel++;
             $code .= $this->parseStmts($stmts);
             $this->indentLevel--;
             $code .= $this->getIndent() . '}' . PHP_EOL;
-        }
-        if (!empty($caseConds) || $hasDefault) {
-            // PHP allows a trailing label without statements; it has no code to execute.
-            if ($hasDefault && $defaultTarget === null) {
-                $code .= $this->getIndent() . 'if (!' . $switchMatched . ') {' . PHP_EOL;
-                $code .= $this->getIndent() . $switchTarget . ' = -1;' . PHP_EOL;
-                $code .= $this->getIndent() . '}' . PHP_EOL;
-            }
         }
         $this->indentLevel--;
         $code .= $this->getIndent() . '} while (0);';

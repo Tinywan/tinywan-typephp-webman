@@ -1,7 +1,6 @@
 #!/usr/bin/env php
 <?php
 
-declare(strict_types=1);
 
 const DEFAULT_TEST_DIR = 'tests';
 

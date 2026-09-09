@@ -2,9 +2,6 @@
 Decimal: pow
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::decimal("2");
     var_dump($a->pow(std::decimal("3"))->toString());

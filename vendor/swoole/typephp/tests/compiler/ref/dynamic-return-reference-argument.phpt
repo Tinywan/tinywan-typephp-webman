@@ -27,7 +27,8 @@ function &test1()
 
 function &test2()
 {
-    static $value = 0;
+    static $value;
+    $value ??= 0;
     ++$value;
     return $value;
 }
@@ -40,7 +41,8 @@ function value_order(string $label): string
 
 function &ref_order(string $label)
 {
-    static $value = 42;
+    static $value;
+    $value ??= 42;
     echo "$label\n";
     return $value;
 }

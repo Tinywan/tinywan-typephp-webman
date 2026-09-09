@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 function main(int $argc, array $argv): void
 {
     $u = (int)$argv[2];

@@ -2,8 +2,6 @@
 global vars with native types
 --FILE--
 <?php
-use native_types;
-
 function increment_global_int(int $n): void {
     global $global_int;
     for ($i = 0; $i < $n; $i++) {

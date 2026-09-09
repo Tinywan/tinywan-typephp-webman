@@ -4,12 +4,12 @@ SSA narrowing: mixed int/float types stay Var
 <?php
 function main(): void {
     // Mixed definitions: int then float → stays Var
-    $a = 10;
+    $a = std::any(10);
     $a = 3.14;
     var_dump($a);
 
     // Float then int → stays Var
-    $b = 2.5;
+    $b = std::any(2.5);
     $b = 99;
     var_dump($b);
 

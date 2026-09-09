@@ -8,22 +8,29 @@
 
 namespace php::fn {
 
-String date(const String &format, const Variant &timestamp) {
+static String format_date(const String &format, const Variant &timestamp, bool localtime) {
     time_t ts;
     if (timestamp.isNull()) {
         ts = php_time();
     } else {
         ts = static_cast<time_t>(timestamp.toInt());
     }
-    zend_string *result = php_format_date(format.data(), format.length(), ts, true);
+    zend_string *result = php_format_date(format.data(), format.length(), ts, localtime);
     if (!result) {
         return String();
     }
     return String(result, Ctor::Move);
 }
 
+String date(const String &format, const Variant &timestamp) {
+    return format_date(format, timestamp, true);
+}
+
+String gmdate(const String &format, const Variant &timestamp) {
+    return format_date(format, timestamp, false);
+}
+
 Variant strtotime(const String &datetime, const Variant &baseTimestamp) {
-    zend_long ts = 0;
     if (!baseTimestamp.isNull()) {
         zend_long base = static_cast<zend_long>(baseTimestamp.toInt());
         zend_long result = php_parse_date(datetime.data(), &base);

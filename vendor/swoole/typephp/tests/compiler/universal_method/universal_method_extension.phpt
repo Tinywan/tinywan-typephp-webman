@@ -3,8 +3,6 @@ Universal methods provided by MethodsFor classes
 --FILE--
 <?php
 
-use native_types;
-
 #[MethodsFor(Type::Int)]
 final class IntExtensions
 {

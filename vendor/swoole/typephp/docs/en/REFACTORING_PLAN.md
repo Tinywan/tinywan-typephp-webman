@@ -7,7 +7,7 @@
 The current core classes of the AOT compiler carry too many responsibilities. In particular, classes such as `CompilerBase` and `Translator` simultaneously contain AST dispatch, type inference, property access resolution, call resolution, code generation, diagnostics, and context state maintenance. As functionality continues to grow, this structure causes the following problems:
 
 - Insufficient encapsulation: modifying one semantic point easily affects multiple code paths.
-- Insufficient code reuse: similar logic is repeatedly implemented across normal properties, static properties, nullsafe, assignment, isset/empty/refval, and other paths.
+- Insufficient code reuse: similar logic is repeatedly implemented across normal properties, static properties, nullsafe, assignment, isset/empty/`std::ref()`, and other paths.
 - Compile-time checks are prone to bypass paths: for example, some dynamic fallbacks do not reuse the static resolver.
 - Individual classes are too large, and review, test localization, and long-term maintenance costs keep rising.
 - Design boundaries are unclear: the type system, symbol resolution, property access, and call generation are too deeply coupled.
@@ -143,7 +143,7 @@ Paths that need unified coverage:
 - `static::$prop`
 - `isset($obj->prop)`
 - `empty($obj->prop)`
-- `refval($obj->prop)`
+- `std::ref($obj->prop)`
 - normal assignment, compound assignment, increment/decrement, unset.
 
 It is recommended to start from this module as the first priority, because recent problems are concentrated in property access and visibility bypass, and the test boundaries are relatively clear.
@@ -169,7 +169,7 @@ Recommended interfaces:
 Design requirements:
 
 - When the parameter information of a static function or built-in function is clear, references can be automatically converted.
-- For dynamic calls, closures, and cases where by-ref parameter information cannot be obtained at compile time, an explicit `refval()` must be required.
+- For dynamic calls, closures, and cases where by-ref parameter information cannot be obtained at compile time, an explicit `std::ref()` must be required.
 - When using unpack with trailing named args appended, it should degrade to a dynamic call and must not go through a native call.
 
 ### 5. ExpressionEmitter
@@ -255,7 +255,7 @@ Current progress:
 Status:
 
 - Phase 1 is essentially wrapped up. Unless property read resolver bypass or behavior regression is found later, the scope of Phase 1 will not be further expanded.
-- Phase 2 has begun; assignment, compound assignment, inc/dec, unset, and refval paths related to property writes still need to be further unified.
+- Phase 2 has begun; assignment, compound assignment, inc/dec, unset, and `std::ref()` paths related to property writes still need to be further unified.
 
 Verification:
 
@@ -297,7 +297,7 @@ Current progress:
 - `getProperty()` / `setProperty()` generation for dynamic object properties has been converged into the `emitDynamicPropertyRead()` / `emitDynamicPropertyWrite()` helpers; normal dynamic property assignment, compound assignment, and increment/decrement now reuse this entry point.
 - The dynamic property path of compound assignment has been connected to `preparePropertyWriteTarget()`, uniformly completing property write target preparation and static checks first.
 - `PropertyWriteTarget` has begun carrying the object/property expressions of safe dynamic property write targets; normal dynamic property assignment, compound assignment, and increment/decrement now prefer emitting code through target-level read/write helpers.
-- Dynamic property `unset`, property array dimension writes, and safe object property reference paths in reference arguments/refval/reference assignment have begun reusing target-level unset/ref helpers.
+- Dynamic property `unset`, property array dimension writes, and safe object property reference paths in reference arguments/`std::ref()`/reference assignment have begun reusing target-level unset/ref helpers.
 - Target/ref generation for object property reference expressions has been converged into `emitDynamicPropertyFetchRef()`; the unused old static property assignment entry point has been deleted, and static property assignment continues through the unified assignment target path.
 - The dynamic object/property fields of `PropertyWriteTarget` have been encapsulated as getters; property array dimension writes have been connected to target-level append/update emitters.
 - Established the `emitDynamicPropertyFetchRead/Write/Unset/AppendArray/UpdateArray()` wrapper layer; callers only pass in the property access AST and an optional target, and `CompilerBase` uniformly selects the target path or the old fallback path.

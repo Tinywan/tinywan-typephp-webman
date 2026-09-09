@@ -140,8 +140,14 @@ chmod +x start.sh webman-server.bin
 
 | 官方 Docker 镜像 | 编译模式 | 产物形态 | 说明 |
 | :--- | :--- | :--- | :--- |
-| [`tinywan/typephp-linux-x64:v0.7.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64) | 动态链接 (glibc) | 便携目录 (`dist/`) | 内置 TypePHP v0.7.0、预编译 `libphpx.so`，一键生成 `dist/webman-server.bin` |
-| [`tinywan/typephp-linux-x64-static:v0.7.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64-static) | 全静态链接 (musl) | 单可执行文件 (`dist/`) | 内置 TypePHP v0.7.0、预编译 Musl SDK，一键生成全静态 `dist/webman-server` |
+| [`tinywan/typephp-linux-x64:v0.8.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64) | 动态链接 (glibc) | 便携目录 (`dist/`) | 内置 TypePHP v0.8.0、预编译 `libphpx.so`，一键生成 `dist/webman-server.bin` |
+| [`tinywan/typephp-linux-x64-static:v0.8.0`](https://hub.docker.com/r/tinywan/typephp-linux-x64-static) | 全静态链接 (musl) | 单可执行文件 (`dist/`) | 内置 TypePHP v0.8.0、预编译 Musl SDK，一键生成全静态 `dist/webman-server` |
+
+#### Docker 镜像自动发布
+
+推送与 `composer.lock` 中 `swoole/typephp` 版本完全一致的 `vMAJOR.MINOR.PATCH`（可带预发布后缀）标签，会自动发布动态和静态镜像。也可以在 GitHub Actions 的 **Publish Docker Images** 手动运行：`version` 必须与 `composer.lock` 精确一致，`push` 可选择是否推送。
+
+仓库需配置 `DOCKER_USERNAME` 与 `DOCKER_PASSWORD` 两个 Actions secrets。发布仅构建 `linux/amd64`，每个镜像只发布精确版本标签和 `latest`，不发布其他浮动语义标签。
 
 #### 单行命令直接编译
 
@@ -154,31 +160,31 @@ chmod +x start.sh webman-server.bin
 **1. 编译当前项目 (自动探测配置并输出)**
 ```bash
 # 动态便携包（输出至本地 dist/ 目录）
-docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.8.0
 
 # 全静态单文件（输出至本地 dist/webman-server）
-docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64-static:v0.7.0
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64-static:v0.8.0
 ```
 
 **2. 零配置编译任意单文件 PHP 脚本**
 镜像具备智能推导能力，无需预先创建 `project.yml`，只要目录下存在 `main.php`、`index.php` 或直接指定文件名即可自动编译：
 ```bash
 # 挂载目录自动探测 index.php / main.php 生成 app 二进制：
-docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.8.0
 
 # 明确指定编译某个 PHP 脚本：
-docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 your_script.php
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.8.0 your_script.php
 ```
 
 **3. 直接使用容器运行编译后的二进制程序**
 镜像内已预置并注册完整的动态链接运行时库（`libphpx.so` 等），可直接透传运行编译产物：
 ```bash
-docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 ./app
+docker run --rm -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.8.0 ./app
 ```
 
 **4. 调试模式：进入容器命令行交互**
 ```bash
-docker run --rm -it -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.7.0 bash
+docker run --rm -it -v "${PWD}:/app" tinywan/typephp-linux-x64:v0.8.0 bash
 ```
 
 #### 通过 Docker Compose 编排编译

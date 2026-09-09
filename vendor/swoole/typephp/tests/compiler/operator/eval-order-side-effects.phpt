@@ -2,7 +2,6 @@
 Call arguments and concat operands follow Zend's operand read order around side effects
 --FILE--
 <?php
-declare(strict_types=1);
 
 function pair(int $a, int $b): string
 {

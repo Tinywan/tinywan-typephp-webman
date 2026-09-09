@@ -2,7 +2,6 @@
 #include "phpx_func.h"
 #include "phpx_helper.h"
 
-#include "const/json.h"
 #include <cstring>
 
 using namespace php;
@@ -16,6 +15,38 @@ static int append_by_value_and_return_refcount(Reference ref) {
 
 static bool ffi_cdata_is_available() {
     return eval("return extension_loaded('ffi') && ini_get('ffi.enable') === '1';").toBool();
+}
+
+TEST(variant, destructor_preserves_owned_and_borrowed_values) {
+    Variant text("a dynamically allocated string");
+    const auto refs = text.getRefCount();
+    {
+        Variant copy(text);
+        ASSERT_EQ(text.getRefCount(), refs + 1);
+    }
+    ASSERT_EQ(text.getRefCount(), refs);
+    {
+        Variant borrowed(text.ptr(), Ctor::Indirect);
+    }
+    ASSERT_EQ(text.getRefCount(), refs);
+    ASSERT_STREQ(text.toCString(), "a dynamically allocated string");
+
+    eval(R"(
+        $GLOBALS['phpx_release_count'] = 0;
+        class PhpxDestructorProbe {
+            public function __destruct() { ++$GLOBALS['phpx_release_count']; }
+        }
+    )");
+    {
+        Variant object = eval("return new PhpxDestructorProbe();");
+        {
+            Array holder;
+            holder.append(object);
+        }
+        ASSERT_EQ(eval("return $GLOBALS['phpx_release_count'];").toInt(), 0);
+        Variant reference = object.toReference();
+    }
+    ASSERT_EQ(eval("return $GLOBALS['phpx_release_count'];").toInt(), 1);
 }
 
 TEST(variant, nullptr_assignment) {
@@ -1051,6 +1082,20 @@ TEST(variant, offsetGet2) {
     ASSERT_EQ(v.offsetGet(sk).toInt(), 2494);
     v.offsetUnset(sk);
     ASSERT_EQ(v.offsetGet(sk).toInt(), 0);
+}
+
+TEST(variant, string_item_key_avoids_key_refcount_churn) {
+    Array values;
+    values.set("name", 42);
+    String key(std::string("name"));
+    const int refcount = key.getRefCount();
+
+    ASSERT_EQ(values.item(key).toInt(), 42);
+    ASSERT_EQ(key.getRefCount(), refcount);
+
+    values.item(key, true) = 43;
+    ASSERT_EQ(values.item(key).toInt(), 43);
+    ASSERT_EQ(key.getRefCount(), refcount);
 }
 
 TEST(variant, offsetGet3) {

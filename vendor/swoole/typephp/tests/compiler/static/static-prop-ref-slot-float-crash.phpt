@@ -2,8 +2,6 @@
 Static float property native slot becomes invalid after dynamic reference binding
 --FILE--
 <?php
-use native_types;
-
 class StaticFloatRefSlotCrash {
     public static float $f = 1.5;
 }

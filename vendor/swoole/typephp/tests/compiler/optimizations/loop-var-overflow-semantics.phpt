@@ -1,7 +1,8 @@
 --TEST--
-Loop var optimizer preserves PHP overflow-to-float semantics without native_types
+Loop var optimizer preserves PHP overflow-to-float semantics with varint_types
 --FILE--
 <?php
+use varint_types;
 function main(): void {
     $value = 0;
 

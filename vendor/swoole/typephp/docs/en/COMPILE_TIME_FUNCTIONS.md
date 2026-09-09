@@ -2,24 +2,16 @@
 
 This document records the compile-time functions, keyword methods, and related construction entry points that are specific to the AOT compiler. They are not part of standard PHP syntax, and an ordinary PHP runtime can only rely on the compatibility stubs provided by `src/polyfills.php`.
 
-## Core compile-time functions
+## Global function names
 
-There are currently 5 core global compile-time functions.
+TypePHP does not reserve global function names for compiler directives. The
+compile-time API occupies two global class symbols: `Type::*` only describes
+types for extension-method metadata, while `std::*` contains TypePHP built-in
+functions. Object type assertions use the `toObject()` keyword method.
 
-| Name | Parameters | Purpose | Current primary handling location |
-| --- | --- | --- | --- |
-| `any($value)` | 1 | Degrades the expression to `mixed/any`, preventing further processing as a static native/object type. | General function-call expression entry. |
-| `refval($target)` | 1 | Explicitly passes a variable, array element, or object property by reference to a dynamic call or a call whose reference parameter cannot be statically identified. | Argument parsing, dynamic calls, SSA/optimizer reference escape analysis. |
-| `objval($value, ClassName::class or 'ClassName')` | 2 | Tells the compiler that `$value` is an object of the specified class, and generates the `php::toObject(..., target_ce)` runtime fallback check. | Function-call resolution, object type inference. |
-| `expected($condition)` | 1 | Marks the condition as usually true, generating the Zend `EXPECTED(...)` branch prediction macro. | General function-call expression entry. |
-| `unexpected($condition)` | 1 | Marks the condition as usually false, generating the Zend `UNEXPECTED(...)` branch prediction macro. | General function-call expression entry. |
-
-Constraints:
-
-- `refval()` only accepts variables, array elements, or object properties.
-- The second parameter of `objval()` must be a compile-time-resolvable class-name string or `ClassName::class`.
-- `any()` can be used in any expression position; it directly expands its single argument at compile time without generating a runtime function call.
-- `expected()` / `unexpected()` accept exactly one non-expanded argument and return bool; they are usually used in `if`, `elseif`, and loop conditions, and do not change the argument's evaluation count or true/false semantics.
+The `std` / `Type` class names and `std` method names are case-insensitive, as
+PHP class and method names are. `Type::*` members are class constants, whose
+names remain case-sensitive.
 
 ## Keyword methods
 
@@ -27,8 +19,8 @@ There are currently 12 built-in keyword methods.
 
 | Name | Equivalent behavior | Description |
 | --- | --- | --- |
-| `toAny()` | `any($receiver)` | Returns the receiver itself, but with the type degraded to `mixed/any`. |
-| `toRef()` | `refval($receiver)` | Returns a reference to the receiver; parameter restrictions are the same as `refval()`. |
+| `toAny()` | `std::any($receiver)` | Returns the receiver itself, but with the type degraded to `mixed/any`. |
+| `toRef()` | `std::ref($receiver)` | Returns a reference to the receiver; parameter restrictions are the same as `std::ref()`. |
 | `toObject()` | `php::toObject($receiver)` | May take a target-class parameter, performing object conversion/checking. |
 | `toInt()` | `php::toInt($receiver)` | Converts to a native int expression. |
 | `toFloat()` | `php::toFloat($receiver)` | Converts to a native float expression. |
@@ -46,9 +38,9 @@ Constraints:
 - `toRef()` only applies to receivers that can take references.
 - Keyword methods take precedence over ordinary methods and universal method dispatch.
 
-## `std::` compile-time construction entry points
+## `std::` compile-time entry points
 
-There are currently 10 `std::` compile-time construction entry points.
+There are currently 14 `std::` compile-time entry points.
 
 | Name | Purpose | Main limitation |
 | --- | --- | --- |
@@ -58,6 +50,10 @@ There are currently 10 `std::` compile-time construction entry points.
 | `std::bigInt($value)` | Constructs a BigInt. | Implicit construction from a float variable is not allowed. |
 | `std::decimal($value)` | Constructs a Decimal. | A float variable must be converted via string or integer; float literals are handled per the original literal. |
 | `std::bigFloat($value)` | Constructs a BigFloat. | Requires 1 value parameter. |
+| `std::any([$value])` | Degrades the expression to `mixed/any`; when omitted, the value defaults to `null`. | Native objects and native-object std containers cannot escape through it. |
+| `std::ref($target)` | Explicitly passes a target by reference. | Only accepts variables, array elements, or object properties and is only valid as a call argument wrapper. |
+| `std::expected($condition)` | Marks a condition as usually true. | Accepts exactly one non-unpacked argument and returns bool. |
+| `std::unexpected($condition)` | Marks a condition as usually false. | Accepts exactly one non-unpacked argument and returns bool. |
 | `std::array($type, $size[, ...$sizes])` | Constructs a fixed-size std array. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::vector($type[, $size])` | Constructs a std vector. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::map($keyType, $valueType)` | Constructs a std map. | Can only be used in the top-level scope of the variable's first assignment. |
@@ -76,7 +72,7 @@ There are currently 4 Std container conversion keyword methods.
 
 ## Mechanisms not counted in this list
 
-- `$array->any()` is a universal method that maps to PHP `array_any()`, not the `any()` compile-time function.
+- `$array->any()` is a universal method that maps to PHP `array_any()`, not the `std::any()` compile-time function.
 - `Type::*` are compile-time type-description constants, not functions.
 - keyword extension methods are a user-defined extension method mechanism and are not part of the fixed built-in compile-time function list.
 
@@ -84,13 +80,13 @@ There are currently 4 Std container conversion keyword methods.
 
 Compile-time functions should be usable in any legal expression position and maintain consistent semantics across all paths:
 
-- `any()` is already handled uniformly at the ordinary function-call expression entry; assignments, parameters, return values, array elements, and operator subexpressions share the same semantics.
-- `refval()` / `toRef()` have many special cases in argument parsing and dynamic call paths and should later be unified into a single "reference-wrapping expression" resolution entry.
-- `objval()` is currently recognized through the function-call resolution and type-inference paths and is relatively centralized.
-- `expected()` / `unexpected()` generate `EXPECTED(...)` / `UNEXPECTED(...)` respectively at the ordinary function-call entry and produce no PHP runtime function call.
+- `std::any()` is handled through one lowering entry; assignments, parameters, return values, array elements, and operator subexpressions share the same semantics.
+- `std::ref()` / `toRef()` share one reference-wrapper recognizer across argument parsing, SSA, and optimizer paths.
+- `toObject(ClassName::class)` replaces the removed global `objval()` helper and provides object type assertion through the existing keyword-method path.
+- `std::expected()` / `std::unexpected()` generate `EXPECTED(...)` / `UNEXPECTED(...)` respectively and produce no PHP runtime function call.
 
 Future refactoring goals:
 
 - Establish a unified `CompileTimeFunctionResolver` or equivalent module.
 - Reuse the same compile-time function metadata in `parseExpr()` / `detectTypeOfExpr()` / `detectClassOfExpr()` / argument parsing paths.
-- Continue unifying the behavior of `refval()` and `objval()` across different expression paths.
+- Continue unifying reference-wrapper behavior across different expression paths.

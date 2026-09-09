@@ -1,8 +1,7 @@
 --TEST--
-strict_types=1 with typed functions
+TypePHP applies strict types without a declare directive
 --FILE--
 <?php
-declare(strict_types=1);
 
 function add(int $a, int $b): int {
     return $a + $b;

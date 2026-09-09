@@ -2,6 +2,7 @@
 Dynamic local compound assignment preserves PHP integer overflow promotion
 --FILE--
 <?php
+use varint_types;
 function main(): void {
     $add = PHP_INT_MAX;
     $add += 1;

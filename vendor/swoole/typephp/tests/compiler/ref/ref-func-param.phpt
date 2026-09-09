@@ -9,7 +9,7 @@ function test_fn(&$data)
 
 function main()
 {
-    $s = "foo";
+    $s = std::any("foo");
     test_fn($s);
     var_dump($s);
 }

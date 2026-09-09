@@ -2,7 +2,6 @@
 Type Declarations - Strict and weak typing modes
 --FILE--
 <?php
-declare(strict_types=1);
 
 // Test callable type
 function apply_callable(callable $callback, int $value): int {

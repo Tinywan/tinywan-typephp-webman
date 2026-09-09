@@ -6,7 +6,7 @@ static closure captures values and references through use
 function main(): void
 {
     $base = 10;
-    $log = [];
+    $log = std::any([]);
 
     $copy = static function (int $value) use ($base): int {
         return $base + $value;

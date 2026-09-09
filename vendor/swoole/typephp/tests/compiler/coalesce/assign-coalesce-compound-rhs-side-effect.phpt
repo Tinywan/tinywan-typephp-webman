@@ -2,7 +2,6 @@
 ??= does not evaluate a compound side-effecting RHS when the target is set
 --FILE--
 <?php
-declare(strict_types=1);
 
 function sideEffect(): int
 {

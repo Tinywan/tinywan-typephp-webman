@@ -8,7 +8,7 @@ class TestArrayMerge {
 }
 function main() {
     $o = new TestArrayMerge;
-    $v = any(['bar']);
+    $v = std::any(['bar']);
     $array = array_merge($o->arr1, $v, $o->arr2);
     var_dump($array);
 }

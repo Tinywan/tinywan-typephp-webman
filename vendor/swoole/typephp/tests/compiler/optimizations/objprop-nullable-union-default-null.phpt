@@ -2,8 +2,6 @@
 SSA object prop: nullable and union properties stay Var with null default
 --FILE--
 <?php
-use native_types;
-
 class FlexibleDefaults {
     public ?int $nullable;
     public ?object $nullableObject;

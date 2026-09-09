@@ -2,8 +2,6 @@
 protected overridden method remains virtual through parent wrapper
 --FILE--
 <?php
-use native_types;
-
 class Base
 {
     protected function token(): string

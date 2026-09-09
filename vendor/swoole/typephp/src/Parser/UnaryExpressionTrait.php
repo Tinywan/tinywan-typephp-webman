@@ -113,7 +113,7 @@ trait UnaryExpressionTrait
         if ($type === Type::INT) {
             $value = $this->constantIntValue($expr->expr);
             if ($value === PHP_INT_MIN) {
-                if ($this->nativeTypes) {
+                if (!$this->varIntTypes) {
                     $this->fatalError(
                         $expr,
                         'Negating PHP_INT_MIN has undefined behavior in C++ native mode'

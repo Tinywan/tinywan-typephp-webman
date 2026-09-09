@@ -5,7 +5,7 @@ unset on arrays and variables
 
 function main() {
     // Unset variable
-    $a = 10;
+    $a = std::any(10);
     unset($a);
     var_dump(isset($a));
 

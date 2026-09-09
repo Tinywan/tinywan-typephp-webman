@@ -2,6 +2,7 @@
 SSA narrowing: int overflow prevention (PHP_INT_MAX)
 --FILE--
 <?php
+use varint_types;
 function main(): void {
     $a = 2;
 

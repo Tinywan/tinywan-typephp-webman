@@ -22,6 +22,29 @@ trait CompilationStateTrait
         $this->context->localVars[$name] = $type;
     }
 
+    protected function addTypedRefLocal(string $name, string $target, string $type): void
+    {
+        if (!\TypePhp\Type::isTypedRefType($type)) {
+            throw new \LogicException('Typed reference local requires a typed-ref type');
+        }
+        $root = $this->context->typedRefRoots[$target] ?? $target;
+        $this->addLocalVar($name, $type);
+        $this->context->localVarInitializers[$name] = $target;
+        $this->context->typedRefBindings[$name] = $target;
+        $this->context->typedRefRoots[$name] = $root;
+        $this->context->typedRefAliases[$root][$name] = true;
+    }
+
+    protected function isTypedRefLocal(string $name): bool
+    {
+        return isset($this->context->typedRefRoots[$name]);
+    }
+
+    protected function isTypedRefRoot(string $name): bool
+    {
+        return isset($this->context->typedRefAliases[$name]);
+    }
+
     protected function registerStdType(string $key): int
     {
         if (isset($this->stdTypeMap[$key])) {

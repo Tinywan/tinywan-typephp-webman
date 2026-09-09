@@ -13,7 +13,7 @@ class Obj
 {
     function run()
     {
-        $a = any(199);
+        $a = std::any(199);
         var_dump($a[9]);
 
     }

@@ -5,6 +5,7 @@ namespace TypePhp\Tests\Platform;
 use PHPUnit\Framework\TestCase;
 use TypePhp\Platform\Windows;
 use TypePhp\Platform\Linux;
+use TypePhp\Platform\Ios;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\Wasi;
 
@@ -20,6 +21,71 @@ class PlatformTest extends TestCase
         $this->assertSame('.a', $platform->getSharedLibraryExtension());
         $this->assertSame('LL', $platform->getIntegerLiteralSuffix());
         $this->assertSame([], $platform->getBuildLibraryWarnings('', '', 'bin'));
+    }
+
+    public function testIosTargetProperties(): void
+    {
+        $platform = new Ios();
+
+        $this->assertSame('iOS', $platform->getName());
+        $this->assertSame('', $platform->getExecutableExtension());
+        $this->assertSame('.a', $platform->getSharedLibraryExtension());
+        $this->assertSame('xcrun --sdk iphoneos clang++', $platform->getDefaultCompiler());
+        $this->assertSame([], $platform->getDefaultRpaths('/tmp/phpx', '/tmp/php'));
+        $this->assertTrue(Ios::supportsTarget('arm64-apple-ios15.0'));
+        $this->assertTrue(Ios::supportsTarget('aarch64-apple-ios'));
+        $this->assertFalse(Ios::supportsTarget('arm64-apple-darwin'));
+        $this->assertFalse(Ios::supportsTarget('x86_64-apple-ios15.0-simulator'));
+    }
+
+    public function testIosLibraryDiagnosticsUseTargetSdkPrefix(): void
+    {
+        $sdk = sys_get_temp_dir() . '/typephp-ios-sdk-' . bin2hex(random_bytes(6));
+        mkdir($sdk . '/include/php/main', 0777, true);
+        mkdir($sdk . '/include/php/TSRM', 0777, true);
+        mkdir($sdk . '/include/php/Zend', 0777, true);
+        mkdir($sdk . '/include/php/ext/date/lib', 0777, true);
+        mkdir($sdk . '/lib', 0777, true);
+        touch($sdk . '/lib/libphp.a');
+        touch($sdk . '/lib/libphpx.a');
+
+        try {
+            $platform = new Ios();
+            self::assertSame([], $platform->getBuildLibraryWarnings($sdk, '/unused/phpx-home', 'bin'));
+            self::assertSame([$sdk . '/lib'], $platform->buildPhpLibPaths($sdk));
+            self::assertSame(
+                [
+                    $sdk . '/include/php',
+                    $sdk . '/include/php/main',
+                    $sdk . '/include/php/TSRM',
+                    $sdk . '/include/php/Zend',
+                    $sdk . '/include/php/ext',
+                    $sdk . '/include/php/ext/date/lib',
+                ],
+                $platform->buildPhpIncludePaths($sdk),
+            );
+            self::assertSame(
+                [
+                    'embed' => null,
+                    'static' => $sdk . '/lib/libphp.a',
+                    'is_shared' => false,
+                ],
+                $platform->detectPhpLibs($sdk),
+            );
+        } finally {
+            unlink($sdk . '/lib/libphpx.a');
+            unlink($sdk . '/lib/libphp.a');
+            rmdir($sdk . '/lib');
+            rmdir($sdk . '/include/php/ext/date/lib');
+            rmdir($sdk . '/include/php/ext/date');
+            rmdir($sdk . '/include/php/ext');
+            rmdir($sdk . '/include/php/Zend');
+            rmdir($sdk . '/include/php/TSRM');
+            rmdir($sdk . '/include/php/main');
+            rmdir($sdk . '/include/php');
+            rmdir($sdk . '/include');
+            rmdir($sdk);
+        }
     }
 
     /**
@@ -141,6 +207,7 @@ class PlatformTest extends TestCase
         $windows = new Windows();
         $linux = new Linux();
         $macos = new Macos();
+        $ios = new Ios();
 
         $this->assertSame('.exe', $windows->getTargetExtension('bin'));
         $this->assertSame('.dll', $windows->getTargetExtension('ext'));
@@ -151,6 +218,7 @@ class PlatformTest extends TestCase
         $this->assertSame('', $macos->getTargetExtension('bin'));
         $this->assertSame('.so', $macos->getTargetExtension('ext'));
         $this->assertSame('.dylib', $macos->getTargetExtension('lib'));
+        $this->assertSame('', $ios->getTargetExtension('bin'));
     }
 
     public function testPlatformPathPrefixRemoval(): void

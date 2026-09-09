@@ -36,7 +36,8 @@ trait FunctionCallTrait
         }
 
         $callable = $this->parseExprAsValue($expr->right);
-        return 'php::call(' . $callable . ', {' . $value . '})';
+        return 'typephp_call_cached(' . $callable . ', ' . $this->getFunctionCallCache()
+            . ', php::VarList{' . $value . '})';
     }
 
     /**
@@ -80,6 +81,14 @@ trait FunctionCallTrait
         $pythonObjectCall = $this->parsePythonObjectCall($expr);
         if ($pythonObjectCall !== null) {
             return $pythonObjectCall;
+        }
+
+        if ($this->isVarExpr($expr->name) && is_string($expr->name->name)) {
+            $localName = $this->parseIdentifier($expr->name);
+            $nativeClosureCall = $this->parseNativeLocalClosureCall($expr, $localName);
+            if ($nativeClosureCall !== null) {
+                return $nativeClosureCall;
+            }
         }
 
         $callableClass = $this->detectClassOfExpr($expr->name);
@@ -139,35 +148,6 @@ trait FunctionCallTrait
             }
             if (in_array($globalName, Constants::UNSUPPORTED_FUNCTIONS, true)) {
                 $this->fatalError($expr, 'Unsupported function: `' . $globalName . '`');
-            }
-            if ($name === 'any') {
-                if (count($expr->args) !== 1 || $expr->args[0]->unpack) {
-                    $this->fatalError($expr, 'The any function expects exactly one non-unpacked argument');
-                }
-                $value = $expr->args[0]->value;
-                if ($this->isNativeObjectClass($this->detectClassOfExpr($value))) {
-                    $this->fatalError(
-                        $value,
-                        'Native objects cannot be converted to mixed with any(); use an explicitly typed Native variable',
-                    );
-                }
-                if ($this->isVarExpr($value)) {
-                    $this->assertStdContainerDoesNotEscapeNativeObjects(
-                        $value,
-                        $this->parseIdentifier($value),
-                    );
-                }
-                return $this->parseExprAsValue($value);
-            }
-            if ($globalName === 'expected' || $globalName === 'unexpected') {
-                if (count($expr->args) !== 1 || $expr->args[0]->unpack) {
-                    $this->fatalError($expr, "The {$globalName} function expects exactly one non-unpacked argument");
-                }
-                $condition = $this->parseExprAsValue($expr->args[0]->value);
-                return 'static_cast<bool>(' . strtoupper($globalName) . '((' . $condition . ')))';
-            }
-            if ($name === 'objval') {
-                return $this->genObjvalCall($expr);
             }
             $nativeFn = $this->findNativeFunction($name);
             if ($nativeFn) {
@@ -234,6 +214,37 @@ trait FunctionCallTrait
         } catch (PlaceHolder) {
             return $this->genPlaceHolder($placeHolder);
         }
+    }
+
+    /**
+     * Erase the static type of a value through std::any(). An omitted value
+     * explicitly creates dynamic storage initialized to null.
+     */
+    protected function parseAnyCompileTimeCall(CallLike $expr): string
+    {
+        if (count($expr->args) === 0) {
+            return self::VALUE_NULL;
+        }
+        if (count($expr->args) !== 1
+            || !$expr->args[0] instanceof Node\Arg
+            || $expr->args[0]->unpack
+        ) {
+            $this->fatalError($expr, 'The std::any function expects zero or one non-unpacked argument');
+        }
+        $value = $expr->args[0]->value;
+        if ($this->isNativeObjectClass($this->detectClassOfExpr($value))) {
+            $this->fatalError(
+                $value,
+                'Native objects cannot be converted to mixed with std::any(); use an explicitly typed Native variable',
+            );
+        }
+        if ($this->isVarExpr($value)) {
+            $this->assertStdContainerDoesNotEscapeNativeObjects(
+                $value,
+                $this->parseIdentifier($value),
+            );
+        }
+        return $this->parseExprAsValue($value);
     }
 
     private function parseNamedExitMessageCall(string $name, Expr\FuncCall $expr): ?string

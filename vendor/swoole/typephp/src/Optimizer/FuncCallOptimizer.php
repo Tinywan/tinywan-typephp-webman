@@ -38,6 +38,20 @@ trait FuncCallOptimizer
     protected const int FOLD_KNOWN_CONSTANT = 7;
     protected const int FOLD_SSA_TYPE = 8;
 
+    protected const array CTYPE_FUNCTIONS = [
+        'ctype_alnum',
+        'ctype_alpha',
+        'ctype_cntrl',
+        'ctype_digit',
+        'ctype_lower',
+        'ctype_graph',
+        'ctype_print',
+        'ctype_punct',
+        'ctype_space',
+        'ctype_upper',
+        'ctype_xdigit',
+    ];
+
     /** @var array<string,string|array>|null */
     protected ?array $_funcCallConfig = null;
 
@@ -67,13 +81,12 @@ trait FuncCallOptimizer
             'version_compare', 'gettype',
             'is_array', 'is_string', 'is_object', 'is_resource',
             'is_scalar', 'is_numeric', 'is_countable', 'is_iterable',
-            'array_is_list', 'is_dir', 'is_file', 'file_exists', 'realpath', 'time',
+            'array_is_list', 'is_dir', 'is_file', 'file_exists', 'realpath',
             'in_array', 'array_search',
-            'date', 'strtotime', 'md5', 'sha1', 'hash', 'print_r',
+            'strtotime', 'md5', 'sha1', 'hash', 'print_r',
             'base64_encode', 'base64_decode',
             'urlencode', 'urldecode', 'rawurlencode', 'rawurldecode',
             'json_encode', 'json_decode', 'serialize', 'unserialize',
-            'random_int', 'random_bytes', 'mt_rand', 'rand',
             'strstr', 'strrpos', 'is_a', 'is_subclass_of',
             'uniqid',
             'dirname', 'basename',
@@ -89,6 +102,9 @@ trait FuncCallOptimizer
         ];
 
         $extra = [
+            'min' => ['handler' => 'genIntegerMinMax'],
+            'max' => ['handler' => 'genIntegerMinMax'],
+
             // Aliases (PHP function name → C++ target name)
             'join'             => 'implode',
             'stristr'          => 'stristr',
@@ -106,6 +122,120 @@ trait FuncCallOptimizer
             'str_starts_with'   => [],
             'str_ends_with'     => [],
             'str_contains'      => [],
+
+            // Date/time core functions. Keep their ABI explicit so these
+            // calls never depend on runtime Reflection metadata or fall back
+            // to php::call() when the arguments have proven scalar types.
+            'time'              => [
+                'args' => '',
+                'minArgs' => 0,
+                'maxArgs' => 0,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'date'              => [
+                'args' => 's_?i',
+                'minArgs' => 1,
+                'maxArgs' => 2,
+                'returnType' => Type::STR,
+                'intrinsic' => true,
+            ],
+            'gmdate'            => [
+                'args' => 's_?i',
+                'minArgs' => 1,
+                'maxArgs' => 2,
+                'returnType' => Type::STR,
+                'intrinsic' => true,
+            ],
+
+            // Random extension core functions. mt_rand()/rand() accept only
+            // zero or two arguments; a min/max range cannot express that
+            // discontinuous arity rule.
+            'mt_rand'           => [
+                'args' => '?i_?i',
+                'argCounts' => [0, 2],
+                'minArgs' => 0,
+                'maxArgs' => 2,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'rand'              => [
+                'args' => '?i_?i',
+                'argCounts' => [0, 2],
+                'minArgs' => 0,
+                'maxArgs' => 2,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'random_int'        => [
+                'args' => 'i_i',
+                'minArgs' => 2,
+                'maxArgs' => 2,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'random_bytes'      => [
+                'args' => 'i',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'returnType' => Type::STR,
+                'intrinsic' => true,
+            ],
+            'mt_getrandmax'     => [
+                'args' => '',
+                'minArgs' => 0,
+                'maxArgs' => 0,
+                'returnType' => Type::INT,
+                'constantResult' => '2147483647L',
+                'intrinsic' => true,
+            ],
+            'getrandmax'        => [
+                'args' => '',
+                'minArgs' => 0,
+                'maxArgs' => 0,
+                'returnType' => Type::INT,
+                'constantResult' => '2147483647L',
+                'intrinsic' => true,
+            ],
+
+            // SPL and runtime constant queries. These wrappers preserve
+            // Zend's runtime validation and iterator side effects while
+            // avoiding zend_call_function for ordinary positional calls.
+            'iterator_count'    => [
+                'args' => 'v',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'iterator_to_array' => [
+                'args' => 'v_?b',
+                'minArgs' => 1,
+                'maxArgs' => 2,
+                'returnType' => Type::ARRAY,
+                'intrinsic' => true,
+            ],
+            'spl_object_hash'   => [
+                'args' => 'v',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'returnType' => Type::STR,
+                'intrinsic' => true,
+            ],
+            'spl_object_id'     => [
+                'args' => 'v',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'returnType' => Type::INT,
+                'intrinsic' => true,
+            ],
+            'constant'          => [
+                'args' => 's',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'returnType' => Type::ANY,
+                'intrinsic' => true,
+            ],
 
             'strncmp'           => ['constFold' => self::FOLD_CMP3],
             'strncasecmp'       => ['constFold' => self::FOLD_CMP3],
@@ -196,6 +326,19 @@ trait FuncCallOptimizer
             'is_callable'        => ['handler' => 'genIsCallable'],
         ];
 
+        // PHPX implements these directly with <cctype>. They remain
+        // available even when the target libphp has no ext/ctype.
+        foreach (self::CTYPE_FUNCTIONS as $name) {
+            $extra[$name] = [
+                'args' => 'v',
+                'minArgs' => 1,
+                'maxArgs' => 1,
+                'namedArgs' => ['text'],
+                'returnType' => Type::BOOL,
+                'intrinsic' => true,
+            ];
+        }
+
         $config = $extra;
         foreach ($simple as $name) {
             if (!isset($config[$name])) {
@@ -211,6 +354,11 @@ trait FuncCallOptimizer
 
     protected function parseFuncCallWithOptimizer(string $name, Node\Expr\FuncCall $expr): string|false
     {
+        $config = $this->getFuncCallConfig()[$name] ?? null;
+        if ($config === null) {
+            return false;
+        }
+
         foreach ($expr->args as $arg) {
             if ($this->isPlaceholderExpr($arg)) {
                 return false;
@@ -219,14 +367,21 @@ trait FuncCallOptimizer
             // with the syntactic argument list. Named arguments and unpacking
             // require Zend's runtime binding/expansion semantics, so reject
             // them before any optimizer-specific handler can consume them.
-            if ($arg instanceof Node\Arg && ($arg->name !== null || $arg->unpack)) {
-                return false;
+            if ($arg instanceof Node\Arg) {
+                if ($arg->unpack) {
+                    return false;
+                }
+                if ($arg->name !== null) {
+                    $namedArgs = $config['namedArgs'] ?? null;
+                    if ($namedArgs === null) {
+                        return false;
+                    }
+                    $argName = $arg->name->toString();
+                    if (!in_array($argName, $namedArgs, true)) {
+                        $this->fatalError($arg, "Unknown named parameter \${$argName}");
+                    }
+                }
             }
-        }
-
-        $config = $this->getFuncCallConfig()[$name] ?? null;
-        if ($config === null) {
-            return false;
         }
 
         // Optimized php::fn::* calls must obey the same ZendVM escape boundary
@@ -256,7 +411,10 @@ trait FuncCallOptimizer
             if (!$arg instanceof Node\Arg) {
                 continue;
             }
-            if ($this->isVarExpr($arg->value) && is_string($arg->value->name) && !$this->hasVar($arg->value->name)) {
+            if ($this->isVarExpr($arg->value)
+                && is_string($arg->value->name)
+                && !$this->hasVar($this->parseIdentifier($arg->value))
+            ) {
                 return false;
             }
         }
@@ -290,9 +448,11 @@ trait FuncCallOptimizer
 
     protected function dispatchFuncCall(string $name, Node\Expr\FuncCall $expr, array $config): string|false
     {
-        // Named arguments and unpack (...) expansion require runtime handling; fall back to the dynamic call path.
+        // Unpack expansion and ordinary named arguments require runtime
+        // handling. Single-argument intrinsics may opt in after validating
+        // their stable PHP parameter name in parseFuncCallWithOptimizer().
         foreach ($expr->args as $arg) {
-            if ($arg->name !== null || $arg->unpack) {
+            if ($arg->unpack || ($arg->name !== null && !isset($config['namedArgs']))) {
                 return false;
             }
         }
@@ -310,6 +470,26 @@ trait FuncCallOptimizer
         $variadicType = $config['variadicType'] ?? ($refInfo['variadicType'] ?? '');
         $nullables = $refInfo['nullables'] ?? [];
 
+        if (!$this->hasUnpackCallArg($expr->args)) {
+            $argCount = count($expr->args);
+            $minArgs = $config['minArgs'] ?? ($refInfo['minArgs'] ?? 0);
+            $maxArgs = $config['maxArgs'] ?? ($refInfo['maxArgs'] ?? 0);
+            if ($argCount < $minArgs) {
+                $this->fatalError($expr, "{$name}() expects at least {$minArgs} argument(s), {$argCount} given");
+            }
+            // An explicit zero is a real zero-argument limit (for example
+            // time()). Reflection lookup failure also uses zero as its
+            // unknown sentinel, so only enforce that implicit value when it
+            // is greater than zero.
+            $variadic = !empty($config['variadic']) || ($refInfo['variadic'] ?? false);
+            if (!$variadic
+                && (array_key_exists('maxArgs', $config) || $maxArgs > 0)
+                && $argCount > $maxArgs
+            ) {
+                $this->fatalError($expr, "{$name}() expects at most {$maxArgs} argument(s), {$argCount} given");
+            }
+        }
+
         if (!$this->hasOptimizerSafeTypedArguments(
             $expr,
             $argTypeStr,
@@ -319,12 +499,16 @@ trait FuncCallOptimizer
             return false;
         }
 
+        if (isset($config['constantResult'])) {
+            return $config['constantResult'];
+        }
+
         if (!empty($config['variadic']) || ($refInfo['variadic'] ?? false)) {
             return $this->genVariadicCall($target, $expr, $variadicType);
         }
 
         if (isset($config['constFold'])) {
-            $folded = $this->tryConstFold($config['constFold'], $config['constFoldExtra'] ?? null, $expr);
+            $folded = $this->tryConstFold($name, $config['constFold'], $config['constFoldExtra'] ?? null, $expr);
             if ($folded !== false) {
                 return $folded;
             }
@@ -715,13 +899,13 @@ trait FuncCallOptimizer
     // Constant folding
     // =========================================================================
 
-    protected function tryConstFold(int $rule, mixed $extra, Node\Expr\FuncCall $expr): string|false
+    protected function tryConstFold(string $name, int $rule, mixed $extra, Node\Expr\FuncCall $expr): string|false
     {
         return match ($rule) {
             self::FOLD_STRING_LEN => $this->doFoldStringLen($expr),
-            self::FOLD_STRING_CASE => $this->doFoldStringCase($expr),
-            self::FOLD_CMP2 => $this->doFoldCmp2($expr),
-            self::FOLD_CMP3 => $this->doFoldCmp3($expr),
+            self::FOLD_STRING_CASE => $this->doFoldStringCase($name, $expr),
+            self::FOLD_CMP2 => $this->doFoldCmp2($name, $expr),
+            self::FOLD_CMP3 => $this->doFoldCmp3($name, $expr),
             self::FOLD_COUNT_LITERAL => $this->doFoldCountLiteral($expr),
             self::FOLD_KNOWN_CLASS => $this->doFoldKnownClass($expr),
             self::FOLD_KNOWN_CONSTANT => $this->doFoldKnownConstant($expr),
@@ -738,32 +922,30 @@ trait FuncCallOptimizer
             : false;
     }
 
-    protected function doFoldStringCase(Node\Expr\FuncCall $expr): string|false
+    protected function doFoldStringCase(string $name, Node\Expr\FuncCall $expr): string|false
     {
         $arg = $expr->args[0]->value;
         if (!$this->isScalarString($arg)) {
             return false;
         }
-        $func = $expr->name instanceof Node\Name ? $expr->name->toLowerString() : '';
-        $val = $func === 'strtoupper' ? strtoupper($arg->value) : strtolower($arg->value);
+        $val = $name === 'strtoupper' ? strtoupper($arg->value) : strtolower($arg->value);
         return $this->getLiteralString($val);
     }
 
-    protected function doFoldCmp2(Node\Expr\FuncCall $expr): string|false
+    protected function doFoldCmp2(string $name, Node\Expr\FuncCall $expr): string|false
     {
         $a0 = $expr->args[0]->value;
         $a1 = $expr->args[1]->value;
         if (!$this->isScalarString($a0) || !$this->isScalarString($a1)) {
             return false;
         }
-        $func = $expr->name instanceof Node\Name ? $expr->name->toLowerString() : '';
-        $result = $func === 'strcasecmp'
+        $result = $name === 'strcasecmp'
             ? strcasecmp($a0->value, $a1->value)
             : strcmp($a0->value, $a1->value);
         return $result . $this->getPlatform()->getIntegerLiteralSuffix();
     }
 
-    protected function doFoldCmp3(Node\Expr\FuncCall $expr): string|false
+    protected function doFoldCmp3(string $name, Node\Expr\FuncCall $expr): string|false
     {
         $a0 = $expr->args[0]->value;
         $a1 = $expr->args[1]->value;
@@ -771,8 +953,7 @@ trait FuncCallOptimizer
         if (!$this->isScalarString($a0) || !$this->isScalarString($a1) || !$this->isScalarInt($a2)) {
             return false;
         }
-        $func = $expr->name instanceof Node\Name ? $expr->name->toLowerString() : '';
-        $result = $func === 'strncasecmp'
+        $result = $name === 'strncasecmp'
             ? strncasecmp($a0->value, $a1->value, (int) $a2->value)
             : strncmp($a0->value, $a1->value, (int) $a2->value);
         return $result . $this->getPlatform()->getIntegerLiteralSuffix();
@@ -1003,6 +1184,61 @@ trait FuncCallOptimizer
         return $array . '.offsetExists(' . $key . ')';
     }
 
+    protected function genIntegerMinMax(string $name, Node\Expr\FuncCall $expr, array $config): string|false
+    {
+        // PHP also accepts arrays, mixed types and variadic arguments. Only
+        // two proven integers have the same comparison and result semantics
+        // as a native scalar selection; leave every other form to Zend.
+        if (count($expr->args) !== 2) {
+            return false;
+        }
+        foreach ($expr->args as $arg) {
+            if (!$this->isExactIntegerMinMaxOperand($arg->value)) {
+                return false;
+            }
+        }
+
+        // Reuse ordinary call operand lowering: materialize side effects once,
+        // but preserve PHP's deferred reads of simple variable arguments.
+        // Casts may warn or invoke an object conversion even without nested
+        // calls, so snapshot them before repeating operands in the selection.
+        $left = $expr->args[0]->value instanceof Node\Expr\Cast\Int_
+            ? $this->parseOrderedOperand($expr->args[0]->value, false, true)
+            : $this->getArg($expr, 0);
+        $right = $expr->args[1]->value instanceof Node\Expr\Cast\Int_
+            ? $this->parseOrderedOperand($expr->args[1]->value, false, true)
+            : $this->getArg($expr, 1);
+        $operator = $name === 'min' ? '<' : '>';
+        return '(' . $left . ' ' . $operator . ' ' . $right . ' ? ' . $left . ' : ' . $right . ')';
+    }
+
+    protected function isExactIntegerMinMaxOperand(Node\Expr $expr): bool
+    {
+        if (!$this->usesNativeScalarStorage(Type::INT)
+            || $this->detectTypeOfExpr($expr) !== Type::INT
+        ) {
+            return false;
+        }
+        if ($expr instanceof Node\Expr\Variable && is_string($expr->name)) {
+            // Require actual native storage, not a flow-sensitive approximation
+            // of the value held by a mixed/overflow-capable variable.
+            return $this->getVarType($this->parseIdentifier($expr)) === Type::INT;
+        }
+        if ($expr instanceof Node\Expr\PropertyFetch && $expr->name instanceof Node\Identifier) {
+            $class = $this->resolveObjectClassDef($expr->var);
+            if ($class !== null && $class->hasProperty($expr->name->toString())) {
+                $property = $class->getProperty($expr->name->toString());
+                return $property->type === Type::INT && !$property->nullable;
+            }
+            return false;
+        }
+        // Arithmetic inference can report INT for mixed + int, even though
+        // the value may be a float. Keep computations, calls and unresolved
+        // property/constant reads on Zend's path.
+        return $expr instanceof Node\Scalar\Int_
+            || $expr instanceof Node\Expr\Cast\Int_;
+    }
+
     protected function genRound(string $n, Node\Expr\FuncCall $e, array $c): string|false
     {
         // An unpacked or named argument is a single Node\Arg whatever its
@@ -1093,6 +1329,14 @@ trait FuncCallOptimizer
 
         $folded = $this->doFoldCountLiteral($e);
         if ($folded !== false) return $folded;
+        if (count($e->args) === 1
+            && $receiver instanceof Node\Arg
+            && $this->isVarExpr($receiver->value)
+            && $this->hasLocalVar($receiver->value->name)
+            && $this->argumentAlreadyHasExactType($receiver->value, Type::ARRAY)
+        ) {
+            return 'static_cast<' . Type::INT . '>(' . $this->getArg($e, 0) . '.count())';
+        }
         if (count($e->args) >= 2) {
             return 'php::fn::count(' . $this->getArg($e, 0) . ', ' . $this->convertIntExpr($this->getArg($e, 1)) . ')';
         }

@@ -17,9 +17,9 @@ class Foo2 {
 function main() {
     $rand = random_int(0, 10000);
     if ($rand % 2) {
-        $o = any(new Foo1());
+        $o = std::any(new Foo1());
     } else {
-        $o = any(new Foo2());
+        $o = std::any(new Foo2());
     }
     if (method_exists($o, 'run')) {
         $o->run();

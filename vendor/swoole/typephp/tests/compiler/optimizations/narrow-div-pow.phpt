@@ -2,6 +2,7 @@
 SSA narrowing: division and pow compound-assign prevent int narrowing
 --FILE--
 <?php
+use varint_types;
 function main(): void {
     // /= prevents int narrowing → $a stays Var (float result in PHP)
     $a = 10;

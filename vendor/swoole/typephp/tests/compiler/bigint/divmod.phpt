@@ -2,9 +2,6 @@
 BigInt: divmod
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::bigInt(10);
     $b = std::bigInt(3);

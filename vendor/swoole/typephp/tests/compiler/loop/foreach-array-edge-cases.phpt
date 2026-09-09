@@ -38,7 +38,7 @@ function main(): void
         echo "unreachable\n";
     }
 
-    $inner = 1;
+    $inner = std::any(1);
     $references = [&$inner];
     foreach ($references as $value) {
         $value = 9;

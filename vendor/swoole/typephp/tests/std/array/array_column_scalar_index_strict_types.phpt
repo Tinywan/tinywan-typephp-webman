@@ -4,7 +4,6 @@ Test array_column(): Index argument with various types in strict type mode
 <?php die("skip AOT does not enforce strict_types for internal function calls"); ?>
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main() {
     echo "\n-- Testing array_column() column key parameter should be a string or an integer (testing bool) --\n";

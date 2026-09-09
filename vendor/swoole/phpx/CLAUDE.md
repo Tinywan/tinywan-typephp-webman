@@ -55,7 +55,7 @@ Based on Google style, 120 cols, 4-space indent (see `.clang-format`).
 ### Layers
 
 ```
-PHP Extension ── PHPX facade layer (func/class/const) ── Core type wrappers ── Zend Engine API
+PHP Extension ── PHPX core type wrappers ── Zend Engine API
 ```
 
 ### Core types (`include/phpx.h`, `src/core/`)
@@ -86,18 +86,19 @@ PHPX_EXTENSION() {
 
 Macros: `PHPX_FUNCTION(name)` for functions, `PHPX_METHOD(Class, method)` for methods. `PHPX_FN(fn)` / `PHPX_ME(Class, method)` for registration.
 
-### Facade layers (`src/func/`, `src/class/`, `src/const/`)
+### PHP calls
 
-Auto-generated wrappers around PHP built-in functions, classes, and constants. Callable via `php::function_name(...)` (e.g., `php::array_push()`, `php::strlen()`). Facade classes like `php::Redis` wrap PHP extension classes.
+Use `php::call()`, `Object::call()`, and `callStaticMethod()` for dynamic PHP
+calls. The small facade under `tests/include/` is test-only and must not be
+used by production code.
 
-### String literal optimization (`src/core/literal_string.cc`)
+### gen_stub.php
 
-~192KB generated file that pre-registers common string literals with the Zend Engine to avoid repeated allocation.
-
-### gen_stub.php (`bin/gen_stub.php`)
-
-Generates arginfo headers for extensions — run from extension project directories using `php vendor/swoole/phpx/bin/gen_stub.php <stub_dir>`.
+Arginfo headers are generated with the `gen_stub.php` supplied by the matching
+PHP development package. `bin/phpx init` creates an extension skeleton in an
+existing Composer project and copies `gen_stub.php` and `run-tests.php` without
+requiring `phpize`.
 
 ## CI
 
-GitHub Actions (`.github/workflows/test.yml`): tests against PHP 8.2–8.5 on Ubuntu. Builds with coverage, runs `phpx-tests` (GTest) then `composer test` (PHPUnit), uploads coverage to Codecov.
+GitHub Actions (`.github/workflows/test.yml`): tests against PHP 8.4–8.5. Builds with coverage, runs `phpx-tests` (GTest) then `composer test` (PHPUnit), uploads coverage to Codecov.

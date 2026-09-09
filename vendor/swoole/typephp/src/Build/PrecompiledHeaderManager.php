@@ -149,7 +149,15 @@ final readonly class PrecompiledHeaderManager
         }
         sort($files, SORT_STRING);
         foreach ($files as $file) {
-            hash_update($context, $file . "\0");
+            $metadata = stat($file);
+            if ($metadata === false) {
+                throw new \RuntimeException('Cannot stat precompiled-header dependency: ' . $file);
+            }
+            // Clang records dependency mtimes in a PCH and rejects the PCH even
+            // when a rewritten header still has identical contents. Include
+            // the metadata as well as the content so such SDK refreshes select
+            // a new cache entry before native compilation begins.
+            hash_update($context, $file . "\0" . $metadata['size'] . "\0" . $metadata['mtime'] . "\0");
             if (!hash_update_file($context, $file)) {
                 throw new \RuntimeException('Cannot fingerprint precompiled-header dependency: ' . $file);
             }

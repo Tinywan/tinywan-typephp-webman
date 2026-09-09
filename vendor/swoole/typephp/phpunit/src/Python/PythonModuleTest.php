@@ -36,7 +36,8 @@ final class PythonModuleTest extends TestCase
         $compiler->prepareFile($source);
         $cpp = file_get_contents($compiler->convertFile($source));
 
-        self::assertStringContainsString('typephp_call_method_cached(', $cpp);
+        self::assertStringContainsString('object.call(method, php::VarList{1L})', $cpp);
+        self::assertStringNotContainsString('typephp_call_method_cached(', $cpp);
         self::assertStringNotContainsString('php::python::callMember(', $cpp);
     }
 

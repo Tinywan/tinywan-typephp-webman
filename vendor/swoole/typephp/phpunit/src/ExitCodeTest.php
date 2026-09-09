@@ -35,7 +35,6 @@ class ExitCodeTest extends TestCase
         $exitCode = $this->buildAndRun(<<<'PHP'
 <?php
 
-declare(strict_types=1);
 
 function main(): void
 {
@@ -51,7 +50,6 @@ PHP);
         $exitCode = $this->buildAndRun(<<<'PHP'
 <?php
 
-declare(strict_types=1);
 
 function main(): void
 {
@@ -67,7 +65,6 @@ PHP);
         $exitCode = $this->buildAndRun(<<<'PHP'
 <?php
 
-declare(strict_types=1);
 
 function main(): void
 {
@@ -83,7 +80,6 @@ PHP);
         $exitCode = $this->buildAndRun(<<<'PHP'
 <?php
 
-declare(strict_types=1);
 
 function main(): void
 {

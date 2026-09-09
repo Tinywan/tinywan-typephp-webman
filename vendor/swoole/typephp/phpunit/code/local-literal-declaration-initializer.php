@@ -8,6 +8,7 @@ function localLiteralDeclarationInitializer(): void
     $boolean = true;
     $string = 'hello';
     $nullValue = null;
+    $explicitAny = std::any(100);
 
     if ($boolean) {
         $nested = 9;
@@ -24,5 +25,6 @@ function localLiteralDeclarationInitializer(): void
         $nullValue,
         $nested,
         $computed,
+        $explicitAny,
     );
 }

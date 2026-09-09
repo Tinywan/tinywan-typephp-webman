@@ -2,9 +2,6 @@
 Big numeric casts, conversion functions, and runtime boundaries
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $bigint = std::bigInt("42");
     var_dump((int) $bigint, (float) $bigint, (bool) $bigint);

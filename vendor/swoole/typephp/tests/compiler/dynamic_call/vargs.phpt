@@ -4,7 +4,7 @@ named args
 <?php
 function main()
 {
-    $array = [1, 3, 5];
+    $array = std::any([1, 3, 5]);
     $push = [12, 33, 99];
     array_push($array, ...$push);
     var_dump($array);

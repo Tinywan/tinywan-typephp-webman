@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class ReadonlyPropertyNoNativeRef
 {
     public readonly int $integer;

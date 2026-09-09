@@ -24,6 +24,13 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Checkout PHPX master
+      uses: actions/checkout@v4
+      with:
+        repository: swoole/phpx
+        ref: master
+        path: third_party/phpx
+
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
       with:

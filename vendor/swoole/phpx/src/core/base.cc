@@ -333,7 +333,6 @@ bool updateConstant(const String &cls, const String &name, const Variant &data) 
 
 bool updateConstant(zend_class_entry *ce, const String &name, const Variant &data) {
     auto constant_name = name.str();
-    zval *ret_constant = NULL;
     auto c = (zend_class_constant *) zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), constant_name);
     if (c != NULL) {
         zval old = c->value;
@@ -545,7 +544,6 @@ static void call_function_impl(const zval *zobject,
     fci.named_params = named_params;
 
     zend_fcall_info_cache fcc;
-    zend_fcall_info_cache *fci_cache = &fcc;
     char *error = NULL;
 
     bool callable;
@@ -555,7 +553,9 @@ static void call_function_impl(const zval *zobject,
         callable = zend_is_callable_ex(&fci.function_name, fci.object, 0, NULL, &fcc, &error);
     }
 
-    if (!callable) {
+    if (EXPECTED(callable)) {
+        zend_call_function(&fci, &fcc);
+    } else {
         ZEND_ASSERT(error && "Should have error if not callable");
         auto callable_name = zend_get_callable_name_ex(&fci.function_name, fci.object);
         zend_throw_error(NULL, "Invalid callback %s, %s", ZSTR_VAL(callable_name), error);
@@ -563,14 +563,16 @@ static void call_function_impl(const zval *zobject,
         zend_string_release_ex(callable_name, 0);
     }
 
-    if (callable) {
-        zend_call_function(&fci, fci_cache);
-    }
-
     throwErrorIfOccurred();
 }
 
 Variant call_impl(const zval *object, const zval *func, Args &args, zend_array *named_args) {
+    Variant retval{};
+    call_function_impl(object, func, retval.ptr(), args.count(), args.ptr(), named_args);
+    return retval;
+}
+
+Variant call_impl(const zval *object, const zval *func, FixedArgs args, zend_array *named_args) {
     Variant retval{};
     call_function_impl(object, func, retval.ptr(), args.count(), args.ptr(), named_args);
     return retval;
@@ -599,7 +601,35 @@ Variant callScoped(
     return retval;
 }
 
+Variant callScoped(
+    const Variant &object, const Variant &func, const CallableScope &scope, FixedArgs args, zend_array *named_args) {
+    if (UNEXPECTED(!object.isObject())) {
+        throwError("call method `%s` on %s", func.toCString(), object.typeStr());
+        return {};
+    }
+    if (UNEXPECTED(!scope.isValid())) {
+        throwError("Explicit callable scope must not be null");
+        return {};
+    }
+
+    Variant retval{};
+    call_function_impl(
+        object.unwrap_ptr(), func.unwrap_ptr(), retval.ptr(), args.count(), args.ptr(), named_args, &scope);
+    return retval;
+}
+
 Variant callScoped(const Variant &func, const CallableScope &scope, Args &args, zend_array *named_args) {
+    if (UNEXPECTED(!scope.isValid())) {
+        throwError("Explicit callable scope must not be null");
+        return {};
+    }
+
+    Variant retval{};
+    call_function_impl(nullptr, func.unwrap_ptr(), retval.ptr(), args.count(), args.ptr(), named_args, &scope);
+    return retval;
+}
+
+Variant callScoped(const Variant &func, const CallableScope &scope, FixedArgs args, zend_array *named_args) {
     if (UNEXPECTED(!scope.isValid())) {
         throwError("Explicit callable scope must not be null");
         return {};
@@ -644,9 +674,136 @@ Variant call(const Variant &func, Args &args, zend_array *named_args) {
     return call_impl(nullptr, func.unwrap_ptr(), args, named_args);
 }
 
+Variant call(const Variant &func, FixedArgs args, zend_array *named_args) {
+    return call_impl(nullptr, func.unwrap_ptr(), args, named_args);
+}
+
 Variant call(const Variant &func, const ArgList &args, zend_array *named_args) {
     Args _args(args);
     return call_impl(nullptr, func.unwrap_ptr(), _args, named_args);
+}
+
+namespace {
+
+Variant call_static_method_impl(zend_class_entry *class_entry,
+                                const Variant &method,
+                                uint32_t param_count,
+                                zval *params,
+                                zend_array *named_args) {
+    if (UNEXPECTED(class_entry == nullptr)) {
+        throwError("Class entry must not be null");
+        return {};
+    }
+
+    const zval *method_value = method.unwrap_ptr();
+    ZVAL_DEREF(method_value);
+    if (UNEXPECTED(Z_TYPE_P(method_value) != IS_STRING)) {
+        throwError("Method name must be a string");
+        return {};
+    }
+
+    zend_string *method_name = Z_STR_P(method_value);
+    zend_function *function = class_entry->get_static_method != nullptr
+        ? class_entry->get_static_method(class_entry, method_name)
+        : zend_std_get_static_method(class_entry, method_name, nullptr);
+    if (UNEXPECTED(function == nullptr)) {
+        if (EXPECTED(EG(exception) == nullptr)) {
+            zend_throw_error(
+                nullptr, "Call to undefined method %s::%s()", ZSTR_VAL(class_entry->name), ZSTR_VAL(method_name));
+        }
+        throwErrorIfOccurred();
+        return {};
+    }
+
+    if (UNEXPECTED(!(function->common.fn_flags & ZEND_ACC_STATIC))) {
+        zend_throw_error(zend_ce_error,
+                         "Non-static method %s::%s() cannot be called statically",
+                         ZSTR_VAL(function->common.scope->name),
+                         ZSTR_VAL(function->common.function_name));
+        throwErrorIfOccurred();
+        return {};
+    }
+
+    zend_fcall_info_cache cache{};
+    cache.function_handler = function;
+    cache.called_scope = class_entry;
+    const bool release = function->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE;
+    Variant retval{};
+    try {
+        zend_call_known_fcc(&cache, retval.ptr(), param_count, params, named_args);
+        throwErrorIfOccurred();
+        if (release) {
+            zend_release_fcall_info_cache(&cache);
+        }
+        return retval;
+    } catch (...) {
+        if (release) {
+            zend_release_fcall_info_cache(&cache);
+        }
+        throw;
+    }
+}
+
+zend_class_entry *resolve_static_call_class(const Variant &class_or_object) {
+    const zval *target = class_or_object.unwrap_ptr();
+    ZVAL_DEREF(target);
+    if (EXPECTED(Z_TYPE_P(target) == IS_STRING)) {
+        zend_class_entry *class_entry = zend_fetch_class(
+            Z_STR_P(target), ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
+        if (UNEXPECTED(class_entry == nullptr)) {
+            throwErrorIfOccurred();
+        }
+        return class_entry;
+    }
+    if (EXPECTED(Z_TYPE_P(target) == IS_OBJECT)) {
+        return Z_OBJCE_P(target);
+    }
+    throwError("Class name must be a valid object or a string");
+    return nullptr;
+}
+
+}  // namespace
+
+Variant callStaticMethod(const Variant &class_or_object, const Variant &method) {
+    return call_static_method_impl(resolve_static_call_class(class_or_object), method, 0, nullptr, nullptr);
+}
+
+Variant callStaticMethod(
+    const Variant &class_or_object, const Variant &method, Args &args, zend_array *named_args) {
+    return call_static_method_impl(
+        resolve_static_call_class(class_or_object), method, args.count(), args.ptr(), named_args);
+}
+
+Variant callStaticMethod(
+    const Variant &class_or_object, const Variant &method, FixedArgs args, zend_array *named_args) {
+    return call_static_method_impl(
+        resolve_static_call_class(class_or_object), method, args.count(), args.ptr(), named_args);
+}
+
+Variant callStaticMethod(
+    const Variant &class_or_object, const Variant &method, Array &args, zend_array *named_args) {
+    Args call_args(args);
+    return callStaticMethod(class_or_object, method, call_args, named_args);
+}
+
+Variant callStaticMethod(zend_class_entry *class_entry, const Variant &method) {
+    return call_static_method_impl(class_entry, method, 0, nullptr, nullptr);
+}
+
+Variant callStaticMethod(
+    zend_class_entry *class_entry, const Variant &method, Args &args, zend_array *named_args) {
+    return call_static_method_impl(class_entry, method, args.count(), args.ptr(), named_args);
+}
+
+Variant callStaticMethod(
+    zend_class_entry *class_entry, const Variant &method, FixedArgs args, zend_array *named_args) {
+    return call_static_method_impl(class_entry, method, args.count(), args.ptr(), named_args);
+}
+
+Variant callStaticMethod(
+    zend_class_entry *class_entry, const Variant &method, Array &args, zend_array *named_args) {
+    Args call_args(args);
+    return callStaticMethod(class_entry, method, call_args, named_args);
 }
 
 Variant call(zend_function *func, zend_array *named_args) {
@@ -659,6 +816,13 @@ Variant call(zend_function *func, zend_array *named_args) {
 Variant call(zend_function *func, Args &_args, zend_array *named_args) {
     Variant retval{};
     zend_call_known_function(func, nullptr, func->common.scope, retval.ptr(), _args.count(), _args.ptr(), named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_function *func, FixedArgs args, zend_array *named_args) {
+    Variant retval{};
+    zend_call_known_function(func, nullptr, func->common.scope, retval.ptr(), args.count(), args.ptr(), named_args);
     throwErrorIfOccurred();
     return retval;
 }
@@ -706,6 +870,14 @@ Variant call(zend_class_entry *ce, zend_function *func, zend_array *named_args) 
 }
 
 Variant call(zend_class_entry *ce, zend_function *func, Args &args, zend_array *named_args) {
+    Variant retval{};
+    LexicalCallScopeGuard scope_guard{ce};
+    zend_call_known_function(func, nullptr, ce, retval.ptr(), args.count(), args.ptr(), named_args);
+    throwErrorIfOccurred();
+    return retval;
+}
+
+Variant call(zend_class_entry *ce, zend_function *func, FixedArgs args, zend_array *named_args) {
     Variant retval{};
     LexicalCallScopeGuard scope_guard{ce};
     zend_call_known_function(func, nullptr, ce, retval.ptr(), args.count(), args.ptr(), named_args);
@@ -914,6 +1086,38 @@ bool empty(const Variant &v, const OperationChain &list) {
 }
 
 static bool exists_impl(const Variant &v, const OperationChain &list, Variant &tmp, bool fetch_last_value) {
+    // The overwhelmingly common isset($array[$key]) case does not need to
+    // copy the root array into the traversal temporary. Besides the refcount
+    // traffic, assigning the fetched element back into that temporary makes
+    // a one-level lookup pay for the general chained-operation machinery.
+    if (EXPECTED(list.size() == 1 && list.begin()->first == ArrayDimFetch && v.isArray())) {
+        const Variant &key = list.begin()->second;
+        HashTable *array = Z_ARRVAL_P(v.unwrap_ptr());
+        zval *value = nullptr;
+        if (EXPECTED(key.isString())) {
+            value = zend_symtable_find(array, Z_STR_P(key.unwrap_ptr()));
+        } else if (key.isInt() || key.isBool() || key.isFloat()) {
+            value = zend_hash_index_find(array, static_cast<zend_ulong>(key.toInt()));
+        } else {
+            Variant fetched = const_cast<Variant &>(v).item(key);
+            if (fetch_last_value) {
+                tmp = fetched;
+            }
+            return !fetched.isNull() && !fetched.isUndef();
+        }
+        if (UNEXPECTED(value == nullptr)) {
+            if (fetch_last_value) {
+                tmp = nullptr;
+            }
+            return false;
+        }
+        if (fetch_last_value) {
+            tmp = value;
+        }
+        ZVAL_DEREF(value);
+        return Z_TYPE_P(value) != IS_NULL && Z_TYPE_P(value) != IS_UNDEF;
+    }
+
     tmp = v;
     if (tmp.isNull() || tmp.isUndef()) {
         return false;

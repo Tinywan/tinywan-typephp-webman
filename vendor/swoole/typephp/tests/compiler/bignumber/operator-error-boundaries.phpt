@@ -2,9 +2,6 @@
 Big numeric operator error boundaries use PHP-compatible exception types
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     try {
         $unused = std::bigInt(1) / 0;

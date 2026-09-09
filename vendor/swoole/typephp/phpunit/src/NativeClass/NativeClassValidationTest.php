@@ -995,7 +995,7 @@ final class NativeClassValidationTest extends \BaseTest
     public function testRejectsErasingNativeObjectTypeWithAny(): void
     {
         $this->expectException(TestError::class);
-        $this->expectExceptionMessage('Native objects cannot be converted to mixed with any()');
+        $this->expectExceptionMessage('Native objects cannot be converted to mixed with std::any()');
         $this->compile('native-class-any-escape.php');
     }
 

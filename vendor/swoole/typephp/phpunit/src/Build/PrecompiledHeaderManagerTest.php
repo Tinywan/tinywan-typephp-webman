@@ -62,6 +62,39 @@ final class PrecompiledHeaderManagerTest extends TestCase
         $this->assertCount(8, $managedEntries);
     }
 
+    public function testDependencyMtimeChangeInvalidatesCachedArtifact(): void
+    {
+        $dependencyDirectory = $this->cacheDirectory . '/dependencies';
+        mkdir($dependencyDirectory);
+        $dependency = $dependencyDirectory . '/runtime.h';
+        file_put_contents($dependency, "#pragma once\n");
+
+        $backend = $this->createMock(CompilerBackend::class);
+        $backend->method('supportsPrecompiledHeaders')->willReturn(true);
+        $backend->method('getName')->willReturn('test');
+        $backend->method('getCompilerCommand')->willReturn('true');
+        $backend->method('getPrecompiledHeaderArtifact')
+            ->willReturnCallback(static fn(string $header): string => $header . '.gch');
+        $backend->method('buildNativeCompileCommand')
+            ->willReturnCallback(
+                static fn(string $source, string $object): string => 'touch ' . escapeshellarg($object),
+            );
+
+        $manager = new PrecompiledHeaderManager($backend, new NativeBuilder($backend));
+        $options = new CompileOptions([]);
+        $first = $manager->prepare(['runtime.h'], [$dependencyDirectory], $this->cacheDirectory, $options);
+        $cached = $manager->prepare(['runtime.h'], [$dependencyDirectory], $this->cacheDirectory, $options);
+
+        touch($dependency, filemtime($dependency) + 10);
+        clearstatcache(true, $dependency);
+        $refreshed = $manager->prepare(['runtime.h'], [$dependencyDirectory], $this->cacheDirectory, $options);
+
+        $this->assertFalse($first['cached']);
+        $this->assertTrue($cached['cached']);
+        $this->assertFalse($refreshed['cached']);
+        $this->assertNotSame($first['artifact'], $refreshed['artifact']);
+    }
+
     private function createCacheEntry(int $number, int $mtime): string
     {
         $directory = $this->cacheDirectory . '/' . sprintf('%024x', $number);

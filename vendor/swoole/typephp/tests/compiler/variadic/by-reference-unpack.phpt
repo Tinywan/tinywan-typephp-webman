@@ -28,7 +28,7 @@ function main(): void
     var_dump(increment_all(...$first, ...$second));
     var_dump($first, $second);
 
-    $external = 60;
+    $external = std::any(60);
     $references = [&$external];
     increment_all(...$references);
     var_dump($external, $references);

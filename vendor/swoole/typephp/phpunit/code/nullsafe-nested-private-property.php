@@ -1,7 +1,5 @@
 <?php
 
-use native_types;
-
 class NullsafeNestedOwner
 {
     public NullsafeNestedChild $child;

@@ -3,7 +3,6 @@ Trait __construct is used by the composing class
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 trait TestTrait
 {

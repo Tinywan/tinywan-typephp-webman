@@ -3,8 +3,6 @@ First-class callable placeholder is not treated as a call argument by property o
 --FILE--
 <?php
 
-use native_types;
-
 class FirstClassCallableTarget
 {
     public int $counter = 0;

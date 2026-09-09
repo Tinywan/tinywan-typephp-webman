@@ -286,10 +286,9 @@ trait ClassConstantValueTrait
     ): mixed
     {
         $lateBoundScope ??= $scope;
-        $evaluator = null;
-        $evaluator = new ConstExprEvaluator(function (Node\Expr $expr) use (&$evaluator, $scope, $lateBoundScope): mixed {
+        $evaluator = new ConstExprEvaluator(function (Node\Expr $expr) use ($scope, $lateBoundScope): mixed {
             if ($expr instanceof Node\Expr\Cast) {
-                $value = $evaluator->evaluateDirectly($expr->expr);
+                $value = $this->evaluateCompileTimeExpression($expr->expr, $scope, $lateBoundScope);
                 return match (true) {
                     $expr instanceof Node\Expr\Cast\Int_ => (int) $value,
                     $expr instanceof Node\Expr\Cast\Double => (float) $value,
@@ -307,7 +306,7 @@ trait ClassConstantValueTrait
             if ($expr instanceof Node\Expr\ClassConstFetch && $expr->class instanceof Node\Name) {
                 $name = $expr->name instanceof Node\Identifier
                     ? $expr->name->toString()
-                    : $evaluator->evaluateDirectly($expr->name);
+                    : $this->evaluateCompileTimeExpression($expr->name, $scope, $lateBoundScope);
                 if (!is_string($name)) {
                     throw new \RuntimeException('A compile-time class constant name must evaluate to string');
                 }
@@ -348,7 +347,7 @@ trait ClassConstantValueTrait
             }
 
             if ($expr instanceof Node\Expr\PropertyFetch || $expr instanceof Node\Expr\NullsafePropertyFetch) {
-                $object = $evaluator->evaluateDirectly($expr->var);
+                $object = $this->evaluateCompileTimeExpression($expr->var, $scope, $lateBoundScope);
                 if ($object === null && $expr instanceof Node\Expr\NullsafePropertyFetch) {
                     return null;
                 }
@@ -363,7 +362,7 @@ trait ClassConstantValueTrait
                 }
                 $property = $expr->name instanceof Node\Identifier
                     ? $expr->name->toString()
-                    : $evaluator->evaluateDirectly($expr->name);
+                    : $this->evaluateCompileTimeExpression($expr->name, $scope, $lateBoundScope);
                 if ($property === 'name') {
                     return $object->caseName;
                 }

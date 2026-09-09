@@ -108,6 +108,11 @@ TEST(std_misc, random_int) {
 
     auto same = fn::random_int(5, 5);
     ASSERT_EQ(same, 5);
+
+    try_call(
+        []() { fn::random_int(10, 1); },
+        "random_int(): Argument #1 ($min) must be less than or equal to argument #2 ($max)"
+    );
 }
 
 TEST(std_misc, random_bytes) {
@@ -121,12 +126,32 @@ TEST(std_misc, random_bytes_exception) {
 }
 
 TEST(std_misc, mt_rand) {
-    auto r1 = fn::mt_rand();
-    ASSERT_GE(r1, 0);
+    for (int i = 0; i < 128; i++) {
+        auto r1 = fn::mt_rand();
+        ASSERT_GE(r1, 0);
+        ASSERT_LE(r1, PHP_MT_RAND_MAX);
+    }
 
     auto r2 = fn::mt_rand(1, 100);
     ASSERT_GE(r2, 1);
     ASSERT_LE(r2, 100);
+
+    call(getFunction("mt_srand"), {123456});
+    auto direct = fn::mt_rand();
+    call(getFunction("mt_srand"), {123456});
+    auto zend = call(getFunction("mt_rand"));
+    ASSERT_EQ(direct, zend.toInt());
+
+    call(getFunction("mt_srand"), {123456});
+    auto directRange = fn::mt_rand(10, 20);
+    call(getFunction("mt_srand"), {123456});
+    auto zendRange = call(getFunction("mt_rand"), {10, 20});
+    ASSERT_EQ(directRange, zendRange.toInt());
+
+    try_call(
+        []() { fn::mt_rand(100, 1); },
+        "mt_rand(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)"
+    );
 }
 
 TEST(std_misc, rand_func) {
@@ -136,6 +161,16 @@ TEST(std_misc, rand_func) {
     auto r2 = fn::rand(10, 20);
     ASSERT_GE(r2, 10);
     ASSERT_LE(r2, 20);
+
+    auto reversed = fn::rand(20, 10);
+    ASSERT_GE(reversed, 10);
+    ASSERT_LE(reversed, 20);
+
+    call(getFunction("mt_srand"), {123456});
+    auto direct = fn::rand(20, 10);
+    call(getFunction("mt_srand"), {123456});
+    auto zend = call(getFunction("rand"), {20, 10});
+    ASSERT_EQ(direct, zend.toInt());
 }
 
 // ========================
@@ -346,6 +381,14 @@ TEST(std_misc, date_func) {
 
     auto d2 = fn::date("Y-m-d", 0);
     ASSERT_STREQ(d2.toCString(), "1970-01-01");
+}
+
+TEST(std_misc, gmdate_func) {
+    auto d1 = fn::gmdate("Y-m-d H:i:s", 0);
+    ASSERT_STREQ(d1.toCString(), "1970-01-01 00:00:00");
+
+    auto d2 = fn::gmdate("Y-m-d");
+    ASSERT_GT(d2.length(), 0);
 }
 
 TEST(std_misc, strtotime_func) {

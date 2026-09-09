@@ -2,7 +2,6 @@
 Optimized builtins preserve strict typed parameter validation
 --FILE--
 <?php
-declare(strict_types=1);
 
 function mixedBool(): mixed
 {
@@ -82,7 +81,7 @@ function main()
     var_dump(function_exists(mixedString()));
     var_dump(round(...[1.25, 1]));
 
-    $events = [];
+    $events = std::any([]);
     var_dump(in_array(
         orderedNeedle($events),
         orderedHaystack($events),

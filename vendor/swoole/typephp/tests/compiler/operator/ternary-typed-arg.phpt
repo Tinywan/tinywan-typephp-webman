@@ -2,7 +2,6 @@
 Ternary with captured statements keeps its static type for typed arguments
 --FILE--
 <?php
-declare(strict_types=1);
 
 class TernaryBoolArg
 {

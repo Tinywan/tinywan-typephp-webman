@@ -2,9 +2,7 @@
 Namespaced object methods use a MethodsFor class
 --FILE--
 <?php
-
 namespace App {
-    use native_types;
 
     class User
     {

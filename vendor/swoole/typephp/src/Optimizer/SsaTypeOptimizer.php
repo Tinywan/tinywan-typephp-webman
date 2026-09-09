@@ -16,6 +16,7 @@ use TypePhp\Analysis\SsaFlags;
 use TypePhp\Analysis\SsaVar;
 use PhpParser\Node;
 use PhpParser\NodeAbstract;
+use PhpParser\NodeFinder;
 
 trait SsaTypeOptimizer
 {
@@ -94,11 +95,45 @@ trait SsaTypeOptimizer
             $groups[$name][] = $ssaVar;
         }
 
-        // Type detection may inspect RHS expressions that read variables
-        // defined by earlier assignments. Code generation normally registers
-        // those locals while parsing assignments, but SSA optimization runs
-        // before that parse pass, so seed the optimization context with the
-        // SSA-defined local names as generic Vars.
+        // Type detection may inspect RHS expressions before the normal parse
+        // pass has registered their inputs. This includes variables introduced
+        // by destructuring foreach targets, which are deliberately not always
+        // represented as standalone SSA definitions. Seed every statically
+        // named variable read as Var for analysis only; resetAnalysisTemporaries()
+        // restores the real symbol table before code generation, where genuine
+        // undefined-variable diagnostics still run normally.
+        $nodeFinder = new NodeFinder();
+        foreach ($nodeFinder->findInstanceOf($ssa->getStmts(), Node\Expr\Variable::class) as $variable) {
+            if (!is_string($variable->name)) {
+                continue;
+            }
+            $varName = $this->escapeVarName($variable->name);
+            if (!isset($this->context->arguments[$varName]) && !$this->hasVar($varName)) {
+                $this->context->localVars[$varName] = Type::VAR;
+            }
+        }
+
+        // A foreach key may be int or string and a foreach value is entirely
+        // runtime-defined. Even when the same local has an earlier integer
+        // assignment, neither target can be narrowed safely. Include list
+        // destructuring targets as well.
+        $foreachTargets = [];
+        foreach ($nodeFinder->findInstanceOf($ssa->getStmts(), Node\Stmt\Foreach_::class) as $foreach) {
+            foreach ([$foreach->keyVar, $foreach->valueVar] as $target) {
+                if (!$target instanceof Node) {
+                    continue;
+                }
+                if ($target instanceof Node\Expr\Variable && is_string($target->name)) {
+                    $foreachTargets[$target->name] = true;
+                }
+                foreach ($nodeFinder->findInstanceOf($target, Node\Expr\Variable::class) as $variable) {
+                    if (is_string($variable->name)) {
+                        $foreachTargets[$variable->name] = true;
+                    }
+                }
+            }
+        }
+
         foreach (array_keys($groups) as $name) {
             $varName = $this->escapeVarName($name);
             if (!isset($this->context->arguments[$varName]) && !$this->hasVar($varName)) {
@@ -109,7 +144,7 @@ trait SsaTypeOptimizer
         foreach ($groups as $groupName => $varList) {
             $varName = $this->escapeVarName($groupName);
             // Skip parameters — they already have declared types
-            if (isset($this->context->arguments[$varName])) {
+            if (isset($this->context->arguments[$varName]) || isset($foreachTargets[$groupName])) {
                 continue;
             }
 

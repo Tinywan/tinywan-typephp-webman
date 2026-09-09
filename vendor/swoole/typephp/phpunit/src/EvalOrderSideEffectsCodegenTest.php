@@ -19,7 +19,7 @@ final class EvalOrderSideEffectsCodegenTest extends \BaseTest
         $body = $this->extractFunctionBody($code, 'php_callargorder()');
 
         self::assertMatchesRegularExpression(
-            '/(tmp_var_\d+) = j;\s*\n\s*(tmp_var_\d+) = j = 5L{1,2};/',
+            '/(tmp_var_\d+) = php::toInt\(j\);\s*\n\s*(tmp_var_\d+) = php::toInt\(j = php::toInt\(5L{1,2}\)\);/',
             $body,
             'the old value of $j must be captured before $j = 5 executes',
         );
@@ -36,7 +36,7 @@ final class EvalOrderSideEffectsCodegenTest extends \BaseTest
         $body = $this->extractFunctionBody($code, 'php_concatorder()');
 
         self::assertMatchesRegularExpression(
-            '/(tmp_var_\d+) = m;\s*\n\s*(tmp_var_\d+) = m = 9L{1,2};/',
+            '/(tmp_var_\d+) = php::toInt\(m\);\s*\n\s*(tmp_var_\d+) = php::toInt\(m = php::toInt\(9L{1,2}\)\);/',
             $body,
             'the old value of $m must be captured before $m = 9 executes',
         );
@@ -53,7 +53,7 @@ final class EvalOrderSideEffectsCodegenTest extends \BaseTest
         $body = $this->extractFunctionBody($code, 'php_castwrappedcallargorder()');
 
         self::assertMatchesRegularExpression(
-            '/(tmp_var_\d+) = i;\s*\n\s*(tmp_var_\d+) = php::toInt\(i = 5L{1,2}\);/',
+            '/(tmp_var_\d+) = php::toInt\(i\);\s*\n\s*(tmp_var_\d+) = php::toInt\(i = php::toInt\(5L{1,2}\)\);/',
             $body,
             'the old value of $i must be captured before the cast-wrapped $i = 5 executes',
         );
@@ -70,7 +70,7 @@ final class EvalOrderSideEffectsCodegenTest extends \BaseTest
         $body = $this->extractFunctionBody($code, 'php_notwrappedcallargorder()');
 
         self::assertMatchesRegularExpression(
-            '/(tmp_var_\d+) = k;\s*\n\s*(tmp_var_\d+) = !\(php::toBool\(k = 0L{1,2}\)\);/',
+            '/(tmp_var_\d+) = php::toInt\(k\);\s*\n\s*(tmp_var_\d+) = php::toBool\(!\(php::toBool\(k = php::toInt\(0L{1,2}\)\)\)\);/',
             $body,
             'the old value of $k must be captured before the negated $k = 0 executes',
         );
@@ -89,10 +89,10 @@ final class EvalOrderSideEffectsCodegenTest extends \BaseTest
         // Zend reads the CV when the ADD executes, i.e. after the nested
         // assignment; the direct read of k matches that and must stay.
         self::assertMatchesRegularExpression(
-            '/(tmp_var_\d+) = k = 5L{1,2};\s*\n[^\n]*\(\(k\) \+ \(\1\)\)/',
+            '/(tmp_var_\d+) = php::toInt\(k = php::toInt\(5L{1,2}\)\);\s*\n[^\n]*\(\(k\) \+ \(\1\)\)/',
             $body,
         );
-        self::assertStringNotContainsString('= k;', $body);
+        self::assertStringNotContainsString('= php::toInt(k);', $body);
     }
 
     private function extractFunctionBody(string $code, string $marker): string

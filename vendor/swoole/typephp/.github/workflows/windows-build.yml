@@ -30,6 +30,13 @@ jobs:
       - name: Checkout TypePHP
         uses: actions/checkout@v4
 
+      - name: Checkout PHPX master
+        uses: actions/checkout@v4
+        with:
+          repository: swoole/phpx
+          ref: master
+          path: third_party/phpx
+
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -75,7 +82,7 @@ jobs:
           "PHP_VERSION=$phpVersion" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "PHP_THREAD_SAFETY=$threadSafety" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "PHP_HOME=$phpHome" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "PHPX_HOME=${{ github.workspace }}\vendor\swoole\phpx" |
+          "PHPX_HOME=${{ github.workspace }}\third_party\phpx" |
               Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "PHP_DEVEL_ARCHIVE=$archive" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "version=$phpVersion" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -254,7 +261,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.PHPX_HOME }}\thirdparty\mpdecimal\vcbuild\dist64
-          key: windows-2022-msvc-mpdecimal-x64-${{ hashFiles('vendor/swoole/phpx/thirdparty/mpdecimal/**') }}
+          key: windows-2022-msvc-mpdecimal-x64-${{ hashFiles('third_party/phpx/thirdparty/mpdecimal/**') }}
 
       - name: Build mpdecimal
         if: steps.cache-mpdecimal.outputs.cache-hit != 'true'

@@ -1654,22 +1654,33 @@ trait NativeClassSupportTrait
 
         $ordered = [];
         $visited = [];
-        $visit = function (ClassDef $class) use (&$visit, &$ordered, &$visited, $byName): void {
-            $key = strtolower(ltrim($class->getNamespacedName(false), '\\'));
-            if (isset($visited[$key])) {
-                return;
-            }
-            $visited[$key] = true;
-            $parent = strtolower(ltrim($class->extends, '\\'));
-            if ($parent !== '' && isset($byName[$parent])) {
-                $visit($byName[$parent]);
-            }
-            $ordered[] = $class;
-        };
         foreach ($classes as $class) {
-            $visit($class);
+            $this->appendNativeObjectClassInDeclarationOrder($class, $byName, $ordered, $visited);
         }
         return $ordered;
+    }
+
+    /**
+     * @param array<string, ClassDef> $byName
+     * @param list<ClassDef> $ordered
+     * @param array<string, bool> $visited
+     */
+    private function appendNativeObjectClassInDeclarationOrder(
+        ClassDef $class,
+        array $byName,
+        array &$ordered,
+        array &$visited,
+    ): void {
+        $key = strtolower(ltrim($class->getNamespacedName(false), '\\'));
+        if (isset($visited[$key])) {
+            return;
+        }
+        $visited[$key] = true;
+        $parent = strtolower(ltrim($class->extends, '\\'));
+        if ($parent !== '' && isset($byName[$parent])) {
+            $this->appendNativeObjectClassInDeclarationOrder($byName[$parent], $byName, $ordered, $visited);
+        }
+        $ordered[] = $class;
     }
 
     protected function genNativeObjectDeclarations(): string

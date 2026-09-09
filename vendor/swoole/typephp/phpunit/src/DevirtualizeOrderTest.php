@@ -60,6 +60,6 @@ class DevirtualizeOrderTest extends TestCase
         // A direct native call to the base implementation means the override
         // was wrongly devirtualized; the call must go through dynamic dispatch.
         self::assertStringNotContainsString('php_ordertest__base__perform', $m['body']);
-        self::assertStringContainsString('callScoped', $m['body']);
+        self::assertStringContainsString('typephp_call_method_scoped_cached', $m['body']);
     }
 }

@@ -2,8 +2,6 @@
 Static native properties use late static binding for static::$prop
 --FILE--
 <?php
-use native_types;
-
 class StaticPropBase {
     public static int $v = 1;
 

@@ -10,7 +10,7 @@ class TypeHitPropertyMessage
     public function setInvalid(): void
     {
         try {
-            $this->union = any(null);
+            $this->union = std::any(null);
         } catch (TypeError $e) {
             var_dump($e->getMessage());
         }

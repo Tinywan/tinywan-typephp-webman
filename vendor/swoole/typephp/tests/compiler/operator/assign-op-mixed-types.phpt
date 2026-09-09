@@ -3,9 +3,11 @@ Compound assignment operators with mixed Var/explicit std native types
 --FILE--
 <?php
 
+use varint_types;
+
 function main() {
     // ===== Var += various RHS types =====
-    // Var += Int (no native types — Var operator should handle coercion)
+    // Var += Int (varint_types — Var operator should handle coercion)
     $a = 10;
     $a += 5;
     var_dump($a);
@@ -40,7 +42,7 @@ function main() {
     $g %= 3;
     var_dump($g);
 
-    // ===== Explicit std::* native types without use native_types =====
+    // ===== Explicit std::* native types inside varint_types =====
     // Int += Int
     $h = std::int(100);
     $h += 50;

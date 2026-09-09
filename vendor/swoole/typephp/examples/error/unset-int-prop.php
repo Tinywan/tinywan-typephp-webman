@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 class Test {
     public int $x = 100;
 

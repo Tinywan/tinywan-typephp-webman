@@ -6,7 +6,6 @@
  * @contact  service@swoole.com
  */
 
-declare(strict_types=1);
 
 namespace TypePhp\Testing;
 
@@ -574,25 +573,27 @@ final class TestCoverageAnalyzer
     /** @param Node[] $nodes @return list<Node\Stmt\ClassMethod> */
     private function findClassMethods(array $nodes): array
     {
-        $methods = [];
-        $this->walkValues($nodes, static function (Node $node) use (&$methods): void {
+        $result = new \stdClass();
+        $result->values = [];
+        $this->walkValues($nodes, static function (Node $node) use ($result): void {
             if ($node instanceof Node\Stmt\ClassMethod) {
-                $methods[] = $node;
+                $result->values[] = $node;
             }
         });
-        return $methods;
+        return $result->values;
     }
 
     /** @param Node[] $nodes @return list<array{name: string, node: Expr\MethodCall}> */
     private function collectMethodCalls(array $nodes): array
     {
-        $calls = [];
-        $this->walkValues($nodes, static function (Node $node) use (&$calls): void {
+        $result = new \stdClass();
+        $result->values = [];
+        $this->walkValues($nodes, static function (Node $node) use ($result): void {
             if ($node instanceof Expr\MethodCall && $node->name instanceof Node\Identifier) {
-                $calls[] = ['name' => $node->name->toString(), 'node' => $node];
+                $result->values[] = ['name' => $node->name->toString(), 'node' => $node];
             }
         });
-        return $calls;
+        return $result->values;
     }
 
     private function findPhpFixtureArgument(Expr\MethodCall $call): ?string
@@ -610,8 +611,9 @@ final class TestCoverageAnalyzer
      */
     private function collectProviderRows(Node\Stmt\ClassMethod $method): array
     {
-        $rows = [];
-        $this->walkValues($method->stmts ?? [], static function (Node $node) use (&$rows): void {
+        $result = new \stdClass();
+        $result->values = [];
+        $this->walkValues($method->stmts ?? [], static function (Node $node) use ($result): void {
             if (!$node instanceof Expr\Yield_ || !$node->value instanceof Expr\Array_) {
                 return;
             }
@@ -622,9 +624,11 @@ final class TestCoverageAnalyzer
                 }
             }
             if ($strings !== []) {
-                $rows[] = $strings;
+                $result->values[] = $strings;
             }
         });
+
+        $rows = $result->values;
 
         if ($rows !== []) {
             return $rows;
@@ -687,11 +691,14 @@ final class TestCoverageAnalyzer
             return $fixtures;
         }
         if ($value instanceof Node) {
-            $this->walkValues($value, static function (Node $node) use (&$fixtures): void {
+            $result = new \stdClass();
+            $result->values = [];
+            $this->walkValues($value, static function (Node $node) use ($result): void {
                 if ($node instanceof Node\Scalar\String_ && str_ends_with($node->value, '.php')) {
-                    $fixtures[] = $node->value;
+                    $result->values[] = $node->value;
                 }
             });
+            $fixtures = $result->values;
         }
         return array_values(array_unique($fixtures));
     }
@@ -809,8 +816,10 @@ final class TestCoverageAnalyzer
     /** @param list<Node> $ancestors @param array<string, true> $features */
     private function detectSemanticNodeFeatures(Node $node, array $ancestors, array &$features): void
     {
-        $mark = static function (string $id) use (&$features): void {
-            $features['semantic:' . $id] = true;
+        $result = new \stdClass();
+        $result->features = $features;
+        $mark = static function (string $id) use ($result): void {
+            $result->features['semantic:' . $id] = true;
         };
 
         if ($node instanceof Node\Name\Relative) {
@@ -917,13 +926,16 @@ final class TestCoverageAnalyzer
                 }
             }
         }
+        $features = $result->features;
     }
 
     /** @param array<string, true> $features */
     private function detectSourceFeatures(string $code, array &$features): void
     {
-        $mark = static function (string $id) use (&$features): void {
-            $features['semantic:' . $id] = true;
+        $result = new \stdClass();
+        $result->features = $features;
+        $mark = static function (string $id) use ($result): void {
+            $result->features['semantic:' . $id] = true;
         };
         if (preg_match('/\b(?:if|elseif|for|foreach|while|switch)\s*\([^;{}]*\)\s*:/s', $code)
             || preg_match('/\bend(?:if|for|foreach|while|switch)\s*;/i', $code)
@@ -942,6 +954,7 @@ final class TestCoverageAnalyzer
         if (preg_match('/\b(?:exit|die)\s*\(\s*message\s*:/i', $code)) {
             $mark('exit_named_argument');
         }
+        $features = $result->features;
     }
 
     private function unionContainsIntersection(Node\UnionType $type): bool

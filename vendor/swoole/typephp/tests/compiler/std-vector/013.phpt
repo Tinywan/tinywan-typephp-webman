@@ -2,7 +2,6 @@
 std vector: foreach
 --FILE--
 <?php
-use native_types;
 function main() {
     $a = std::vector(Type::Int);
     $n = 5;

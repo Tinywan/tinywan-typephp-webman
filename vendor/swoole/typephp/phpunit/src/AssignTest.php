@@ -171,7 +171,7 @@ class AssignTest extends \BaseTest
 
     public function testStrictTypesZeroNotAllowed()
     {
-        $this->exec("declare(strict_types=0) is not allowed, only strict_types=1 is supported", 'declare-strict-types-zero.php');
+        $this->exec("TypePHP always uses strict types; declare(strict_types=0) is not allowed", 'declare-strict-types-zero.php');
     }
 
     /** @dataProvider nativeScalarArrayDimWriteProvider */

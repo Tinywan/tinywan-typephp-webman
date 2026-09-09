@@ -2,7 +2,6 @@
 Nullable and non-nullable builtin parameters preserve strict null semantics
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main()
 {

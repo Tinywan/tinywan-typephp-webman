@@ -7,7 +7,6 @@
  * @contact  service@swoole.com
  */
 
-declare(strict_types=1);
 
 use TypePhp\Testing\TestCoverageAnalyzer;
 

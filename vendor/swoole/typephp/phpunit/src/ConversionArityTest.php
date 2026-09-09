@@ -23,7 +23,7 @@ class ConversionArityTest extends TestCase
 
         // The Native cast carries no base, so both calls must keep the second
         // argument by going through the dynamic path.
-        self::assertStringNotContainsString('php::toInt(', $cpp);
+        self::assertSame(2, substr_count($cpp, 'php::call(get_persistent_func(PersistentFuncId{1}'));
         self::assertSame(2, substr_count($cpp, '16L'));
     }
 
@@ -33,10 +33,10 @@ class ConversionArityTest extends TestCase
 
         // An unpacked argument is one Node\Arg whatever its runtime arity is,
         // so the array itself must never be handed to a Native cast.
-        self::assertStringNotContainsString('php::toInt(', $cpp);
-        self::assertStringNotContainsString('php::toString(', $cpp);
-        self::assertStringNotContainsString('php::toFloat(', $cpp);
-        self::assertStringNotContainsString('php::toBool(', $cpp);
+        self::assertStringNotContainsString('php::fn::intval(', $cpp);
+        self::assertStringNotContainsString('php::fn::strval(', $cpp);
+        self::assertStringNotContainsString('php::fn::floatval(', $cpp);
+        self::assertStringNotContainsString('php::fn::boolval(', $cpp);
 
         // Five full unpacks plus the partial intval('ff', ...[16]).
         self::assertSame(6, substr_count($cpp, 'appendUnpacked('));

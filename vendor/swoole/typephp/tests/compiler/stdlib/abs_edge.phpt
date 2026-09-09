@@ -2,7 +2,7 @@
 abs edge cases: PHP_INT_MIN and -0.0
 --FILE--
 <?php
-$value = any(PHP_INT_MIN);
+$value = std::any(PHP_INT_MIN);
 var_dump(abs($value));
 var_dump(abs(-0.0));
 var_dump(abs(0));

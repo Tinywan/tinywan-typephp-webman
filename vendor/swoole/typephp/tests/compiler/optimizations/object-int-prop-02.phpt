@@ -2,10 +2,8 @@
 SSA: int
 --FILE--
 <?php
-use native_types;
 class Foo {
     public int $b;
-
     function assign_add_prop($n) {
         for ($i = 0; $i < $n; ++$i) {
             $this->b += 2;

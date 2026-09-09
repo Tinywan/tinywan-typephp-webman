@@ -2,9 +2,7 @@
 Object MethodsFor methods require consistent names and ignore letter case
 --FILE--
 <?php
-
 namespace App {
-    use native_types;
 
     class UserService
     {

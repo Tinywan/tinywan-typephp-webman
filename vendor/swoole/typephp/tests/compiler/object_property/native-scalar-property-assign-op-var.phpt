@@ -2,8 +2,6 @@
 Native scalar object property compound assignment checks var RHS before native write
 --FILE--
 <?php
-use native_types;
-
 class NativeScalarAssignOpVarBox
 {
     public int $intValue = 1;
@@ -20,23 +18,23 @@ function main(): void
 {
     $box = new NativeScalarAssignOpVarBox();
 
-    $intDelta = any(2);
+    $intDelta = std::any(2);
     $box->intValue += $intDelta;
 
-    $floatDelta = any(2.25);
+    $floatDelta = std::any(2.25);
     $box->floatValue += $floatDelta;
 
     var_dump($box->intValue);
     var_dump($box->floatValue);
 
-    $methodIntDelta = any(3);
-    $methodFloatDelta = any(0.25);
+    $methodIntDelta = std::any(3);
+    $methodFloatDelta = std::any(0.25);
     $box->addInside($methodIntDelta, $methodFloatDelta);
     var_dump($box->intValue);
     var_dump($box->floatValue);
 
     try {
-        $badIntDelta = any("4");
+        $badIntDelta = std::any("4");
         $box->intValue += $badIntDelta;
     } catch (TypeError $e) {
         var_dump($e->getMessage());

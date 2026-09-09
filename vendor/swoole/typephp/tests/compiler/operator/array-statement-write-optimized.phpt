@@ -2,7 +2,6 @@
 Known array statement writes preserve references, keys and expression results
 --FILE--
 <?php
-declare(strict_types=1);
 
 function main(): void
 {

@@ -2,8 +2,6 @@
 default array property
 --FILE--
 <?php
-use native_types;
-
 class Test {
     protected int $x = 100;
 

@@ -2,9 +2,6 @@
 BigInt mixed operations with Int
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = 12345678901234567890;
     // BigInt + Int

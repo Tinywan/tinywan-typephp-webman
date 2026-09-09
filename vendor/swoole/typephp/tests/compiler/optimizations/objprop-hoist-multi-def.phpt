@@ -2,7 +2,6 @@
 SSA object prop: multiple definitions prevent hoisting
 --FILE--
 <?php
-use native_types;
 class Foo {
     public int $a;
 }
@@ -11,7 +10,6 @@ function main(): void {
     $o->a = 100;
     $o = new Foo();
     $o->a = 200;
-
     $n = 10;
     while($n--) {
         $o->a += 5;

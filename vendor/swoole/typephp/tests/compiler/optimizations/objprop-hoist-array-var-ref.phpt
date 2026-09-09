@@ -2,8 +2,6 @@
 SSA object prop: hoist array property through indirect Var handle
 --FILE--
 <?php
-use native_types;
-
 class Foo {
     public array $items = [];
 }

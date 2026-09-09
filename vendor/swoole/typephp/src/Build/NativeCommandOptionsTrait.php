@@ -23,6 +23,12 @@ trait NativeCommandOptionsTrait
         }
 
         $userDefines = $this->userDefines;
+        if ($this->isIosTarget()) {
+            $userDefines[] = 'PHPX_IOS=1';
+        }
+        if ($this->isAndroidTarget()) {
+            $userDefines[] = 'PHPX_ANDROID=1';
+        }
         if ($this->isBuildModeLib()) {
             $userDefines[] = 'TYPEPHP_NO_MAIN=1';
             $userDefines[] = $this->getLibraryExportsMacroName() . '=1';

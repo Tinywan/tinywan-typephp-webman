@@ -139,9 +139,9 @@ trait ClassConstantFetchTrait
                 $this->fatalError($expr, "The 'static' keyword can only be used as the class name in class methods");
             }
             if ($const === 'class') {
-                return Symbol::getCalledClass();
+                return $this->getCalledClassExpr();
             } else {
-                return Symbol::constant() . '(' . Symbol::getCalledCe() . ', ' . $this->getLiteralString($const) . ')';
+                return Symbol::constant() . '(' . $this->getCalledCeExpr() . ', ' . $this->getLiteralString($const) . ')';
             }
         }
 
@@ -241,7 +241,7 @@ trait ClassConstantFetchTrait
             if (!$this->methodDef) {
                 $this->fatalError($expr, "The 'static' keyword can only be used as the class name in class methods");
             }
-            $ce = Symbol::getCalledCe();
+            $ce = $this->getCalledCeExpr();
         } elseif ($class === 'self' or $class === 'this_') {
             $ce = $this->getClassEntryPtr($this->getFullClassName());
         } elseif ($class === 'parent') {

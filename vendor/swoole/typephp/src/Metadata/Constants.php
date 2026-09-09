@@ -14,6 +14,9 @@ class Constants
 {
     public const string EXTENSION_PREFIX = 'typephp_';
 
+    /** Keep generated project namespaces disjoint from global typephp_* runtime helpers. */
+    public const string CPP_PROJECT_NAMESPACE_PREFIX = 'typephp_project_';
+
     public const array CPP_RESERVED_NAMES = [
         'alignas',
         'alignof',

@@ -2,7 +2,6 @@
 Object property reference assignment preserves aliases and typed-property sources
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class PropertyReferenceHolder
 {
@@ -13,7 +12,7 @@ final class PrivatePropertyReferenceHolder
 {
     private ?array $value = null;
 
-    public function bind(array &$source): void
+    public function bind(mixed &$source): void
     {
         $this->value = &$source;
     }
@@ -73,19 +72,19 @@ function trackThroughSplObjectStorage(object $target): PropertyReferenceDep
 function main(): void
 {
     $holder = new PropertyReferenceHolder();
-    $source = ['initial' => 1];
+    $source = std::any(['initial' => 1]);
     $holder->value = &$source;
     $source['source'] = 2;
     $holder->value['property'] = 3;
     var_dump($source);
 
     $dynamicHolder = new PropertyReferenceHolder();
-    $dynamicSource = [];
+    $dynamicSource = std::any([]);
     bindObjectProperty($dynamicHolder, $dynamicSource);
     $dynamicSource['dynamic'] = true;
     var_dump($dynamicHolder->value);
 
-    $wrong = 'invalid';
+    $wrong = std::any('invalid');
     try {
         bindObjectProperty($dynamicHolder, $wrong);
         echo "missing initial TypeError\n";
@@ -95,7 +94,7 @@ function main(): void
     $dynamicSource['preserved'] = true;
     var_dump($dynamicHolder->value);
 
-    $replacement = ['replacement' => true];
+    $replacement = std::any(['replacement' => true]);
     $holder->value = &$replacement;
     replaceReference($source, 'detached');
     var_dump($source);
@@ -107,14 +106,14 @@ function main(): void
     }
     var_dump($holder->value);
 
-    $privateSource = [];
+    $privateSource = std::any([]);
     $privateHolder = new PrivatePropertyReferenceHolder();
     $privateHolder->bind($privateSource);
     $privateSource['private'] = true;
     var_dump($privateHolder->value());
 
-    $events = [];
-    $orderedSource = [];
+    $events = std::any([]);
+    $orderedSource = std::any([]);
     $orderedHolder = new PropertyReferenceHolder();
     propertyReferenceTarget($events, $orderedHolder)->{propertyReferenceName($events)}
         = &propertyReferenceSource($events, $orderedSource);

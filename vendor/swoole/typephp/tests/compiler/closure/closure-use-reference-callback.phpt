@@ -16,7 +16,7 @@ function apply_items(array $items, callable $cb): string
 
 function main(): void
 {
-    $errors = [];
+    $errors = std::any([]);
     array_map(function ($value) use (&$errors) {
         if ($value % 2 === 0) {
             $errors[] = "even:$value";
@@ -25,7 +25,7 @@ function main(): void
     }, [1, 2, 3, 4]);
     var_dump($errors);
 
-    $generated = [];
+    $generated = std::any([]);
     $code = apply_items([1, 2, 3], function ($value) use (&$generated) {
         $generated[] = $value * 10;
         return "[$value]";
@@ -33,7 +33,7 @@ function main(): void
     var_dump($code);
     var_dump($generated);
 
-    $declaredStrings = [];
+    $declaredStrings = std::any([]);
     $emit = function (string $name) use (&$declaredStrings): string {
         if (isset($declaredStrings[$name])) {
             return $declaredStrings[$name];

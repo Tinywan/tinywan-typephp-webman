@@ -1,13 +1,14 @@
 ## Require
 
 * `PHP-X`
-* `PHP >= 7.2`
+* `PHP 8.4` or `PHP 8.5`
 
 ## 安装使用
 
 ```bash
-phpx build -v
-phpx install
+cmake -S . -B build
+cmake --build build -j 4
+sudo cmake --install build
 
-php -dextension=queue.so tests/main.phpt
+php run-tests.php tests
 ```

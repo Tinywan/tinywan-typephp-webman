@@ -9,8 +9,8 @@ function &ternary_ref_value(mixed &$value): mixed
 
 function main(): void
 {
-    $first = 1;
-    $second = 2;
+    $first = std::any(1);
+    $second = std::any(2);
     $values = [1];
 
     $result = count($values) > 0

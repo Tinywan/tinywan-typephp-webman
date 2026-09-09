@@ -734,13 +734,13 @@ class SsaAnalysisTest extends TestCase
         $this->assertTrue($result, 'func(&$obj->prop) before a later access should be detected');
     }
 
-    public function testHasDangerousPropOpsRefval(): void
+    public function testHasDangerousPropOpsStdRef(): void
     {
         $objVar = new Expr\Variable('obj');
         $propFetch = new Expr\PropertyFetch($objVar, 'prop');
-        $refvalArg = new Arg($propFetch);
-        $refvalCall = new Expr\FuncCall(new Node\Name('refval'), [$refvalArg]);
-        $arg = new Arg($refvalCall);
+        $stdRefArg = new Arg($propFetch);
+        $stdRefCall = new Expr\StaticCall(new Node\Name('std'), new Node\Identifier('ref'), [$stdRefArg]);
+        $arg = new Arg($stdRefCall);
         $funcCall = new Expr\FuncCall(new Node\Name('someFunc'), [$arg]);
         $stmt = new Stmt\Expression($funcCall);
         $read = new Stmt\Expression(new Expr\Assign(
@@ -749,7 +749,7 @@ class SsaAnalysisTest extends TestCase
         ));
 
         $result = $this->invoke('hasDangerousPropOps', 'obj', [$stmt, $read]);
-        $this->assertTrue($result, 'func(refval($obj->prop)) before a later access should be detected');
+        $this->assertTrue($result, 'func(std::ref($obj->prop)) before a later access should be detected');
     }
 
     public function testHasDangerousPropOpsClean(): void
@@ -782,11 +782,15 @@ class SsaAnalysisTest extends TestCase
         $this->assertTrue($result, '&$obj->prop inside if before a later access should be detected');
     }
 
-    public function testHasDangerousPropOpsNestedRefvalInAssignment(): void
+    public function testHasDangerousPropOpsNestedStdRefInAssignment(): void
     {
         $propFetch = new Expr\PropertyFetch(new Expr\Variable('obj'), 'prop');
-        $refvalCall = new Expr\FuncCall(new Node\Name('refval'), [new Arg($propFetch)]);
-        $funcCall = new Expr\FuncCall(new Node\Name('someFunc'), [new Arg($refvalCall)]);
+        $stdRefCall = new Expr\StaticCall(
+            new Node\Name('std'),
+            new Node\Identifier('ref'),
+            [new Arg($propFetch)],
+        );
+        $funcCall = new Expr\FuncCall(new Node\Name('someFunc'), [new Arg($stdRefCall)]);
         $stmt = new Stmt\Expression(new Expr\Assign(new Expr\Variable('result'), $funcCall));
         $read = new Stmt\Expression(new Expr\Assign(
             new Expr\Variable('value'),
@@ -794,7 +798,7 @@ class SsaAnalysisTest extends TestCase
         ));
 
         $result = $this->invoke('hasDangerousPropOps', 'obj', [$stmt, $read]);
-        $this->assertTrue($result, 'refval($obj->prop) nested in an assignment RHS before a later access should be detected');
+        $this->assertTrue($result, 'std::ref($obj->prop) nested in an assignment RHS before a later access should be detected');
     }
 
     public function testHasDangerousPropOpsNestedByRefInReturn(): void

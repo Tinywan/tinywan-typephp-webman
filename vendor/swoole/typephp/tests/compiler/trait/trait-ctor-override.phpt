@@ -3,7 +3,6 @@ Class __construct overrides the one provided by a trait
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 trait TestTrait
 {

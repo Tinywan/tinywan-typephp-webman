@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 const KEY_W = 0x57;
 const KEY_A = 0x41;

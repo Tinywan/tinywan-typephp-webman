@@ -1,7 +1,5 @@
 <?php
-
 namespace NativePropSource {
-    use native_types;
 
     class Target
     {
@@ -12,7 +10,6 @@ namespace NativePropSource {
 }
 
 namespace NativePropSource\Target {
-    use native_types;
     use NativePropSource\Target;
 
     class Child extends Target

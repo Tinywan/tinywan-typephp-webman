@@ -3,7 +3,6 @@ class const override variants (self::class, parent::class, references, multi-lev
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 class Base
 {

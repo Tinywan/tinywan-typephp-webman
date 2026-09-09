@@ -5,7 +5,7 @@ ref 004
 function main()
 {
     $a = [1, 2, 3];
-    $b = [4, 5];
+    $b = std::any([4, 5]);
     $a[] = &$b;
     var_dump($a);
 

@@ -2,7 +2,6 @@
 Type Declarations - Strict and weak typing modes
 --FILE--
 <?php
-declare(strict_types=1);
 
 // Test iterable type
 function sum_iterable(iterable $numbers): int {

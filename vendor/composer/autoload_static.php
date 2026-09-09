@@ -51,7 +51,6 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         array (
             'Psr\\Log\\' => 8,
             'Psr\\Container\\' => 14,
-            'Phpx\\' => 5,
             'PhpParser\\' => 10,
         ),
         'M' =>
@@ -153,10 +152,6 @@ class ComposerStaticInit691f538563ac6695008ddc51b7722c80
         'Psr\\Container\\' =>
         array (
             0 => __DIR__ . '/..' . '/psr/container/src',
-        ),
-        'Phpx\\' =>
-        array (
-            0 => __DIR__ . '/..' . '/swoole/phpx/src/php',
         ),
         'PhpParser\\' =>
         array (

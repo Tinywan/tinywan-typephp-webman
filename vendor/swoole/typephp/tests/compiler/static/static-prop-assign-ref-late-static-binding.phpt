@@ -2,8 +2,6 @@
 Assign by reference to late-static-bound property resolves to called class
 --FILE--
 <?php
-use native_types;
-
 class Base {
     protected static int $value = 1;
 

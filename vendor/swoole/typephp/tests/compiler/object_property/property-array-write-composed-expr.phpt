@@ -25,7 +25,7 @@ function next_value(&$counter) {
 
 function main() {
     $box = new PropertyArrayWriteComposedBox();
-    $counter = 0;
+    $counter = std::any(0);
 
     $a = ($box->node->items[] = next_value($counter));
     $b = true ? ($box->node->items['k'] = next_value($counter)) : 99;

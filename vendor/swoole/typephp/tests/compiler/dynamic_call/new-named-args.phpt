@@ -2,7 +2,6 @@
 Dynamic instantiation with named arguments and dynamic method call
 --FILE--
 <?php
-declare(strict_types=1);
 
 class HelloController {
     public string $prefix;

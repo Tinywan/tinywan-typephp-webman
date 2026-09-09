@@ -1,6 +1,4 @@
 <?php
-use native_types;
-
 class Foo {
     static public int $a;
     static public object $o;

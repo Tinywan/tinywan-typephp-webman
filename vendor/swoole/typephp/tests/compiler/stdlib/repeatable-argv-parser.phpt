@@ -16,7 +16,7 @@ function is_long_flag_with_equals(string $arg, array $flags, array &$values): bo
 
 function parse_repeatable_argv(array $argv, array $flags): array
 {
-    $values = [];
+    $values = std::any([]);
     for ($i = 1; $i < count($argv); $i++) {
         if (in_array($argv[$i], $flags, true) && isset($argv[$i + 1]) && $argv[$i + 1] !== '' && $argv[$i + 1][0] !== '-') {
             $values[] = $argv[$i + 1];

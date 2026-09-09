@@ -9,7 +9,7 @@ namespace {
 
         public function run()
         {
-            $x = 5;
+            $x = std::any(5);
             // $x 已定义；$y 未定义，按引用传参后由实现类赋值
             $this->abc($x, $y);
             var_dump($x, $y);

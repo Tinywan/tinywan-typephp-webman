@@ -57,12 +57,12 @@ class AssignAnyOther implements AssignAnyInterface
 function main(): void
 {
     $base = new AssignAnyBase();
-    $base = any(new AssignAnyChild());
+    $base = std::any(new AssignAnyChild());
     var_dump($base->name());
 
     $child = new AssignAnyChild();
     try {
-        $child = any(new AssignAnyBase());
+        $child = std::any(new AssignAnyBase());
     } catch (Throwable $e) {
         echo $e->getMessage(), "\n";
     }

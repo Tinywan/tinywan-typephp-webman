@@ -26,7 +26,7 @@ function multi_return_forward_defaults(
 function main(): void
 {
     $object = (object) ['name' => 'direct'];
-    $directReference = 'before';
+    $directReference = std::any('before');
     [$value, $text, $items, $directObject, $count, $returnedReference, $rest]
         = multi_return_forward_args('value', 'text', [1], $object, 2, $directReference, 'x');
     var_dump(
@@ -40,7 +40,7 @@ function main(): void
         $rest,
     );
 
-    $arrayReference = 'before';
+    $arrayReference = std::any('before');
     $array = multi_return_forward_args('array', 'adapter', [3], $object, 4, $arrayReference, 'y', 'z');
     var_dump($arrayReference, $array[0], $array[1], $array[2], $array[3]->name, $array[4], $array[5], $array[6]);
 

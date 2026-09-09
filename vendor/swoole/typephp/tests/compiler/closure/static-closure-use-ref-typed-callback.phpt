@@ -13,7 +13,7 @@ function apply_items(iterable $items, Closure $callback): array
 
 function main(): void
 {
-    $seen = [];
+    $seen = std::any([]);
     $prefix = 'v';
 
     $result = apply_items(

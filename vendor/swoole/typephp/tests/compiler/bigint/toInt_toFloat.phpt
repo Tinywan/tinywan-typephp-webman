@@ -2,9 +2,6 @@
 BigInt: toInt / toFloat
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::bigInt(42);
     var_dump($a->toInt());

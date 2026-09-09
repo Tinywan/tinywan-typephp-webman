@@ -2,7 +2,6 @@
 use decimal_types — float literals auto-converted to Decimal
 --FILE--
 <?php
-declare(strict_types=1);
 use decimal_types;
 
 function main(): void {

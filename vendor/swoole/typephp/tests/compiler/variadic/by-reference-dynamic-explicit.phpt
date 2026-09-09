@@ -1,5 +1,5 @@
 --TEST--
-Dynamic calls require explicit refval for by-reference arguments
+Dynamic calls require explicit std::ref for by-reference arguments
 --FILE--
 <?php
 
@@ -25,21 +25,21 @@ class DynamicReferenceMutator
 function main(): void
 {
     $function = 'dynamic_increment';
-    $number = 40;
-    $function(refval($number));
+    $number = std::any(40);
+    $function(std::ref($number));
     var_dump($number);
 
     $mutator = new DynamicReferenceMutator();
     $method = [$mutator, 'suffix'];
-    $first = 'one';
-    $second = 'two';
-    $method('!', refval($first), refval($second));
+    $first = std::any('one');
+    $second = std::any('two');
+    $method('!', std::ref($first), std::ref($second));
     var_dump($first, $second);
 
     $closure = static function (&$value): void {
         $value .= '?';
     };
-    $closure(refval($second));
+    $closure(std::ref($second));
     var_dump($second);
 }
 ?>

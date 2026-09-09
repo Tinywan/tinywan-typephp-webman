@@ -2,8 +2,6 @@
 SSA object prop: object argument escape prevents property hoisting
 --FILE--
 <?php
-use native_types;
-
 class Foo {
     public int $a;
 }

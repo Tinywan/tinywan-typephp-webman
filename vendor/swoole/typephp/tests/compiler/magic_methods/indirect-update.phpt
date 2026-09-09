@@ -2,7 +2,6 @@
 Magic Methods - indirect property update uses __get by reference
 --FILE--
 <?php
-declare(strict_types=1);
 
 class MagicUpdateTest
 {

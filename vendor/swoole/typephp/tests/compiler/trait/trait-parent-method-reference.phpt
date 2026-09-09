@@ -26,7 +26,7 @@ class ReferenceChild extends ReferenceParent
 
 function main(): void
 {
-    $value = 'initial';
+    $value = std::any('initial');
     $child = new ReferenceChild();
     $child->update($value);
     var_dump($value);

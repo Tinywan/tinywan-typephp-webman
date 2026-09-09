@@ -47,25 +47,25 @@ function main() {
     $errors = [];
 
     try {
-        expect_int_or_string(any(3.14));
+        expect_int_or_string(std::any(3.14));
     } catch (\TypeError $e) {
         $errors[] = $e->getMessage();
     }
 
     try {
-        expect_int_or_string(any([]));
+        expect_int_or_string(std::any([]));
     } catch (\TypeError $e) {
         $errors[] = $e->getMessage();
     }
 
     try {
-        expect_nullable_int(any("hello"));
+        expect_nullable_int(std::any("hello"));
     } catch (\TypeError $e) {
         $errors[] = $e->getMessage();
     }
 
     try {
-        expect_bool_or_array(any(42));
+        expect_bool_or_array(std::any(42));
     } catch (\TypeError $e) {
         $errors[] = $e->getMessage();
     }

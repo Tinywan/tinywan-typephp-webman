@@ -2,7 +2,6 @@
 array_keys optimized calls preserve dynamic arguments, strict types, and evaluation order
 --FILE--
 <?php
-declare(strict_types=1);
 
 final class ArrayKeysOptions
 {
@@ -61,7 +60,7 @@ function main()
     $options = new ArrayKeysOptions();
     var_dump(array_keys($values, '1', $options->strict));
 
-    $events = [];
+    $events = std::any([]);
     var_dump(array_keys(
         arrayKeysDynamicValues($events),
         arrayKeysDynamicFilter($events),

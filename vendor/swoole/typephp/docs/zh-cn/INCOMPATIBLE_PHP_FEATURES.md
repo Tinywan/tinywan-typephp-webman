@@ -36,7 +36,7 @@
 
 - 不支持 `declare(ticks=...)`。
 - `declare(encoding=...)` 只允许 `UTF-8`。
-- `declare(strict_types=...)` 只允许 `strict_types=1`。
+- TypePHP 始终使用严格类型。`declare(strict_types=1)` 可兼容接受但没有作用；`strict_types=0` 会被拒绝。
 - 不支持其他 `declare` 指令。
 
 ## 调用与引用
@@ -44,10 +44,24 @@
 - `exit(message: $value)` 可作为 TypePHP named-argument 扩展使用；它与位置参数 `exit($value)` 进入同一退出路径。
 - TypePHP 使用严格参数数量规则：非 variadic 函数不接受声明范围之外的额外参数；`func_get_args()` 不会隐式放宽签名。
 - 已知签名的普通函数、普通方法和 native 直调支持引用参数及写回；不要把编译器内部跨 Trait 动态分派的限制误写成“TypePHP 不支持引用参数”。
-- 闭包和箭头函数支持固定引用参数。Closure 调用属于动态分派，调用方仍须通过 `refval()` / `toRef()` 显式标记引用参数；由 Zend 发起 callback 时则会自动使用编译器生成的 Closure arginfo。
+- 闭包和箭头函数支持固定引用参数。Closure 调用属于动态分派，调用方仍须通过 `std::ref()` / `toRef()` 显式标记引用参数；由 Zend 发起 callback 时则会自动使用编译器生成的 Closure arginfo。
 - 引用赋值不支持从复杂静态属性表达式建立引用。
-- 动态调用、闭包调用等编译期无法确定参数签名的调用，不能自动转换引用参数；需要显式使用 `refval()` 或等价关键词方法 `toRef()`。
-- `refval()` / `toRef()` 只接受变量、数组元素或对象属性。
+- 动态调用、闭包调用等编译期无法确定参数签名的调用，不能自动转换引用参数；需要显式使用 `std::ref()` 或等价关键词方法 `toRef()`。
+- `std::ref()` / `toRef()` 只接受变量、数组元素或对象属性。
+- 固定 `int`、`float`、`bool`、`string`、`array` 局部变量支持受限的原生引用模型。
+  `$alias =& $value` 这类函数顶层的一次性绑定会生成 C++ `T&`；静态可解析的 TypePHP
+  调用中，精确的 `int/string/float/bool/array &$arg` 同样直接传递 `T&`，不装箱也不
+  创建 Zend reference。由于 C++ 引用不能改绑或逃逸，条件/循环内首次绑定、重新绑定、
+  `unset`、Closure 按引用捕获、按引用返回局部变量，以及把引用保存到属性、数组或全局
+  槽位均会在编译期拒绝。
+- 动态函数、动态方法和 Closure 调用仍须显式使用 `std::ref()` / `toRef()`。TypePHP
+  为本次调用建立 Zend reference，返回时校验类型并写回；动态代码若把临时引用保留到
+  调用之外会得到明确错误。需要完整 PHP 引用身份时，应以 `std::any()` 初始化局部变量，
+  继续使用既有 `php::Var` / `php::Ref` 动态路径。
+- 固定 object、resource/stream、高精度值、Native/typed object、Box 与 `std` 容器局部
+  变量禁止取引用。这些值本身已有句柄或引用式语义，对其静态局部槽位改绑只会削弱类型
+  系统。Typed Property 仍可取引用，Zend 会附加属性 type source；PHP 数组元素仍是
+  可取引用的动态槽位。
 - 带 unpack 且尾部追加 named arguments 的调用会退化为动态调用，不能使用 native call。
 
 ## 对象模型
@@ -80,7 +94,7 @@
 - `static::class` 在需要编译期常量类名的位置不支持。
 - `__CLASS__` 只允许在 `class` 定义的代码段中使用（`PHP`允许，返回空字符串）。
 - `__TRAIT__` 只允许在 `trait` 定义的代码段中使用（`PHP`允许，返回空字符串）。
-- 动态属性链、动态类名、动态函数名和动态回调会统一走 Zend runtime fallback，不保证 native 优化；动态调用的引用参数仍需显式使用 `refval()` 或 `toRef()`。
+- 动态属性链、动态类名、动态函数名和动态回调会统一走 Zend runtime fallback，不保证 native 优化；动态调用的引用参数仍需显式使用 `std::ref()` 或 `toRef()`。
 - 不支持 `Closure::bind()`、`Closure::bindTo()` 和 `Closure::call()`；闭包不能在 AOT 代码中重新绑定对象或 class scope。
 - 所有源文件必须是 `UTF-8` 编码。
 

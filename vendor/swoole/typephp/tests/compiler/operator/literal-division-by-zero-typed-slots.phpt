@@ -2,6 +2,8 @@
 Literal zero divisors on typed native slots raise catchable DivisionByZeroError
 --FILE--
 <?php
+use varint_types;
+
 function divInt(int $value): mixed
 {
     try {

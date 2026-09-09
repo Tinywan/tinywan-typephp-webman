@@ -313,7 +313,7 @@ class SsaBuilderTest extends TestCase
     public function testNestedCallByRefCreatesEscapedVar(): void
     {
         $builder = $this->buildSsa('
-            $y = some_func(refval($x));
+            $y = some_func(std::ref($x));
         ');
 
         $escapedVar = null;
@@ -323,14 +323,14 @@ class SsaBuilderTest extends TestCase
                 break;
             }
         }
-        $this->assertNotNull($escapedVar, 'Nested refval($x) should create ESCAPED SSA var');
+        $this->assertNotNull($escapedVar, 'Nested std::ref($x) should create ESCAPED SSA var');
     }
 
     public function testCallByRefInsideLoopCreatesEscapedVar(): void
     {
         $builder = $this->buildSsa('
             while ($x) {
-                some_func(refval($x));
+                some_func(std::ref($x));
             }
         ');
 
@@ -341,14 +341,14 @@ class SsaBuilderTest extends TestCase
                 break;
             }
         }
-        $this->assertNotNull($escapedVar, 'refval($x) inside loop body should create ESCAPED SSA var');
+        $this->assertNotNull($escapedVar, 'std::ref($x) inside loop body should create ESCAPED SSA var');
     }
 
-    public function testRefvalCallByRefCreatesEscapedVar(): void
+    public function testStdRefCallByRefCreatesEscapedVar(): void
     {
-        // refval() is the AOT compiler's pseudo-function for dynamic call reference passing
+        // std::ref() is the AOT compiler's pseudo-function for dynamic call reference passing
         $builder = $this->buildSsa('
-            some_func(refval($x));
+            some_func(std::ref($x));
         ');
 
         $escapedVar = null;
@@ -358,13 +358,13 @@ class SsaBuilderTest extends TestCase
                 break;
             }
         }
-        $this->assertNotNull($escapedVar, 'refval() call should create ESCAPED SSA var for its argument');
+        $this->assertNotNull($escapedVar, 'std::ref() call should create ESCAPED SSA var for its argument');
     }
 
-    public function testRefvalWithMultipleArgs(): void
+    public function testStdRefWithMultipleArgs(): void
     {
         $builder = $this->buildSsa('
-            some_func($a, refval($b), refval($c));
+            some_func($a, std::ref($b), std::ref($c));
         ');
 
         $escapedB = false;
@@ -377,8 +377,8 @@ class SsaBuilderTest extends TestCase
                 $escapedC = true;
             }
         }
-        $this->assertTrue($escapedB, 'refval($b) should create ESCAPED SSA var');
-        $this->assertTrue($escapedC, 'refval($c) should create ESCAPED SSA var');
+        $this->assertTrue($escapedB, 'std::ref($b) should create ESCAPED SSA var');
+        $this->assertTrue($escapedC, 'std::ref($c) should create ESCAPED SSA var');
 
         // $a is NOT passed by ref — it should NOT be escaped
         $aEscaped = false;
@@ -387,7 +387,7 @@ class SsaBuilderTest extends TestCase
                 $aEscaped = true;
             }
         }
-        $this->assertFalse($aEscaped, '$a (not refval) should NOT be escaped');
+        $this->assertFalse($aEscaped, '$a (not std::ref) should NOT be escaped');
     }
 
     // ========================================================================

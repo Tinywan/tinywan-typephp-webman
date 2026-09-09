@@ -2,9 +2,6 @@
 BigInt: gcd
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     $a = std::bigInt(12);
     $b = std::bigInt(8);

@@ -2,8 +2,6 @@
 Universal method call on native typed variables
 --FILE--
 <?php
-use native_types;
-
 function main()
 {
     // Int methods

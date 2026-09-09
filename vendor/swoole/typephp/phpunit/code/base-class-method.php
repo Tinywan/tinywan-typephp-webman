@@ -24,6 +24,6 @@ function bar(FooBase $o)
 
 function main() {
     $o = new FooChild();
-    $o2 = any($o);
+    $o2 = std::any($o);
     bar($o2);
 }

@@ -3,7 +3,7 @@ Closure 002: Lambda with lexical variables (global scope)
 --FILE--
 <?php
 
-$x = any(4);
+$x = std::any(4);
 
 $lambda1 = function () use ($x) {
     echo "$x\n";

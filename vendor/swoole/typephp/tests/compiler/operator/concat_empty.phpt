@@ -13,7 +13,7 @@ function main() {
     var_dump('' . $value . '');
     var_dump('' . get_value() . '');
 
-    $number = 1;
+    $number = std::any(1);
     $number .= '';
     var_dump($number);
 }

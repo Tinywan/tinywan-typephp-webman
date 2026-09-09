@@ -42,10 +42,10 @@ function main(): void
     var_dump($object->values());
 
     $reflection = new ReflectionClass(KnownStringProperties::class);
-    $names = array_map(
+    $names = std::any(array_map(
         static fn (ReflectionProperty $property): string => $property->getName(),
         $reflection->getProperties(),
-    );
+    ));
     sort($names);
     var_dump($names);
 }

@@ -46,11 +46,13 @@ trait TypeCheckGenerator
 
     protected function isStrictScalarType(string $type): bool
     {
+        $type = Type::getReferencedType($type);
         return in_array($type, [Type::INT, Type::FLOAT, Type::BOOL, Type::STR], true);
     }
 
     protected function strictScalarTypeName(string $type): string
     {
+        $type = Type::getReferencedType($type);
         return match ($type) {
             Type::INT => 'int',
             Type::FLOAT => 'float',
@@ -62,6 +64,7 @@ trait TypeCheckGenerator
 
     protected function genStrictScalarCondition(string $valueExpr, string $type): string
     {
+        $type = Type::getReferencedType($type);
         return match ($type) {
             Type::INT => $valueExpr . '.isInt()',
             // PHP permits int values at a float boundary even in strict mode.
@@ -291,7 +294,7 @@ trait TypeCheckGenerator
             'iterable' => '(' . $v . '.isArray() || (' . $v . '.isObject() && php::instanceOf(' . $v . ', zend_ce_traversable)))',
             'allOf' => $this->genAllOfTypeCondition($varName, $entry['types']),
             'instanceof' => $entry['class'] === 'static'
-                ? '(' . $v . '.isObject() && php::instanceOf(' . $v . ', php::getCalledCe(this_)))'
+                ? '(' . $v . '.isObject() && php::instanceOf(' . $v . ', ' . $this->getCalledCeExpr() . '))'
                 : '(' . $v . '.isObject() && php::instanceOf(' . $v . ', ' . $this->getClassEntryPtr($entry['class']) . '))',
             default => '',
         };

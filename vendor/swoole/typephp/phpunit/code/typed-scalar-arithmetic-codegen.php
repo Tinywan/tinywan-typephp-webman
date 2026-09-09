@@ -1,4 +1,5 @@
 <?php
+use varint_types;
 
 function divTypedInts(int $a, int $b): float
 {

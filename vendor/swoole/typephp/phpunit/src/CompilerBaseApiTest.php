@@ -5,6 +5,7 @@ namespace TypePhp\Tests;
 use PHPUnit\Framework\TestCase;
 use TypePhp\CompilerTest;
 use TypePhp\CompilerBase;
+use TypePhp\Metadata\Constants;
 use TypePhp\Type;
 use TypePhp\Exception\TestError;
 use TypePhp\Platform\Macos;
@@ -285,7 +286,7 @@ PHP);
     public function testMiscObjectCacheIsInvalidatedWhenCompileOptionsChange(): void
     {
         $source = $this->testDir . '/typephp_runtime.cc';
-        $object = $this->testDir . '/typephp_runtime.o';
+        $object = $this->compiler->getObjectFile($source);
         file_put_contents($source, "int typephp_runtime_test = 1;\n");
         file_put_contents($object, 'object');
         touch($source, time() - 10);
@@ -733,13 +734,15 @@ YAML, 'myproject.yml', 'examples/tetris-sdl');
         $this->assertSame('demo.so', $this->invokeMethod('getTargetFileName'));
     }
 
-    public function testGeneratedZendModuleAlwaysUsesTypePhpPrefix(): void
+    public function testGeneratedZendModuleAndProjectNamespaceUseDistinctPrefixes(): void
     {
         $this->compiler->setTargetName('demo');
         $this->assertSame('typephp_demo', $this->compiler->getModuleName());
+        $this->assertSame('typephp_project_demo', $this->compiler->getProjectNamespace());
 
         $this->compiler->setTargetName('123');
         $this->assertSame('typephp_123', $this->compiler->getModuleName());
+        $this->assertSame('typephp_project_123', $this->compiler->getProjectNamespace());
     }
 
     public function testParseProjectYamlResolvesRelativePathOptionsAgainstYamlDirectory(): void
@@ -1270,7 +1273,7 @@ YAML);
             $compiler->genDataDeclarations($dataFile);
             $data = file_get_contents($dataFile);
             $extension = file_get_contents($compiler->genExtension());
-            $namespace = 'typephp_' . $target;
+            $namespace = Constants::CPP_PROJECT_NAMESPACE_PREFIX . $target;
 
             $this->assertStringContainsString('namespace ' . $namespace . ' {', $data, $mode);
             $this->assertStringContainsString('using namespace ' . $namespace . ';', $data, $mode);
@@ -1303,7 +1306,7 @@ YAML);
                 $this->assertStringContainsString('#include <typephp_runtime.h>', $extension);
                 $this->assertStringContainsString('TYPEPHP_EMBED_GET_MODULE_FUNCTION(' . $target . ')', $extension);
                 $this->assertStringContainsString(
-                    'return &' . $namespace . '::' . $namespace . '_module_entry;',
+                    'return &' . $namespace . '::typephp_' . $target . '_module_entry;',
                     $extension,
                 );
             } else {

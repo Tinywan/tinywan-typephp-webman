@@ -2,7 +2,6 @@
 SSA object prop: __get/__set magic methods prevent hoisting
 --FILE--
 <?php
-use native_types;
 class Foo {
     public int $a;
     public function __get($name) { return $this->$name; }
@@ -11,7 +10,6 @@ class Foo {
 function main(): void {
     $o = new Foo();
     $o->a = 10;
-
     $n = 5;
     while($n--) {
         $o->a += 2;

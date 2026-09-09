@@ -19,7 +19,7 @@ function main() {
     $errors = [];
 
     try {
-        expect_both(any(new OnlyA()));
+        expect_both(std::any(new OnlyA()));
     } catch (\TypeError $e) {
         $errors[] = $e->getMessage();
     }

@@ -5,7 +5,7 @@ closure 001
 function main()
 {
     $a = 100;
-    $b = [1, 2, 3];
+    $b = std::any([1, 2, 3]);
     $fn = function ($x) use ($a, &$b) {
         var_dump($a);
         var_dump($b);
@@ -35,4 +35,3 @@ array(3) {
   [2]=>
   int(6)
 }
-

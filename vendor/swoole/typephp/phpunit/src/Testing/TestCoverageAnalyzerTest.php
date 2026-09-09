@@ -6,7 +6,6 @@
  * @contact  service@swoole.com
  */
 
-declare(strict_types=1);
 
 namespace TypePhp\Tests\Testing;
 

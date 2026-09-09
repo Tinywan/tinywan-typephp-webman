@@ -2,7 +2,6 @@
 use bigint_types + use decimal_types together
 --FILE--
 <?php
-declare(strict_types=1);
 use bigint_types;
 use decimal_types;
 

@@ -21,7 +21,7 @@ function main(): void
     $highOr = false || true;
     var_dump($lowAnd, $highAnd, $lowOr, $highOr);
 
-    $events = [];
+    $events = std::any([]);
     $andResult = traditional_record($events, 'and-left', false)
         and traditional_record($events, 'and-right', true);
     $orResult = traditional_record($events, 'or-left', true)

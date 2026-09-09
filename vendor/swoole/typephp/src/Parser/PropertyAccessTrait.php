@@ -413,13 +413,17 @@ trait PropertyAccessTrait
 
         if ($resolution !== null) {
             $property = $this->propertyNameToStr($expr->name, literal: true);
+            // Reference acquisition must run getStaticPropertyRef(): it
+            // converts the live slot to IS_REFERENCE and attaches a typed
+            // property's zend_property_info as a reference type source. The
+            // ordinary value-slot cache deliberately does neither operation.
             if ($resolution->class !== null) {
                 $classPtr = $this->getClassEntryPtr($resolution->class);
                 return Symbol::getStaticPropertyRef() . '(' . $classPtr . ', ' . $property . ')';
             }
             if ($resolution->expression !== null) {
                 // Dynamic target, e.g. `self` resolved through the called class inside a trait.
-                return Symbol::getStaticPropertyRef() . '(' . Symbol::getCalledCe() . ', ' . $property . ')';
+                return Symbol::getStaticPropertyRef() . '(' . $this->getCalledCeExpr() . ', ' . $property . ')';
             }
         }
 
@@ -462,7 +466,7 @@ trait PropertyAccessTrait
         }
         if ($class === 'self') {
             if ($this->classDef->trait) {
-                $expression = Symbol::getStaticProperty() . '(' . Symbol::getCalledCe() . ', ' . $this->getLiteralString($propertyName) . ')';
+                $expression = Symbol::getStaticProperty() . '(' . $this->getCalledCeExpr() . ', ' . $this->getLiteralString($propertyName) . ')';
                 return new StaticPropertyFetchTarget($propertyName, null, $expression);
             }
             return new StaticPropertyFetchTarget($propertyName, $this->getFullClassName(), null);
@@ -480,20 +484,60 @@ trait PropertyAccessTrait
 
     protected function parseNativeStaticPropertyFetch(Expr\StaticPropertyFetch $expr): ?string
     {
+        if ($this->isNameExpr($expr->class)
+            && $this->parseIdentifier($expr->class) === 'static'
+            && $this->isIdExpr($expr->name)
+        ) {
+            if ($this->classDef?->nativeObject) {
+                $this->fatalError(
+                    $expr,
+                    'Native classes do not support late static binding; use `self::` or a concrete class name',
+                );
+            }
+            if (!$this->methodDef) {
+                $this->fatalError($expr, "The 'static' keyword can only be used as the class name in class methods");
+            }
+            $propertyName = $this->parseIdentifier($expr->name);
+            $slot = $this->registerStaticPropertySlot(
+                'static::$' . $propertyName,
+                'typephp_get_static_property_slot(' . $this->getCalledCeExpr() . ', '
+                    . $this->getLiteralString($propertyName) . ')',
+            );
+            $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
+            return $slot;
+        }
+
         $resolution = $this->resolveNativeStaticPropertyFetch($expr);
         if ($resolution !== null) {
             $nativeProp = $resolution->expression;
             $def = $this->getNativePropertyDef($expr);
             $class = $resolution->class;
-            if ($this->nativeTypes && $def && $class !== null) {
+            if ($def && $class !== null && $this->usesNativeScalarStorage($def->type)) {
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_VAR);
                 return $this->emitNativeStaticPropertyTypedFetch($expr, $class, $def, $nativeProp);
             }
 
             if ($resolution->nativeProperty && $class !== null) {
                 $classPtr = $this->getClassEntryPtr($class);
+                $property = $this->parseIdentifier($expr->name);
+                $slot = $this->registerStaticPropertySlot(
+                    $class . '::$' . $property,
+                    'typephp_get_static_property_slot(' . $classPtr . ', ' . $nativeProp . ')',
+                );
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
-                return Symbol::getStaticProperty() . '(' . $classPtr . ', ' . $nativeProp . ')';
+                return $slot;
+            } elseif ($resolution->expression !== null && $this->isIdExpr($expr->name)) {
+                // A trait's self::$property binds to the consuming class. The
+                // called CE is stable for this function invocation, just like
+                // static::$property, but not across separate invocations.
+                $propertyName = $this->parseIdentifier($expr->name);
+                $slot = $this->registerStaticPropertySlot(
+                    'trait-self::$' . $propertyName,
+                    'typephp_get_static_property_slot(' . $this->getCalledCeExpr() . ', '
+                        . $this->getLiteralString($propertyName) . ')',
+                );
+                $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
+                return $slot;
             } else {
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
                 return $nativeProp;
@@ -510,29 +554,39 @@ trait PropertyAccessTrait
     ): string {
         $info = $this->getHoistedObjectPropInfo($def->type);
         $propName = $this->parseIdentifier($expr->name);
-        $refVar = '_static_' . str_replace('\\', '_', $class) . '_' . $propName;
-        $this->registerStaticPropertyRef($refVar, $class, $nativeProp, $info);
+        $classPtr = $this->getClassEntryPtr($class);
+        $slot = $this->registerStaticPropertySlot(
+            $class . '::$' . $propName,
+            'typephp_get_static_property_slot(' . $classPtr . ', ' . $nativeProp . ')',
+        );
 
         if ($info['kind'] === 'zval') {
             $helper = $def->type === Type::FLOAT ? 'typephp_static_float_ref' : 'typephp_static_int_ref';
-            return $helper . '(' . $refVar . ')';
+            return $helper . '(' . $slot . '.direct_ptr())';
         }
 
-        return $refVar;
+        return $slot;
     }
 
-    private function registerStaticPropertyRef(string $refVar, string $class, string $offsetExpr, array $info): void
+    /**
+     * Cache only the raw Zend static-property slot in the current C++ function
+     * invocation. Its value and reference/indirect state remain live and are
+     * deliberately re-read on every use.
+     */
+    private function registerStaticPropertySlot(string $key, string $resolver): string
     {
-        if (isset($this->context->staticPropRefs[$refVar])) {
-            return;
+        if (isset($this->context->staticPropRefs[$key])) {
+            return $this->context->staticPropRefs[$key]['accessorName'] . '()';
         }
 
-        $this->context->staticPropRefs[$refVar] = [
-            'type' => $info['type'],
-            'classPtr' => $this->getClassEntryPtr($class),
-            'offsetExpr' => $offsetExpr,
-            'kind' => $info['kind'],
+        $name = '_typephp_static_property_slot_' . count($this->context->staticPropRefs);
+        $accessorName = '_typephp_static_property_' . count($this->context->staticPropRefs);
+        $this->context->staticPropRefs[$key] = [
+            'name' => $name,
+            'accessorName' => $accessorName,
+            'resolver' => $resolver,
         ];
+        return $accessorName . '()';
     }
 
     protected function parseStaticPropertyFetch(Expr\StaticPropertyFetch $expr): string
@@ -598,7 +652,7 @@ trait PropertyAccessTrait
             if (!$this->methodDef) {
                 $this->fatalError($class, "The 'static' keyword can only be used as the class name in class methods");
             }
-            return Symbol::getCalledClass();
+            return $this->getCalledClassExpr();
         }
 
         return $this->getLiteralString($this->getNamespacedClassName($name));
@@ -1026,23 +1080,33 @@ trait PropertyAccessTrait
                 if (!$this->hasVar($name)) {
                     $this->errorUndefinedVariable($var);
                 }
+                if ($this->isTypedRefLocal($name)) {
+                    $this->fatalError($var, 'Cannot unset typed reference variable `$' . $this->unescapeVarName($name) . '`');
+                }
+                if ($this->isTypedRefRoot($name)) {
+                    $this->fatalError($var, 'Cannot unset variable `$' . $this->unescapeVarName($name) . '` while typed references point to it');
+                }
                 $type = $this->getVarType($name);
                 if ($this->isNativeObjectVar($name)) {
                     $this->forgetNativeObjectNonNull($name);
                     $lines[] = "{$name} = nullptr;";
-                } elseif ($this->isNativeType($type)) {
-                    $this->warning($var, "Variable of native type `\${$name}` cannot be unset");
+                } elseif ($type === Type::STR || $type === Type::ARRAY) {
+                    // String and Array reset to Zend's immutable empty
+                    // singletons. This releases the previous value without
+                    // allocating a replacement that will usually stay empty.
+                    $lines[] = "{$name}.unset();";
+                } elseif (($defaultValue = Type::getDefaultValueExpression($type)) !== null) {
+                    // A fixed value type must preserve its storage invariant.
+                    // unset() releases the previous value and restores the
+                    // type's initial state instead of introducing UNDEF.
+                    $lines[] = "{$name} = {$defaultValue};";
                 } elseif ($type === Type::OBJECT) {
-                    // A PHP local read after unset() evaluates to null (and may
-                    // emit an undefined-variable warning). Keep the Object
-                    // wrapper so later object assignments remain valid, but
-                    // store NULL rather than IS_UNDEF so strict null checks
-                    // retain PHP value semantics.
-                    //
-                    // Keep the declared class: unset() changes only the value
-                    // state and does not make null or another class assignable.
+                    // Objects have no empty object value. Null is their valid
+                    // initial state; keep the declared class constraint so a
+                    // later assignment must still contain a compatible object.
                     $lines[] = "{$name} = php::null;";
                 } else {
+                    // Dynamic storage retains PHP's true undefined state.
                     $lines[] = "{$name}.unset();";
                 }
             } else {
@@ -1190,7 +1254,7 @@ trait PropertyAccessTrait
             $getProperty = $objectVar . '.attr(' . $id . ', ' . $this->escapeAttrMode($update) . ')';
         }
         $def = $this->getNativePropertyDef($expr);
-        if ($def and $this->nativeTypes) {
+        if ($def && $this->usesNativeScalarStorage($def->type)) {
             $propName = $this->parseIdentifier($property);
             $typedFetch = $this->emitNativeInstancePropertyTypedFetch(
                 $expr,

@@ -5,7 +5,6 @@ PHPRC=tests/compiler/include_require/no-leak.ini
 PHP_INI_SCAN_DIR={PWD}/empty-ini-dir
 --FILE--
 <?php
-declare(strict_types=1);
 function Hello(string $value) {}
 
 function includePath(string $name): string

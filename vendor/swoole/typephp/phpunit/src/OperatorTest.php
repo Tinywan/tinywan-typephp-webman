@@ -57,10 +57,9 @@ class OperatorTest extends \BaseTest
     }
 
     /**
-     * A literal zero divisor is valid PHP: it raises a catchable
-     * DivisionByZeroError only when the statement executes, so it must
-     * compile (with a warning) and defer to the runtime error, exactly like
-     * the already-accepted `1 % (1 - 1)` and `10 / ZERO` spellings.
+     * varint_types preserves PHP's catchable integer division errors. Native
+     * float storage remains the default and rejects a statically known zero
+     * divisor instead of emitting C++ infinity/NaN behavior.
      */
     public function testLiteralIntDivideByZeroCompilesToRuntimeError(): void
     {
@@ -68,10 +67,20 @@ class OperatorTest extends \BaseTest
         $this->assertMatchesRegularExpression('/\(\(php::Var\(10L{1,2}\)\) \/ \(php::Var\(0L{1,2}\)\)\)/', $cpp);
     }
 
-    public function testLiteralFloatDivideByZeroCompilesToRuntimeError(): void
+    public function testNativeFloatLiteralDivideByZeroIsRejected(): void
     {
-        $cpp = $this->compileToCpp('divide-by-zero-float.php');
-        $this->assertStringContainsString('((php::Var(1.0)) / (php::Var(0.0)))', $cpp);
+        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectExceptionMessage('Cannot divide or modulo by zero');
+        $this->compileToCpp('divide-by-zero-float.php');
+    }
+
+    public function testExplicitAnyIntegerKeepsRuntimeDivisionErrorInDefaultMode(): void
+    {
+        $cpp = $this->compileToCpp('divide-by-zero-any.php');
+        $this->assertMatchesRegularExpression(
+            '/\(\(php::Var\(value\)\) \/ \(php::Var\(0L{1,2}\)\)\)/',
+            $cpp,
+        );
     }
 
     public function testLiteralStringDivideByZeroCompilesToRuntimeError(): void

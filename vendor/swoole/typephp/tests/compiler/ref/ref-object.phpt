@@ -1,5 +1,5 @@
 --TEST--
-Reference parameter with object type - property access and method call
+Mixed reference parameters can replace objects while preserving object operations
 --FILE--
 <?php
 class Test
@@ -12,7 +12,7 @@ class Test
     }
 }
 
-function test1(Test &$test): void
+function test1(mixed &$test): void
 {
     var_dump($test->value);
     var_dump($test->abc());
@@ -32,13 +32,13 @@ function test2(&$test)
 
 function main()
 {
-    $test = new Test();
+    $test = std::any(new Test());
     $testOrigin = $test;
     test1($test);
     var_dump($test !== $testOrigin);
     var_dump($testOrigin->value, $test->value);
 
-    $test = new Test();
+    $test = std::any(new Test());
     $testOrigin = $test;
     test2($test);
     var_dump($test !== $testOrigin);

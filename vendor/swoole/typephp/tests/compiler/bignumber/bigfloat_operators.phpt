@@ -2,9 +2,6 @@
 BigFloat operator overloading (+, -, *, /) and comparisons (<, >, <=, >=, ==, !=, <=>)
 --FILE--
 <?php
-declare(strict_types=1);
-use native_types;
-
 function main(): void {
     // === BigFloat arithmetic operators ===
     $a = std::bigFloat(100.5);

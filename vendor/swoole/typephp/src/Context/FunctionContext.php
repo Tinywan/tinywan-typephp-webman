@@ -72,6 +72,24 @@ class FunctionContext
     public array $explicitNativeTypeVars = [];
     /** @var array<string, string> C++ initializers folded into function-scope local declarations. */
     public array $localVarInitializers = [];
+    /**
+     * Proven non-escaping local Closure candidates. These are declaration-site
+     * plans only; the generator moves a successfully lowered entry into
+     * nativeLocalClosures when it emits the concrete C++ lambda.
+     *
+     * @var array<string, array{assignment: \PhpParser\Node\Expr\Assign, closure: \PhpParser\Node\Expr\Closure|\PhpParser\Node\Expr\ArrowFunction, calls: int}>
+     */
+    public array $localClosureCandidates = [];
+    /** @var array<string, true> Local variables already emitted as concrete C++ lambdas. */
+    public array $nativeLocalClosures = [];
+    /** @var array<string, string> typed-ref local => directly referenced local. */
+    public array $typedRefBindings = [];
+    /** @var array<string, string> typed-ref local => canonical fixed-storage root. */
+    public array $typedRefRoots = [];
+    /** @var array<string, array<string, true>> canonical root => aliases. */
+    public array $typedRefAliases = [];
+    /** @var list<array<string, string>> active dynamic-call root => RefWrap variable scopes. */
+    public array $typedRefBridgeScopes = [];
     public array $staticVars = [];
     public array $globalVars = [];
 
@@ -83,6 +101,10 @@ class FunctionContext
     public array $classEntryPtrs = [];
     /** Reusable php::CallableScope local, created only when this function performs scoped calls. */
     public ?string $callableScopeVar = null;
+    /** This function reads the late-static-bound class entry. */
+    public bool $needsCalledCe = false;
+    /** This function reads the late-static-bound class name. */
+    public bool $needsCalledClass = false;
     /** This generated body needs a temporary lexical scope on the nearest user-code frame. */
     public bool $needsUserCodeCallableScope = false;
     public int $tmpVarIndex = 0;
@@ -112,7 +134,7 @@ class FunctionContext
     public array $beforeStmtLines = [];
     public array $afterStmtLines = [];
     public array $objectProps;
-    /** Map of static property local slots. int/float keep stable zval* slots; other types use Var slots. */
+    /** Map of lazily resolved, function-local static-property zval slots. */
     public array $staticPropRefs = [];
     public int $scopeLevel = 0;
     /**
@@ -125,6 +147,12 @@ class FunctionContext
         $this->localVars = [];
         $this->explicitNativeTypeVars = [];
         $this->localVarInitializers = [];
+        $this->localClosureCandidates = [];
+        $this->nativeLocalClosures = [];
+        $this->typedRefBindings = [];
+        $this->typedRefRoots = [];
+        $this->typedRefAliases = [];
+        $this->typedRefBridgeScopes = [];
         $this->staticVars = [];
         $this->arguments = [];
         $this->immutableVars = [];
@@ -145,6 +173,8 @@ class FunctionContext
         $this->ceWrappers = [];
         $this->classEntryPtrs = [];
         $this->callableScopeVar = null;
+        $this->needsCalledCe = false;
+        $this->needsCalledClass = false;
         $this->tmpVarIndex = 0;
         $this->scopeLayouts = [];
         $this->callableScopeVar = null;
@@ -178,6 +208,12 @@ class FunctionContext
     {
         $this->localVars = $localVars;
         $this->localVarInitializers = [];
+        $this->localClosureCandidates = [];
+        $this->nativeLocalClosures = [];
+        $this->typedRefBindings = [];
+        $this->typedRefRoots = [];
+        $this->typedRefAliases = [];
+        $this->typedRefBridgeScopes = [];
         $this->tmpVarIndex = $tmpVarIndex;
         $this->declaredObjects = $declaredObjects;
         $this->nativeObjects = $nativeObjects;
@@ -188,6 +224,8 @@ class FunctionContext
         $this->hoistedProps = [];
         $this->staticPropRefs = [];
         $this->classEntryPtrs = [];
+        $this->needsCalledCe = false;
+        $this->needsCalledClass = false;
         $this->scopeLayouts = [];
         $this->scopeLevel = 0;
         $this->inLoop = false;

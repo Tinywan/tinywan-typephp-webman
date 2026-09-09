@@ -1,14 +1,12 @@
 # PHPX 全静态构建（libphpx.a）
 #
 # 独立于主 CMakeLists.txt，参照 wasm/ 的模式。
-# 只编译 src/core + src/std + src/typephp（不含 facade：src/func、src/class、
-# src/const），因此不会引入 include/class/swoole.h 等 facade 头，
-# 也就不会与 <sys/socket.h> 的 MSG_* / SHUT_* 宏冲突。
+# 只编译 src/core + src/std + src/typephp，与主构建使用相同的源码集合。
 #
 # 依赖（gmp/gmpxx/mpfr）作为 PRIVATE 链接，其符号由最终链接的自包含
 # libphp.a 提供，不作为 PUBLIC 传播，避免解析到系统的 glibc 版本。
 #
-# 用法（由 swoole-cli 或外部构建脚本调用）：
+# 用法（由 sdk/build-native.sh 调用）：
 #   cmake -S full-static -B build/full-static \
 #       -DPHPX_PHP_INCLUDE_DIR=/path/to/php-src \
 #       -DPHPX_GMP_INCLUDE_DIR=... -DPHPX_GMP_LIB_DIR=... \
@@ -103,6 +101,9 @@ target_include_directories(phpx PRIVATE
     "${PHPX_ROOT}/thirdparty/wren-gc/include"
 )
 target_compile_options(phpx PRIVATE -fPIC)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_compile_definitions(phpx PRIVATE PHPX_IOS=1)
+endif()
 
 # gmp/gmpxx/mpfr 符号由最终链接的自包含 libphp.a 提供，用 PRIVATE 不传播；
 # mpdecimal / wren_gc 已通过 OBJECT 并入本库，无需再作为依赖链接。

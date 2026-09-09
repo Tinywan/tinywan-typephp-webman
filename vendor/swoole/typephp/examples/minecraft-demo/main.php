@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 const BLOCK_GRASS = 1;
 const BLOCK_SAND = 2;

@@ -1,5 +1,5 @@
 --TEST--
-call overridden method through parent parameter type without native_types
+call overridden method through parent parameter type with default scalar types
 --FILE--
 <?php
 class Base

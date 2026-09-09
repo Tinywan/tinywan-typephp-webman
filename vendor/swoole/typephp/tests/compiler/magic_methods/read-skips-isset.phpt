@@ -2,7 +2,6 @@
 Magic Methods - a plain property read invokes __get, never __isset
 --FILE--
 <?php
-declare(strict_types=1);
 
 class MagicReadTest
 {

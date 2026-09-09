@@ -3,7 +3,6 @@ Class constants referenced through self, parent, explicit names and runtime stat
 --FILE--
 <?php
 
-declare(strict_types=1);
 
 namespace StubConstRef {
     class Base

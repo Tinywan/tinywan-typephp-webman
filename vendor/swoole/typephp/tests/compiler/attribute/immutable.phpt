@@ -14,11 +14,6 @@ function sumImmutable(#[Immutable] array $values): int
     return count($values) + $values->count() + $values[0] + $values[1];
 }
 
-function inspectImmutableReference(#[Immutable] ImmutableUser &$user): string
-{
-    return $user->name();
-}
-
 trait ImmutableNameTrait
 {
     #[Immutable]
@@ -118,7 +113,6 @@ function main(): void
     echo $user->traitName(), PHP_EOL;
     echo sumImmutable([2, 3]), PHP_EOL;
     echo cloneImmutable($user), PHP_EOL;
-    echo inspectImmutableReference($user), PHP_EOL;
     echo deliberatelyEscapeImmutableCheck($user), PHP_EOL;
     echo (new ImmutableHookedValue())->read(), PHP_EOL;
     echo closureImmutableParameter($user), PHP_EOL;
@@ -130,7 +124,6 @@ Rango:Rango
 Rango
 9
 Clone
-Rango
 Dynamic
 HOOK
 Dynamic

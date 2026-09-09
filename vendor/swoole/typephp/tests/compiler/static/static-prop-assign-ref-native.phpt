@@ -2,8 +2,6 @@
 Assign by reference to native typed static property (self / static / class name)
 --FILE--
 <?php
-use native_types;
-
 class Test
 {
     private static int $value = 123;

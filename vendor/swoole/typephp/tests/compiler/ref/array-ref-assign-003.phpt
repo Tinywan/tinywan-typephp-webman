@@ -14,13 +14,13 @@ function writeReferencedContainer(mixed &$container, mixed $value): void
 
 function main()
 {
-    $referenced = 10;
+    $referenced = std::any(10);
     $array = [&$referenced];
     writeElement($array, 0, 123);
     var_dump($referenced, $array[0]);
 
-    $referencedAgain = 20;
-    $arrayByReference = [&$referencedAgain];
+    $referencedAgain = std::any(20);
+    $arrayByReference = std::any([&$referencedAgain]);
     writeReferencedContainer($arrayByReference, 234);
     var_dump($referencedAgain, $arrayByReference[0]);
 

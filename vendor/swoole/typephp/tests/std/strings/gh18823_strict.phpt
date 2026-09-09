@@ -6,7 +6,6 @@ echo 'skip setlocale() is not available in AOT';
 ?>
 --FILE--
 <?php
-declare(strict_types=1);
 try {
     setlocale(LC_ALL, 0, "0");
 } catch (TypeError $e) {

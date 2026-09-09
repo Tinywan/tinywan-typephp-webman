@@ -5,7 +5,7 @@ ordinary array writes copy referenced sources while explicit references stay lin
 
 function main()
 {
-    $source = 1;
+    $source = std::any(1);
     $reference =& $source;
 
     $appended = [];
@@ -21,9 +21,9 @@ function main()
     $reference = 2;
     var_dump($appended, $keyed, $literal, $mixedLiteral, $explicitReference);
 
-    $target = 10;
+    $target = std::any(10);
     $targetArray = [&$target];
-    $other = 20;
+    $other = std::any(20);
     $otherReference =& $other;
     $targetArray[0] = $otherReference;
     $otherReference = 30;

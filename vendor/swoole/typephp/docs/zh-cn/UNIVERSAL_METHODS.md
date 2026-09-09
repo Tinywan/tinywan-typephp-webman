@@ -917,8 +917,6 @@ echo $x->contains("test");
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 /**
  * 扩展方法：判断 Int 是否为素数
@@ -974,8 +972,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     $raw = "  <h1>Hello World!</h1>  \n";
@@ -998,8 +994,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     $data = [5, 2, 8, 1, 9, 3, 7];
@@ -1034,8 +1028,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // 大整数阶乘（使用复合赋值，更简洁）
@@ -1072,8 +1064,6 @@ function main(): void {
 
 ```php
 <?php
-declare(strict_types=1);
-use native_types;
 
 function main(): void {
     // 写入文件
