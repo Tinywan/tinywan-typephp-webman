@@ -902,13 +902,13 @@ class App
      * @param string $path
      * @param string $key
      * @param $request
-     * @param $status
+     * @param int $status
      * @return bool
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
      * @throws ReflectionException|Throwable
      */
-    protected static function findRoute(TcpConnection $connection, string $path, string $key, $request, &$status): bool
+    protected static function findRoute(TcpConnection $connection, string $path, string $key, $request, int &$status): bool
     {
         $routeInfo = \Webman\Route::dispatch($request->method(), $path);
         if ($routeInfo[0] === Dispatcher::FOUND) {
