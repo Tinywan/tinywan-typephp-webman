@@ -89,7 +89,7 @@ graph LR
 
 ```bash
 # 1. 下载解压
-wget https://github.com/Tinywan/tinywan-typephp-webman/releases/download/v0.0.12/typephp-webman-php8.5-linux-x64-static.tar.gz
+wget https://github.com/Tinywan/tinywan-typephp-webman/releases/download/v0.8.1/typephp-webman-php8.5-linux-x64-static.tar.gz
 tar -zxvf typephp-webman-php8.5-linux-x64-static.tar.gz
 cd typephp-webman-linux-x64-static
 
