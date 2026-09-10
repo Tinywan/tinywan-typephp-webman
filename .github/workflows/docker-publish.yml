@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Exact TypePHP version from composer.lock (for example v0.8.0)'
+        description: 'Exact TypePHP version from composer.lock (for example v0.8.1)'
         required: true
         type: string
       push:
