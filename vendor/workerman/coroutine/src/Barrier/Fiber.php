@@ -28,11 +28,6 @@ use Workerman\Worker;
  */
 class Fiber implements BarrierInterface
 {
-    private static function toMixed(mixed $value): mixed
-    {
-        return $value;
-    }
-
 
     /**
      * @inheritDoc
@@ -40,16 +35,16 @@ class Fiber implements BarrierInterface
     public static function wait(mixed &$barrier, int $timeout = -1): void
     {
         $coroutine = BaseFiber::getCurrent();
-        $resumed = self::toMixed(false);
-        $timerId = self::toMixed(null);
+        $resumed = false;
+        $timerId = null;
 
         if ($timeout > 0 && $coroutine) {
-            $timerId = self::toMixed(Timer::delay($timeout, function() use ($coroutine, &$resumed) {
+            $timerId = Timer::delay($timeout, function() use ($coroutine, &$resumed) {
                 if (!$resumed) {
                     $resumed = true;
                     $coroutine->resume();
                 }
-            }));
+            });
         }
 
         $coroutine && DestructionWatcher::watch($barrier, function() use ($coroutine, &$resumed, &$timerId) {

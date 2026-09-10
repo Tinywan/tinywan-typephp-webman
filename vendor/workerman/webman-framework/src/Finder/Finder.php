@@ -151,9 +151,7 @@ class Finder
      */
     public function name(string|array $patterns): static
     {
-        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
-        $patternArray = (array)$patterns;
-        $this->names = array_merge($this->names, $patternArray);
+        $this->names = array_merge($this->names, (array)$patterns);
         return $this;
     }
 
@@ -164,9 +162,7 @@ class Finder
      */
     public function path(string|array $patterns): static
     {
-        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
-        $patternArray = (array)$patterns;
-        $this->paths = array_merge($this->paths, $patternArray);
+        $this->paths = array_merge($this->paths, (array)$patterns);
         return $this;
     }
 
@@ -177,9 +173,7 @@ class Finder
      */
     public function exclude(string|array $dirs): static
     {
-        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
-        $dirsArray = (array)$dirs;
-        $this->excludeDirs = array_merge($this->excludeDirs, $dirsArray);
+        $this->excludeDirs = array_merge($this->excludeDirs, (array)$dirs);
         return $this;
     }
 

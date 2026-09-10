@@ -170,7 +170,7 @@ class Route
      * @param array $parameters
      * @return string
      */
-    public function url(mixed $parameters = []): string
+    public function url(array $parameters = []): string
     {
         if (empty($parameters)) {
             return $this->path;

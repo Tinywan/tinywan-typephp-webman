@@ -27,11 +27,6 @@ use Workerman\Worker;
  */
 class Fiber implements ChannelInterface
 {
-    private static function toMixed(mixed $value): mixed
-    {
-        return $value;
-    }
-
     /**
      * @var array
      */
@@ -91,7 +86,7 @@ class Fiber implements ChannelInterface
 
             $this->waitingPush[$fiber] = true;
 
-            $timedOut = self::toMixed(false);
+            $timedOut = false;
             $timerId = null;
             if ($timeout > 0 && Worker::isRunning()) {
                 $timerId = Timer::delay($timeout, function () use ($fiber, &$timedOut) {
@@ -154,7 +149,7 @@ class Fiber implements ChannelInterface
 
             $this->waitingPop[$fiber] = true;
 
-            $timedOut = self::toMixed(false);
+            $timedOut = false;
             $timerId = null;
             if ($timeout > 0) {
                 Worker::isRunning() && $timerId = Timer::delay($timeout, function () use ($fiber, &$timedOut) {

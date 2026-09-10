@@ -902,13 +902,13 @@ class App
      * @param string $path
      * @param string $key
      * @param $request
-     * @param int $status
+     * @param $status
      * @return bool
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
      * @throws ReflectionException|Throwable
      */
-    protected static function findRoute(TcpConnection $connection, string $path, string $key, $request, int &$status): bool
+    protected static function findRoute(TcpConnection $connection, string $path, string $key, $request, &$status): bool
     {
         $routeInfo = \Webman\Route::dispatch($request->method(), $path);
         if ($routeInfo[0] === Dispatcher::FOUND) {
@@ -1051,10 +1051,7 @@ class App
             return false;
         }
 
-        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
-        // inline cast argument; hoisting the cast avoids it.
-        $endOffsetLimit = (int) $end;
-        $offsetEnd = $end === '' ? $fileSize - 1 : min($endOffsetLimit, $fileSize - 1);
+        $offsetEnd = $end === '' ? $fileSize - 1 : min((int) $end, $fileSize - 1);
         if ($offsetEnd < $offset) {
             return false;
         }

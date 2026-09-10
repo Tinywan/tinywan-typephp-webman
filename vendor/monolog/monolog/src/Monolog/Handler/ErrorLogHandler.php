@@ -74,18 +74,12 @@ class ErrorLogHandler extends AbstractProcessingHandler
     protected function write(array $record): void
     {
         if (!$this->expandNewlines) {
-            // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
-            // inline cast argument; hoisting the cast avoids it.
-            $formatted = (string) $record['formatted'];
-            error_log($formatted, $this->messageType);
+            error_log((string) $record['formatted'], $this->messageType);
 
             return;
         }
 
-        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
-        // inline cast argument; hoisting the cast avoids it.
-        $formatted = (string) $record['formatted'];
-        $lines = preg_split('{[\r\n]+}', $formatted);
+        $lines = preg_split('{[\r\n]+}', (string) $record['formatted']);
         if ($lines === false) {
             $pcreErrorCode = preg_last_error();
             throw new \RuntimeException('Failed to preg_split formatted string: ' . $pcreErrorCode . ' / '. Utils::pcreLastErrorMessage($pcreErrorCode));

@@ -196,10 +196,7 @@ class Timer
                 System::sleep($delay);
                 return;
         }
-        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
-        // inline cast argument; hoisting the cast avoids it.
-        $delayUs = (int)($delay * 1000 * 1000);
-        usleep($delayUs);
+        usleep((int)($delay * 1000 * 1000));
     }
 
     /**

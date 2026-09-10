@@ -87,10 +87,7 @@ class ExceptionHandler implements ExceptionHandlerInterface
             return new Response(200, ['Content-Type' => 'application/json'],
                 json_encode($json, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         }
-        // TypePHP 0.7.0 mis-types the result temp of a builtin call that takes an
-        // inline cast argument; hoisting the cast avoids it.
-        $exceptionStr = (string)$exception;
-        $error = $this->debug ? nl2br($exceptionStr) : 'Server internal error';
+        $error = $this->debug ? nl2br((string)$exception) : 'Server internal error';
         return new Response(500, [], $error);
     }
 

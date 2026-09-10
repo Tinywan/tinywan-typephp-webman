@@ -23,11 +23,6 @@ use Throwable;
 
 final class Swoole implements EventInterface
 {
-    private static function toMixed(mixed $value): mixed
-    {
-        return $value;
-    }
-
     /**
      * All listeners for read timer
      *
@@ -71,11 +66,10 @@ final class Swoole implements EventInterface
     {
         $t = (int)($delay * 1000);
         $t = max($t, 1);
-        $timerId = self::toMixed(null);
-        $timerId = self::toMixed(Timer::after($t, function () use ($func, $args, &$timerId) {
+        $timerId = Timer::after($t, function () use ($func, $args, &$timerId) {
             unset($this->eventTimer[$timerId]);
             $this->safeCall($func, $args);
-        }));
+        });
         $this->eventTimer[$timerId] = $timerId;
         return $timerId;
     }

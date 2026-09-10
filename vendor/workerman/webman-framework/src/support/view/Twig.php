@@ -41,9 +41,7 @@ class Twig implements View
     public static function assign(string|array $name, mixed $value = null): void
     {
         $request = request();
-        // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
-        $viewVars = (array) $request->_view_vars;
-        $request->_view_vars = array_merge($viewVars, is_array($name) ? $name : [$name => $value]);
+        $request->_view_vars = array_merge((array) $request->_view_vars, is_array($name) ? $name : [$name => $value]);
     }
 
     /**
@@ -82,9 +80,7 @@ class Twig implements View
             }
         }
         if(isset($request->_view_vars)) {
-            // TypePHP 0.7.0: hoist the cast out of the builtin call argument.
-            $requestViewVars = (array)$request->_view_vars;
-            $vars = array_merge($requestViewVars, $vars);
+            $vars = array_merge((array)$request->_view_vars, $vars);
         }
         return $views[$viewPath]->render("$template.$viewSuffix", $vars);
     }
