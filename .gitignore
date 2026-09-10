@@ -1,7 +1,11 @@
 /runtime
 /.idea
 /.vscode
-/vendor
+# vendor is committed on purpose: the AOT build reads these sources directly.
+# Ignoring it wholesale makes `git add` skip newly added files on every
+# dependency upgrade, so only Composer staging directories stay excluded.
+/vendor/composer/*/
+/vendor/composer/*/*.zip~
 /.qoder
 /.typephp
 *.log
