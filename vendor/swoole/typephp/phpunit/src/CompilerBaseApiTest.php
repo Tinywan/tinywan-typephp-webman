@@ -459,6 +459,18 @@ PHP);
         $this->assertStringContainsString('App\\\\Worker\\\\Config\\\\PATH', $code);
     }
 
+    public function testInlineStringArrayKeyUsesZendStringPointer(): void
+    {
+        $this->setPropertyValue('noLiteralStrings', true);
+
+        $code = $this->invokeMethod(
+            'parseArrayKey',
+            new \PhpParser\Node\Scalar\String_('runtime'),
+        );
+
+        $this->assertSame('php::Str{ZEND_STRL("runtime")}.str()', $code);
+    }
+
     public function testDynamicallyDefinedConstantsAreNotInternalConstants(): void
     {
         $name = 'AOT_USER_DEFINE_' . str_replace('.', '_', uniqid('', true));

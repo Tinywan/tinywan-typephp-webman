@@ -11,7 +11,7 @@ function main() {
     }
     var_dump(count($map));
 
-    $ordered = std::ordered_map(Type::String, Type::Int);
+    $ordered = std::orderedMap(Type::String, Type::Int);
     try {
         var_dump($ordered['missing']);
     } catch (Throwable $e) {

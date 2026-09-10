@@ -32,6 +32,14 @@ box the value or allocate a Zend reference. Bindings must be unconditional,
 one-time, function-local, and non-escaping. Rebinding, `unset`, reference
 capture/return, and storing such a reference into PHP storage are rejected.
 
+Fixed `int`, `float`, `bool`, `string`, and `array` Native Class properties can
+now be passed directly to an exactly matching reference parameter on a
+statically resolved call. This lowers to a call-scoped C++ `T&` while precisely
+rooting the Native receiver. It does not enable general PHP references for the
+field: `=&`, `std::ref()`, dynamic calls, and escaping reference forms remain
+forbidden. Explicit `any` properties continue to use the dynamic Zend reference
+model.
+
 Dynamic calls and Closures retain the existing Zend reference path and require
 explicit `std::ref()` / `toRef()`. A call-scoped bridge validates the value on
 write-back and rejects an escaping temporary reference. Use `std::any()` for
@@ -65,7 +73,8 @@ The former global compile-time functions have changed as follows:
 | `refval($target)` | `std::ref($target)` | Explicit reference wrapper for call arguments. |
 | `expected($condition)` | `std::expected($condition)` | Emits the `EXPECTED(...)` branch hint. |
 | `unexpected($condition)` | `std::unexpected($condition)` | Emits the `UNEXPECTED(...)` branch hint. |
-| `objval($value, Foo::class)` | `$value->toObject(Foo::class)` | Replaced by the existing keyword method. |
+| `objval($value, Foo::class)` | `std::object($value, Foo::class)` | Restores concrete object type information; the equivalent keyword method remains available as `$value->toObject(Foo::class)`. |
+| `std::ordered_map($keyType, $valueType)` | `std::orderedMap($keyType, $valueType)` | Uses the standard camelCase spelling for a multi-word method name. |
 
 No compatibility functions are installed in the global namespace. Applications
 may define and call their own `any()`, `refval()`, `expected()`, `unexpected()`,
@@ -112,6 +121,12 @@ should review the change log and run their full test suite before upgrading.
 不装箱、不创建 Zend reference。绑定必须位于函数顶层、只发生一次且不得逃逸；重新绑定、
 `unset`、引用捕获/返回，或把引用存入 PHP 槽位都会在编译期拒绝。
 
+Native Class 中固定类型为 `int`、`float`、`bool`、`string`、`array` 的属性，现在也可
+直接传给静态可解析调用中类型完全匹配的引用参数。编译器将其生成为仅在本次调用期间
+有效的 C++ `T&`，同时精确保活 Native 接收对象；这并不会为字段开放通用 PHP 引用，
+`=&`、`std::ref()`、动态调用及其他可能逃逸的引用形式仍被禁止。显式声明为 `any` 的
+属性继续使用动态 Zend reference 模型。
+
 动态调用与 Closure 继续使用既有 Zend reference 路径，并要求显式使用 `std::ref()` /
 `toRef()`。调用级 bridge 在返回时检查类型并拒绝临时引用逃逸；需要完整 PHP 引用身份时
 应使用 `std::any()`。固定 object/resource/stream、高精度值、Native/typed object、Box
@@ -139,7 +154,8 @@ TypePHP 编译期 API 现在只占用两个全局类符号：
 | `refval($target)` | `std::ref($target)` | 调用参数的显式引用包装器。 |
 | `expected($condition)` | `std::expected($condition)` | 生成 `EXPECTED(...)` 分支提示。 |
 | `unexpected($condition)` | `std::unexpected($condition)` | 生成 `UNEXPECTED(...)` 分支提示。 |
-| `objval($value, Foo::class)` | `$value->toObject(Foo::class)` | 改用现有关键词方法。 |
+| `objval($value, Foo::class)` | `std::object($value, Foo::class)` | 恢复具体对象类型；仍可使用等价关键词方法 `$value->toObject(Foo::class)`。 |
+| `std::ordered_map($keyType, $valueType)` | `std::orderedMap($keyType, $valueType)` | 多单词方法统一使用 camelCase 命名。 |
 
 TypePHP 不在全局命名空间安装兼容函数。应用可以自行定义并正常调用
 `any()`、`refval()`、`expected()`、`unexpected()` 和 `objval()`，编译器不会拦截。

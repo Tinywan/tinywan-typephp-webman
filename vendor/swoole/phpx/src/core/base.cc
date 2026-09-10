@@ -18,10 +18,7 @@
 #include "phpx_fake_scope_guard.h"
 #include "runtime_init.h"
 
-extern "C" {
-#include "zend_observer.h"
-#include "zend_property_hooks.h"
-}
+#include <zend_observer.h>
 
 #ifdef ZTS
 #include <mutex>
@@ -40,7 +37,11 @@ DebugInfo debug_info{
 void error(int level, const char *format, ...) {
     va_list args;
     va_start(args, format);
+#if PHP_VERSION_ID >= 80600
+    php_verror(nullptr, level, format, args);
+#else
     php_verror(nullptr, "", level, format, args);
+#endif
     va_end(args);
 }
 
@@ -389,7 +390,9 @@ static void initializeProcessState() noexcept {
     const auto initialize = []() noexcept {
         initializeBoxResource();
         detail::initializeClosureCarrierHandlers();
+#ifndef PHPX_NANO
         python::initializeNativeApi();
+#endif
     };
 #ifdef ZTS
     // Every worker enters request_init(), but Zend's resource registry and
@@ -414,7 +417,9 @@ void request_init() {
         return;
     }
     initializeProcessState();
+#ifndef PHPX_NANO
     initDecimalContext();
+#endif
     nativeGcRequestInit();
     request_active = true;
 }
@@ -890,6 +895,7 @@ Variant call(zend_class_entry *ce, zend_function *func, const ArgList &args, zen
     return call(ce, func, _args, named_args);
 }
 
+#ifndef PHPX_NANO
 #define ZEND_FAKE_OP_ARRAY ((zend_op_array *) (intptr_t) -1)
 
 static zend_never_inline zend_op_array *ZEND_FASTCALL zend_include_or_eval(zend_string *inc_filename,
@@ -1024,6 +1030,7 @@ Variant include(Variant file, IncludeType type, const Array &scope) {
 Variant eval(const String &script, const char *filename) {
     return include_impl(script.str(), ZEND_EVAL, filename);
 }
+#endif
 
 bool equals(const Variant &a, const Variant &b) {
     return a.equals(b);

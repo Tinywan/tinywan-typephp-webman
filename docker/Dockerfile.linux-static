@@ -1,9 +1,9 @@
 # ============================================================
 # tinywan/typephp-linux-x64-static
-# Linux x64 全静态编译构建环境 (Alpine edge + Clang + musl + TypePHP v0.8.0)
+# Linux x64 全静态编译构建环境 (Alpine edge + Clang + musl + TypePHP v0.8.1)
 # ============================================================
 # 特性:
-#   1. 内置 TypePHP v0.8.0 (/opt/typephp/bin/tpc.php & /usr/local/bin/tpc)
+#   1. 内置 TypePHP v0.8.1 (/opt/typephp/bin/tpc.php & /usr/local/bin/tpc)
 #   2. 内置全静态 musl SDK (/opt/typephp/vendor/swoole/phpx/full-static/sdk)
 #   3. 包含标准 ENTRYPOINT:
 #      - 默认直接运行 ./package.sh --full-static 或 tpc project.linux.yml
@@ -12,7 +12,7 @@
 
 FROM alpine:edge
 
-ARG TYPEPHP_VERSION=v0.8.0
+ARG TYPEPHP_VERSION=v0.8.1
 
 # 1. 完整工具链: Clang + musl + SDK 构建依赖 + 编译依赖
 RUN apk add --no-cache \

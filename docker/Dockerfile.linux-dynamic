@@ -1,9 +1,9 @@
 # ============================================================
 # tinywan/typephp-linux-x64
-# Linux x64 动态编译构建环境 (Ubuntu 22.04 + PHP 8.4 + GCC + TypePHP v0.8.0)
+# Linux x64 动态编译构建环境 (Ubuntu 22.04 + PHP 8.4 + GCC + TypePHP v0.8.1)
 # ============================================================
 # 特性:
-#   1. 内置 TypePHP v0.8.0 (/opt/typephp/bin/tpc.php & /usr/local/bin/tpc)
+#   1. 内置 TypePHP v0.8.1 (/opt/typephp/bin/tpc.php & /usr/local/bin/tpc)
 #   2. 预编译并内置 PHPX 动态库 (/opt/typephp/vendor/swoole/phpx/lib/libphpx.so)
 #   3. 内置标准 ENTRYPOINT (/entrypoint.sh):
 #      - 挂载项目直接运行 ./package.sh 或 tpc project.linux.yml
@@ -12,7 +12,7 @@
 
 FROM ubuntu:22.04
 
-ARG TYPEPHP_VERSION=v0.8.0
+ARG TYPEPHP_VERSION=v0.8.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     COMPOSER_NO_INTERACTION=1 \
@@ -51,7 +51,7 @@ RUN PHP_INC="$(php-config --include-dir 2>/dev/null || echo '')" \
             {} + 2>/dev/null || true; \
     fi
 
-# 6. 内置 TypePHP v0.8.0 源码与全局命令 tpc
+# 6. 内置 TypePHP v0.8.1 源码与全局命令 tpc
 WORKDIR /opt/typephp
 RUN composer require swoole/typephp:${TYPEPHP_VERSION} --prefer-dist --no-progress \
     && ln -sf /opt/typephp/vendor/bin/tpc.php /usr/local/bin/tpc \

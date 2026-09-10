@@ -48,6 +48,35 @@ PHP,
             $extension,
         );
         self::assertStringNotContainsString('php::eval("\\n', $extension);
+        self::assertStringNotContainsString('zend_disable_functions(', $extension);
+    }
+
+    public function testNanoEntrypointForwardsArgcAndArgvWithTheSharedContract(): void
+    {
+        $source = $this->projectDir . '/main.php';
+        file_put_contents($source, <<<'PHP'
+<?php
+function main(int $argc, array $argv): void
+{
+}
+PHP);
+
+        global $translator;
+        $compiler = CompilerTest::create($this->projectDir);
+        $translator = $compiler;
+        $files = $compiler->prepareNanoSources(
+            [$source],
+            'nano_args',
+            $this->projectDir . '/build',
+            false,
+        );
+        $compiler->convert($files);
+
+        $entrypoint = file_get_contents($this->projectDir . '/build/nano-entry-nano_args.cc');
+        self::assertStringContainsString(
+            'php_main(php::global("argc").toInt(), php::global("argv").toArray())',
+            $entrypoint,
+        );
     }
 
     private function removeDirectory(string $directory): void

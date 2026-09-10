@@ -94,7 +94,7 @@ Swoole AOT 提供 `std` 容器，用来表达“这个容器的结构和元素�
 
 - `std::array`
 - `std::vector`
-- `std::ordered_map`
+- `std::orderedMap`
 - `std::map`
 
 它们的目标不是完全替代 PHP Array，而是用于性能敏感、结构稳定、类型明确的代码路径。
@@ -202,7 +202,7 @@ $a = $b; // 允许，类型完全一致，执行容器 copy
 
 ### foreach 中修改元素
 
-遍历 `std::vector`、`std::map` 或 `std::ordered_map` 时，可以更新已经存在的元素值，例如使用 `+=`：
+遍历 `std::vector`、`std::map` 或 `std::orderedMap` 时，可以更新已经存在的元素值，例如使用 `+=`：
 
 ```php
 foreach ($vector as $index => $value) {
@@ -212,14 +212,14 @@ foreach ($vector as $index => $value) {
 
 遍历期间不能执行可能使 C++ iterator 失效的结构修改，包括追加元素、插入或覆盖 key、`unset()` 以及整体替换容器。编译器会直接报告错误。需要改变结构时，先记录待处理的 key，结束 `foreach` 后再统一修改。
 
-## std::ordered_map
+## std::orderedMap
 
-`std::ordered_map` 是有序 key-value 容器。
+`std::orderedMap` 是有序 key-value 容器。
 
 ```php
 function main(): void
 {
-    $map = std::ordered_map(
+    $map = std::orderedMap(
         Type::String,
         Type::Int
     );
@@ -241,17 +241,17 @@ function main(): void
 示例：
 
 ```php
-$map = std::ordered_map(Type::Int, Type::Float);
+$map = std::orderedMap(Type::Int, Type::Float);
 
 $map[10] = 1.25;
 $map[20] = 3.5;
 ```
 
-同类型 ordered_map 可以 copy：
+同类型 orderedMap 容器可以 copy：
 
 ```php
-$a = std::ordered_map(Type::Int, Type::Int);
-$b = std::ordered_map(Type::Int, Type::Int);
+$a = std::orderedMap(Type::Int, Type::Int);
+$b = std::orderedMap(Type::Int, Type::Int);
 
 $b[10] = 100;
 $a = $b;
@@ -318,7 +318,7 @@ class User
 
 $vector = std::vector(User::class);
 $array = std::array(User::class, 10);
-$map = std::ordered_map(Type::String, User::class);
+$map = std::orderedMap(Type::String, User::class);
 ```
 
 类类型容器会在写入时检查对象类型，避免错误对象混入。
@@ -596,7 +596,7 @@ Swoole AOT 的 std 容器提供了一条更适合编译优化的路径：
 
 - 用 `std::array` 表达固定长度强类型数组
 - 用 `std::vector` 表达动态连续强类型数组
-- 用 `std::ordered_map` / `std::map` 表达强类型映射
+- 用 `std::orderedMap` / `std::map` 表达强类型映射
 - 普通变量接收 std 容器时自动转 PHP Array
 - 同类型 std 容器之间支持原生 copy
 - UnsafePtr 支持 native 函数间安全地传递容器引用

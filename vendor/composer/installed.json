@@ -594,12 +594,12 @@
         },
         {
             "name": "swoole/phpx",
-            "version": "v2.8.0",
-            "version_normalized": "2.8.0.0",
+            "version": "v2.8.1",
+            "version_normalized": "2.8.1.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.8.0/swoole-phpx-v2.8.0.zip",
-                "reference": "3f79403a2adc462eaea7531518034fdc98b1820b",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.8.1/swoole-phpx-v2.8.1.zip",
+                "reference": "285809544b4f6f33f4df5d58c27258e4572427c0",
                 "shasum": ""
             },
             "require": {
@@ -609,11 +609,56 @@
                 "friendsofphp/php-cs-fixer": "^3.75",
                 "phpunit/phpunit": "^10.0"
             },
-            "time": "2026-09-08T07:30:36+00:00",
+            "time": "2026-09-10T04:56:25+00:00",
             "bin": [
                 "bin/phpx"
             ],
             "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "2.8.x-dev",
+                    "dev-master": "2.8.x-dev"
+                },
+                "typephp-native": {
+                    "abi": 80600,
+                    "kind": "bridge",
+                    "sources": [
+                        "src/core/array.cc",
+                        "src/core/base.cc",
+                        "src/core/big_float_nano.cc",
+                        "src/core/big_int_nano.cc",
+                        "src/core/class.cc",
+                        "src/core/closure.cc",
+                        "src/core/decimal_nano.cc",
+                        "src/core/foreach_iterator.cc",
+                        "src/core/native_gc.cc",
+                        "src/core/object.cc",
+                        "src/core/scope.cc",
+                        "src/core/string.cc",
+                        "src/core/type_check.cc",
+                        "src/core/variant.cc",
+                        "src/std/core.cc",
+                        "src/std/array.cc",
+                        "src/std/datetime.cc",
+                        "src/std/hash.cc",
+                        "src/std/math.cc",
+                        "src/std/misc.cc",
+                        "src/std/string.cc",
+                        "src/typephp/typephp_attribute.cc",
+                        "src/typephp/typephp_call.cc",
+                        "src/typephp/typephp_nano.cc",
+                        "src/typephp/typephp_property.cc",
+                        "src/typephp/typephp_trait.cc",
+                        "thirdparty/wren-gc/src/wren_gc.c"
+                    ],
+                    "c-standard": 11,
+                    "cxx-standard": 17,
+                    "include-dirs": [
+                        "include",
+                        "thirdparty/wren-gc/include"
+                    ]
+                }
+            },
             "installation-source": "dist",
             "license": [
                 "Apache-2.0"
@@ -627,18 +672,18 @@
             ],
             "support": {
                 "issues": "https://github.com/swoole/phpx/issues",
-                "source": "https://github.com/swoole/phpx/tree/v2.8.0"
+                "source": "https://github.com/swoole/phpx/tree/v2.8.1"
             },
             "install-path": "../swoole/phpx"
         },
         {
             "name": "swoole/typephp",
-            "version": "v0.8.0",
-            "version_normalized": "0.8.0.0",
+            "version": "v0.8.1",
+            "version_normalized": "0.8.1.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.8.0/swoole-typephp-v0.8.0.zip",
-                "reference": "91f133f17a9b57db9b54f5be2e1c3a5c9839065c",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.8.1/swoole-typephp-v0.8.1.zip",
+                "reference": "0fda2fe4ab45e46f9bc0170abe581bdb216cad29",
                 "shasum": ""
             },
             "require": {
@@ -649,20 +694,22 @@
                 "marcj/topsort": "^2.0",
                 "nikic/php-parser": "^5.6",
                 "php": ">=8.4 <8.6",
-                "swoole/phpx": "~2.8.0",
+                "swoole/phpx": "~2.8.1",
                 "symfony/var-dumper": "^8.0",
                 "symfony/yaml": "^8.0"
             },
             "require-dev": {
                 "friendsofphp/php-cs-fixer": "^3.40",
                 "phpstan/phpstan": "^2.2",
-                "phpunit/phpunit": "^10.4"
+                "phpunit/phpunit": "^10.4",
+                "swoole/php-nano": "^1.0.0"
             },
             "suggest": {
                 "ext-pcntl": "Required for process control features."
             },
-            "time": "2026-09-08T11:31:45+00:00",
+            "time": "2026-09-10T06:21:32+00:00",
             "bin": [
+                "bin/tpc",
                 "bin/tpc.php"
             ],
             "type": "library",
@@ -685,7 +732,7 @@
             "description": "TypePHP native AOT compiler",
             "support": {
                 "issues": "https://github.com/swoole/typephp/issues",
-                "source": "https://github.com/swoole/typephp/tree/v0.8.0"
+                "source": "https://github.com/swoole/typephp/tree/v0.8.1"
             },
             "install-path": "../swoole/typephp"
         },

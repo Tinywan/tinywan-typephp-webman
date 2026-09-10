@@ -34,8 +34,13 @@ final class LocalClosureCodegenTest extends BaseTest
         self::assertStringContainsString('direct(2L)', $code);
         self::assertStringNotContainsString('typephp_call_cached(direct', $code);
 
-        // Escaped values and dynamic references remain real Zend Closures.
-        self::assertSame(2, substr_count($code, 'php::newClosureWithParameters('));
-        self::assertStringContainsString('typephp_call_cached(dynamicRef', $code);
+        // Only the escaping closure needs a real Zend Closure. The local reference
+        // capture uses the storage selected by the function degradation table.
+        self::assertSame(1, substr_count($code, 'php::newClosureWithParameters('));
+        self::assertStringContainsString(
+            'auto dynamicRef = [&dynamic]() mutable -> php::Var {',
+            $code,
+        );
+        self::assertStringNotContainsString('typephp_call_cached(dynamicRef', $code);
     }
 }

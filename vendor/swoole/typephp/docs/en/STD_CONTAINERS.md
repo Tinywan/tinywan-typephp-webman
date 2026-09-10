@@ -95,7 +95,7 @@ Currently supported:
 
 - `std::array`
 - `std::vector`
-- `std::ordered_map`
+- `std::orderedMap`
 - `std::map`
 
 Their goal is not to fully replace PHP Array, but to be used in performance-sensitive, structurally stable, and clearly-typed code paths.
@@ -203,7 +203,7 @@ $a = $b; // allowed, types are exactly identical, performs a container copy
 
 ### Modifying Elements in foreach
 
-When iterating over `std::vector`, `std::map`, or `std::ordered_map`, you can update the values of existing elements, for example using `+=`:
+When iterating over `std::vector`, `std::map`, or `std::orderedMap`, you can update the values of existing elements, for example using `+=`:
 
 ```php
 foreach ($vector as $index => $value) {
@@ -213,14 +213,14 @@ foreach ($vector as $index => $value) {
 
 During iteration you cannot perform structural modifications that may invalidate the C++ iterator, including appending elements, inserting or overwriting keys, `unset()`, and replacing the container as a whole. The compiler reports these directly as errors. When the structure needs to change, record the keys to be processed first and apply the modifications uniformly after the `foreach` ends.
 
-## std::ordered_map
+## std::orderedMap
 
-`std::ordered_map` is an ordered key-value container.
+`std::orderedMap` is an ordered key-value container.
 
 ```php
 function main(): void
 {
-    $map = std::ordered_map(
+    $map = std::orderedMap(
         Type::String,
         Type::Int
     );
@@ -242,17 +242,17 @@ Characteristics:
 Example:
 
 ```php
-$map = std::ordered_map(Type::Int, Type::Float);
+$map = std::orderedMap(Type::Int, Type::Float);
 
 $map[10] = 1.25;
 $map[20] = 3.5;
 ```
 
-ordered_map of the same type can be copied:
+orderedMap containers of the same type can be copied:
 
 ```php
-$a = std::ordered_map(Type::Int, Type::Int);
-$b = std::ordered_map(Type::Int, Type::Int);
+$a = std::orderedMap(Type::Int, Type::Int);
+$b = std::orderedMap(Type::Int, Type::Int);
 
 $b[10] = 100;
 $a = $b;
@@ -319,7 +319,7 @@ class User
 
 $vector = std::vector(User::class);
 $array = std::array(User::class, 10);
-$map = std::ordered_map(Type::String, User::class);
+$map = std::orderedMap(Type::String, User::class);
 ```
 
 Class-typed containers check the object type at write time to prevent mixing in incorrect objects.
@@ -597,7 +597,7 @@ Swoole AOT's std containers provide a path better suited for compiler optimizati
 
 - use `std::array` to express fixed-length strongly-typed arrays
 - use `std::vector` to express dynamic contiguous strongly-typed arrays
-- use `std::ordered_map` / `std::map` to express strongly-typed mappings
+- use `std::orderedMap` / `std::map` to express strongly-typed mappings
 - an ordinary variable receiving a std container is automatically converted to a PHP Array
 - std containers of the same type support native copy
 - UnsafePtr supports safely passing container references between native functions

@@ -19,6 +19,76 @@ use TypePhp\Platform\Windows;
 
 trait SourcePipelineTrait
 {
+    /**
+     * Prepare PHP inputs for the Composer php-nano source-composition build.
+     *
+     * The compiler itself still runs on Zend PHP, but generated sources do not
+     * inspect or link the host libphp installation.
+     *
+     * @param list<string> $files
+     * @return list<string>
+     */
+    public function prepareNanoSources(
+        array $files,
+        string $targetName,
+        string $buildDir,
+        bool $wasi,
+    ): array {
+        if ($files === []) {
+            return [];
+        }
+
+        $this->nanoMode = true;
+        $this->nanoPolicyMode = true;
+        // Persistent literal wrappers are normally constructed after libphp has
+        // initialized Zend. A standalone executable starts php-nano from main(),
+        // so keep literals inside function scope for now.
+        $this->noLiteralStrings = true;
+        $this->buildMode = self::BUILD_MODE_BIN;
+        $this->targetPlatform = $wasi ? 'wasm32-wasip2' : '';
+        $this->setTargetName($targetName);
+        $this->setBuildDir($buildDir);
+
+        $resolvedFiles = [];
+        foreach ($files as $file) {
+            $resolved = realpath($file);
+            if ($resolved === false || !is_file($resolved)
+                || !FileScanner::isPhpFile($resolved)) {
+                throw new \RuntimeException("Invalid TypePHP native source: {$file}");
+            }
+            $resolvedFiles[] = $resolved;
+            $this->sourceDirs[] = dirname($resolved);
+        }
+        $resolvedFiles = array_values(array_unique($resolvedFiles));
+        $this->sourceDirs = array_values(array_unique($this->sourceDirs));
+
+        $this->discoverNativeClassDeclarations($resolvedFiles);
+        foreach ($resolvedFiles as $key => $file) {
+            try {
+                $this->prepareFile($file);
+            } catch (Unsupported $exception) {
+                $this->output(
+                    ' unsupported syntax: ' . $exception->getMessage()
+                    . "\n skip: {$file}\n",
+                    'error',
+                );
+                unset($resolvedFiles[$key]);
+            } catch (SyntaxError $exception) {
+                $this->output(
+                    ' syntax error: ' . $exception->getMessage()
+                    . "\n skip: {$file}\n",
+                    'error',
+                );
+                unset($resolvedFiles[$key]);
+            }
+        }
+
+        $resolvedFiles = array_values($resolvedFiles);
+        $this->composeTraitDeclarations($resolvedFiles);
+        $this->discoverNativeGlobalObjects($resolvedFiles);
+        return $this->getSortedFiles($resolvedFiles);
+    }
+
     public function addFiles(array $files): void
     {
         $this->sourceDirs = array_merge($this->sourceDirs, $files);
@@ -79,35 +149,40 @@ trait SourcePipelineTrait
     {
         $files = $this->getFiles($path);
 
-        if ($this->isBuildModeEmbed() && $this->getPlatform() instanceof Linux) {
-            try {
-                $phpDir = (new LibPhpInstaller())->ensure($this->getPhpDir()) ?? $this->getPhpDir();
-            } catch (\Throwable $e) {
-                $this->error('Unable to install libphp.so: ' . $e->getMessage());
+        // Source-composed Nano does not consume the host PHP/PHPX runtime.
+        // Windows Nano deliberately leaves nanoMode=false and therefore keeps
+        // this original DLL/import-library validation path.
+        if (!$this->isNanoMode()) {
+            if ($this->isBuildModeEmbed() && $this->getPlatform() instanceof Linux) {
+                try {
+                    $phpDir = (new LibPhpInstaller())->ensure($this->getPhpDir()) ?? $this->getPhpDir();
+                } catch (\Throwable $e) {
+                    $this->error('Unable to install libphp.so: ' . $e->getMessage());
+                }
+            } else {
+                $phpDir = $this->getPhpDir();
             }
-        } else {
-            $phpDir = $this->getPhpDir();
-        }
 
-        if (!($this->getPlatform() instanceof Wasi)) {
-            $this->validatePhpRuntimeMinimum($phpDir);
-        }
-
-        if ($this->getPlatform() instanceof Linux) {
-            try {
-                (new LibPhpxInstaller())->ensure($this->getPhpxDir(), $phpDir);
-            } catch (\Throwable $e) {
-                $this->error('Unable to build libphpx.so: ' . $e->getMessage());
+            if (!($this->getPlatform() instanceof Wasi)) {
+                $this->validatePhpRuntimeMinimum($phpDir);
             }
-        }
 
-        // Pre-check the phpx library only at the PHP script entry (bin/tpc.php):
-        // a missing library fails immediately rather than surfacing later during
-        // file processing/compilation. The compiled tpc executable has libphpx
-        // loaded by the dynamic linker before entering main(), so checking here
-        // is neither needed nor possible.
-        if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($this->getPlatform() instanceof Wasi)) {
-            $this->validatePhpxLibrary();
+            if ($this->getPlatform() instanceof Linux) {
+                try {
+                    (new LibPhpxInstaller())->ensure($this->getPhpxDir(), $phpDir);
+                } catch (\Throwable $e) {
+                    $this->error('Unable to build libphpx.so: ' . $e->getMessage());
+                }
+            }
+
+            // Pre-check the phpx library only at the PHP script entry (bin/tpc.php):
+            // a missing library fails immediately rather than surfacing later during
+            // file processing/compilation. The compiled tpc executable has libphpx
+            // loaded by the dynamic linker before entering main(), so checking here
+            // is neither needed nor possible.
+            if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($this->getPlatform() instanceof Wasi)) {
+                $this->validatePhpxLibrary();
+            }
         }
 
         $this->validateCompilerToolchain();
@@ -117,7 +192,8 @@ trait SourcePipelineTrait
 
         // All Windows build modes depend on the PHPX import library and runtime.
         // Other platforms only run the existing checks in embedded build mode.
-        if ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows) {
+        if (!$this->isNanoMode()
+            && ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows)) {
             foreach ($this->getPlatform()->getBuildLibraryWarnings(
                 $this->getPhpDir(),
                 $this->getPhpxDir(),
@@ -306,8 +382,12 @@ trait SourcePipelineTrait
             // runtime data declarations
             $this->genFunctionDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_func_decl.h");
             $this->genDataDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_data_decl.h");
-            // Generate the extension module source file
+            // Nano keeps the ordinary statically registered Zend class/module
+            // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
+            if ($this->isNanoMode()) {
+                $sourceFiles[] = $this->genNanoEntrypoint();
+            }
 
             return $sourceFiles;
         } finally {

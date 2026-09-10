@@ -232,6 +232,24 @@ trait NativeTypeCompatibilityTrait
         }
 
         if ($argInfo->byRef) {
+            // A fixed Native field already is the exact C++ storage required by
+            // a typed-reference parameter. Bind the call directly to that field
+            // instead of attempting to manufacture a Zend reference around it.
+            // Explicit std::ref()/toRef() remains a dynamic-reference request and
+            // deliberately follows the ordinary Native reference restrictions.
+            if (Type::isTypedRefType($argInfo->type)
+                && !$this->isReferenceWrapperCall($arg->value)
+            ) {
+                $nativeProperty = $this->parseNativeTypedPropertyReferenceArg(
+                    $arg->value,
+                    $argInfo->type,
+                    $arg,
+                );
+                if ($nativeProperty !== null) {
+                    return $nativeProperty;
+                }
+            }
+
             if ($this->isReferenceWrapperCall($arg->value)) {
                 $inner = $this->unwrapReferenceWrapperCall($arg->value, $arg);
                 $this->assertNativeObjectReferenceForbidden($inner, $arg);

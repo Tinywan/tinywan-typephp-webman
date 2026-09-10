@@ -5,21 +5,41 @@ use TypePhp\Exception\TestError;
 
 final class FixedReferenceStorageTest extends BaseTest
 {
-    /** @dataProvider fixedStorageProvider */
-    public function testFixedStorageCannotBeCapturedByReference(string $fixture, string $type): void
+    /** @dataProvider referenceCaptureDegradationProvider */
+    public function testReferenceCaptureAutomaticallyDegradesLocalStorage(string $fixture): void
     {
-        $this->expectException(TestError::class);
-        $this->expectExceptionMessage('of fixed type ' . $type . '; initialize it with std::any()');
+        $code = $this->compileFixture($fixture);
 
+        self::assertStringContainsString('php::Var value;', $code);
+    }
+
+    public static function referenceCaptureDegradationProvider(): iterable
+    {
+        yield 'object' => ['fixed-reference-generic-object.php'];
+        yield 'typed object' => ['fixed-reference-object.php'];
+        yield 'stream' => ['fixed-reference-stream.php'];
+    }
+
+    /** @dataProvider specializedStorageProvider */
+    public function testSpecializedStorageCannotBeDegradedForReferenceCapture(
+        string $fixture,
+        string $message,
+    ): void {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage($message);
         $this->compileFixture($fixture);
     }
 
-    public static function fixedStorageProvider(): iterable
+    public static function specializedStorageProvider(): iterable
     {
-        yield 'object' => ['fixed-reference-generic-object.php', 'php::Object'];
-        yield 'typed object' => ['fixed-reference-object.php', 'php::Object'];
-        yield 'stream' => ['fixed-reference-stream.php', 'php::Stream'];
-        yield 'std container' => ['fixed-reference-std-container.php', 'php::StdVector'];
+        yield 'std container' => [
+            'fixed-reference-std-container.php',
+            'Std container variable `$value` cannot be degraded to var for Closure reference capture',
+        ];
+        yield 'Native object' => [
+            'fixed-reference-native-object.php',
+            'Native object variable `$value` cannot be degraded to var for Closure reference capture',
+        ];
     }
 
     /** @dataProvider localClosureFixedReferenceProvider */
@@ -30,6 +50,7 @@ final class FixedReferenceStorageTest extends BaseTest
     {
         $code = $this->compileFixture($fixture);
 
+        self::assertStringContainsString('php::Var value;', $code);
         self::assertStringContainsString($capture, $code);
         self::assertStringNotContainsString('php::newClosureWithParameters(', $code);
     }
@@ -92,12 +113,11 @@ final class FixedReferenceStorageTest extends BaseTest
         $this->compileFixture('typed-reference-parameter-return.php');
     }
 
-    public function testFixedStaticStorageCannotBeCapturedByReference(): void
+    public function testFixedStaticStorageDegradesBeforeReferenceCapture(): void
     {
-        $this->expectException(TestError::class);
-        $this->expectExceptionMessage('variable $value of fixed type php::Str');
+        $code = $this->compileFixture('fixed-reference-static.php');
 
-        $this->compileFixture('fixed-reference-static.php');
+        self::assertStringContainsString('value.toReference()', $code);
     }
 
     public function testFixedStorageUsesBridgeForToRefAtKnownDynamicReferenceBoundary(): void
@@ -114,7 +134,24 @@ final class FixedReferenceStorageTest extends BaseTest
         $code = $this->compileFixture('fixed-reference-explicit-any.php');
 
         self::assertStringContainsString('php::Var value', $code);
-        self::assertStringContainsString('value.toReference()', $code);
+        self::assertStringContainsString('auto closure = [&value]() mutable -> php::Var {', $code);
+    }
+
+    public function testEscapingClosureUsesReferenceFromAutomaticallyDegradedStorage(): void
+    {
+        $code = $this->compileFixture('reference-capture-auto-degrade.php');
+
+        self::assertStringContainsString('php::Var value;', $code);
+        self::assertStringContainsString('{ value.toReference() }', $code);
+        self::assertStringContainsString('php::newClosureWithParameters(', $code);
+        self::assertStringContainsString(
+            'php::Str __typephp_captured_arg_value',
+            $code,
+        );
+        self::assertStringContainsString(
+            'php::Var value = __typephp_captured_arg_value;',
+            $code,
+        );
     }
 
     /** @dataProvider invalidTypedReferenceOperationProvider */

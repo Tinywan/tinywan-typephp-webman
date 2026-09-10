@@ -248,7 +248,7 @@ The following types are explicitly forbidden as Native Class property types:
 - `std\array`
 - `std\vector`
 - `std\map`
-- `std\ordered_map`
+- `std\orderedMap`
 - Other Std Container types added later
 
 These types have independent generic layouts and reference or ownership semantics; embedding them in Native Class would significantly expand the first version's type-combination and lifetime-analysis scope. Developers can use ordinary PHP `array` fields; Native Objects still cannot be stored in a PHP array, because Native Object has no `zval` representation.
@@ -274,10 +274,12 @@ Allowing fields to hold ZendVM values does not mean the Native Class Object itse
 
 Whether a Native property may be taken by reference must be decided entirely at compile time from declaration metadata, without generating runtime type branches:
 
+- A fixed `bool`, `int`, `float`, `string`, or `array` field may be passed directly to an exactly matching typed-reference parameter on a statically resolved call. The compiler binds the field as a call-scoped C++ `T&`; no `zval` or Zend reference is created, and the receiver remains precisely rooted through the complete statement.
+- This typed-call path does not make general PHP reference acquisition legal. Fixed fields still reject `$ref =& $object->property`, `std::ref($object->property)`, returning by reference, dynamic calls, and every other form in which the reference could escape the statically resolved call.
 - Only `any` properties allow `$ref =& $object->property`; this is an explicit choice to allow Zend dynamic code to replace the slot value.
 - `mixed` also uses `php::Var` storage but still rejects taking references; in Native Class all declared types except `any` must maintain compile-time type constraints.
-- `bool`, `int`, `float`, and other fixed-layout fields cannot represent PHP references and are rejected at compile time.
-- `string`, `array`, `object`, Stream, and high-precision types have PHPX wrapper layers but are still fixed declared types; reference writes would bypass type constraints, so they are rejected at compile time.
+- `bool`, `int`, `float`, `string`, and `array` fields cannot represent general PHP references; their only additional reference form is the exact, statically resolved typed-call path above.
+- `object`, Stream, and high-precision types have PHPX wrapper layers but are still fixed declared types; reference writes would bypass type constraints, so they are rejected at compile time.
 - nullable, union, and intersection constrained `php::Var` fields also reject references; they cannot be allowed merely because the underlying storage is also `php::Var`.
 - Properties with Property Hook have no physical slot to expose, and always reject references.
 
@@ -830,7 +832,7 @@ The first version forbids a Native Object from being:
 - Used as the receiver of dynamic callbacks such as `call_user_func()`.
 - Saved into ZendVM global variables or object properties.
 
-Box cannot hold Native Objects. Std Containers cannot be Native Class properties, but local `std::array`, `std::vector`, `std::map`, and `std::ordered_map` can use a concrete `NativeClass::class` as the value type and hold that class or its Native subclasses. Ordinary PHP arrays still cannot hold Native Objects.
+Box cannot hold Native Objects. Std Containers cannot be Native Class properties, but local `std::array`, `std::vector`, `std::map`, and `std::orderedMap` can use a concrete `NativeClass::class` as the value type and hold that class or its Native subclasses. Ordinary PHP arrays still cannot hold Native Objects.
 
 TypePHP's current Std Containers themselves are only allowed as local variables inside functions, not as global/static, so there is no long-term container ownership that needs separate design for Native elements. A Native-element Std Container further requires it to be a top-level local variable of the function. The compiler generates a `NativeContainerRootFrame` matching its lexical lifetime for that local container; therefore it cannot be saved to global/static, Zend or Native properties, PHP arrays, and cannot be returned, taken by reference, captured into a Closure/arrow function, or converted via `toArray()`/`toAny()`. All of the above would make the raw-pointer-holding `StdContainerBox` outlive the root frame, and must be uniformly rejected at compile time. Reading or writing a single typed Native element still stays within the Native pointer model and does not constitute container escape.
 
@@ -1201,7 +1203,7 @@ Explicit conversion makes the allocation cost and the object-graph conversion bo
 | Nullable Native parameters/returns | Supports `?NativeClass`, denoted by `nullptr`; member access must check or first prove non-null |
 | `&` on Native parameters/returns | Not supported; compile-time FatalError |
 | Taking references to Native Object variables | Not supported; ordinary assignment already shares object identity |
-| Taking references to Native properties | Only fields explicitly declared `any` are supported; all other fields including `mixed` are compile-time FatalError |
+| Taking references to Native properties | Fixed `bool`/`int`/`float`/`string`/`array` fields can be passed directly to an exact typed-reference parameter on a statically resolved call; only explicit `any` supports general PHP references; all other forms are compile-time FatalError |
 | Native variadic, union/intersection | Not supported; compile-time FatalError |
 | `__construct()` | Supported |
 | `clone` / `__clone()` | Supported |

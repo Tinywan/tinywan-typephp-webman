@@ -6,8 +6,10 @@
 ## 目标
 
 TypePHP 默认把 `int`、`string`、`float`、`bool`、`array` 保存为固定 C++
-类型。引用不得迫使这些变量退化为 `php::Var`，也不得允许动态代码静默改变
-它们的类型。
+类型。可静态证明不逃逸的原生引用不得迫使这些变量退化为 `php::Var`，也不得
+允许动态代码静默改变它们的类型。Closure 的 `use (&$var)` 是例外：函数体生成
+前的捕获分析会把对应局部变量加入退化表，使其从首次赋值起使用 `php::Var`；若捕获
+目标是强类型参数，则保留函数 ABI，并在入口建立同名 `php::Var` 本地槽位。
 
 ```php
 $value = 100;
@@ -313,7 +315,8 @@ $intRef = '100'; // 编译期错误
 - `$alias =& $object->typedProperty`、`$alias =& $array[$key]` 继续产生动态 `REF`，
   不产生长期持有 `RefWrap` 的 C++ 引用；
 - 禁止返回指向函数局部存储的 typed-ref；
-- 禁止 Closure 按引用捕获 typed local，因为 Closure 可能超过栈帧生命周期；
+- Closure 按引用捕获局部变量时，不建立指向 native local 的 typed-ref；该变量在函数
+  解析前自动退化为 `php::Var`，逃逸 Closure 使用 Zend reference；
 - 参数 typed-ref 可以继续传给静态可解析的 typed-ref 参数。
 
 Generator、可挂起 Fiber 回调以及任何可能超过调用者栈帧的执行体，不得持有指向调用者

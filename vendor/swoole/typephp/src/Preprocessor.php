@@ -23,6 +23,7 @@ use TypePhp\Exception\SyntaxError;
 use TypePhp\Transform\PropertyHookLowering;
 use TypePhp\Transform\CompileTimeAttribute;
 use TypePhp\Transform\NativeClassAttributeLowering;
+use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\PrinterLowering;
 use TypePhp\Transform\ArrayableLowering;
 use TypePhp\Transform\ClassFieldSelection;
@@ -324,6 +325,18 @@ class Preprocessor extends CompilerBase
         $info = pathinfo($cppFile);
         $ext = $this->getPlatform()->getObjectExtension();
 
+        // Composer packages are immutable build inputs. Keep their objects in
+        // the project build directory instead of writing beside vendor sources.
+        if (isset($this->nanoRuntimeSources[$cppFile])) {
+            $separator = $this->getPlatform()->getPathSeparator();
+            $objectDir = $this->buildDir . $separator . 'nano-objects';
+            if (!is_dir($objectDir)) {
+                mkdir($objectDir, 0777, true);
+            }
+            return $objectDir . $separator . $info['filename'] . '-'
+                . substr(sha1($cppFile), 0, 12) . $ext;
+        }
+
         // Keep the same path separator as cppFile
         $normalizedFile = str_replace('\\', '/', $cppFile);
         $normalizedMiscDir = str_replace('\\', '/', $this->getPhpxDir() . '/src/misc/');
@@ -400,6 +413,12 @@ class Preprocessor extends CompilerBase
 
             $traverser = new NodeTraverser();
             $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+            if ($this->isNanoPolicyMode()) {
+                $traverser->addVisitor(new NanoSyntaxValidationVisitor(
+                    fn (Node $node, string $message) => $this->fatalError($node, $message),
+                    $this->isNanoMode(),
+                ));
+            }
             $traverser->addVisitor(new VoidCastValidationVisitor(
                 fn (Node $node, string $message) => $this->fatalError($node, $message),
             ));

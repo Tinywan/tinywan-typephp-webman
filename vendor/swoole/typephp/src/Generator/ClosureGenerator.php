@@ -143,6 +143,9 @@ trait ClosureGenerator
             $this->inGeneratorBody = false;
             $this->indentLevel = $entryIndent + 1;
 
+            $body = $expr instanceof Expr\ArrowFunction ? $expr->expr : $expr->stmts;
+            $this->prepareReferenceCaptureDegradations($body);
+
             $returnType = $expr->returnType;
             $returnTypeName = $returnType instanceof Node\Identifier
                 ? strtolower($returnType->name)
@@ -236,7 +239,12 @@ trait ClosureGenerator
             $rawType = $this->getRawVarType($name);
             $valueType = Type::getReferencedType($rawType);
             if ($useItem->byRef) {
-                $captureType = Type::getReferenceType($valueType);
+                // Reference-captured locals are pre-degraded to php::Var. A
+                // native, non-escaping lambda can bind that slot directly;
+                // it does not need to manufacture a Zend reference wrapper.
+                $captureType = $valueType === Type::VAR
+                    ? Type::VAR
+                    : Type::getReferenceType($valueType);
                 if ($captureType === null) {
                     return null;
                 }
@@ -450,6 +458,8 @@ trait ClosureGenerator
         $this->context = new FunctionContext();
 
         $this->context->inClosure = true;
+        $body = $expr instanceof Expr\ArrowFunction ? $expr->expr : $expr->stmts;
+        $this->prepareReferenceCaptureDegradations($body);
         if (!$isGenerator
             && ($expr->returnType instanceof NullableType
                 || $expr->returnType instanceof UnionType
@@ -655,6 +665,9 @@ trait ClosureGenerator
         $this->context->inClosure = true;
         $this->inGeneratorBody = true;
         $this->indentLevel++;
+
+        $body = $expr instanceof Expr\ArrowFunction ? $expr->expr : $expr->stmts;
+        $this->prepareReferenceCaptureDegradations($body);
 
         try {
             foreach ($capturedNames as $i => $capturedName) {

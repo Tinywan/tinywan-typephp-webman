@@ -138,6 +138,13 @@ trait NativeBuildConfigurationTrait
 
     protected function getIncludePaths(): array
     {
+        if ($this->isNanoMode()) {
+            return array_values(array_unique([
+                ...$this->nanoRuntimeIncludePaths,
+                $this->getBuildDir() . '/include',
+            ]));
+        }
+
         $sdkDir = $this->getTargetSdkDir();
         if ($sdkDir !== null) {
             return [
@@ -179,6 +186,10 @@ trait NativeBuildConfigurationTrait
 
     protected function getLibraryPaths(): array
     {
+        if ($this->isNanoMode()) {
+            return [];
+        }
+
         $sdkDir = $this->getTargetSdkDir();
         if ($sdkDir !== null) {
             return [$sdkDir . '/lib'];
@@ -207,6 +218,10 @@ trait NativeBuildConfigurationTrait
      */
     protected function getLibraries(): array
     {
+        if ($this->isNanoMode()) {
+            return [];
+        }
+
         $sdkDir = $this->getFullStaticSdkDir();
         if ($sdkDir !== null) {
             // Fully-static: both archives are self-contained. libphpx.a comes

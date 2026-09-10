@@ -1,9 +1,9 @@
 --TEST--
-std ordered_map: string key
+std orderedMap: string key
 --FILE--
 <?php
 function main() {
-    $map = std::ordered_map(Type::String, Type::Int);
+    $map = std::orderedMap(Type::String, Type::Int);
     $map["alpha"] = 10;
     $map["beta"] = 20;
     $map["beta"] += 22;
@@ -13,7 +13,7 @@ function main() {
     var_dump($map["beta"]);
     var_dump(count($map));
 
-    $map2 = std::ordered_map(Type::String, Type::Float);
+    $map2 = std::orderedMap(Type::String, Type::Float);
     $map2["pi"] = 3.14;
     var_dump($map2["pi"] == 3.14);
 }

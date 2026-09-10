@@ -33,6 +33,18 @@ trait NativeCommandOptionsTrait
             $userDefines[] = 'TYPEPHP_NO_MAIN=1';
             $userDefines[] = $this->getLibraryExportsMacroName() . '=1';
         }
+        if ($this->isNanoMode()) {
+            array_push(
+                $userDefines,
+                'TYPEPHP_NATIVE=1',
+                'PHP_NANO=1',
+                'PHPX_NANO=1',
+                '_POSIX_C_SOURCE=200809L',
+            );
+            if ($this->isWasiTarget()) {
+                $userDefines[] = 'ZEND_MM_ERROR=0';
+            }
+        }
 
         $values = [
             'include_paths' => $includePaths,
@@ -47,6 +59,8 @@ trait NativeCommandOptionsTrait
             'prof_output' => $this->targetName . '.prof',
             'user_defines' => $userDefines,
             'lto' => $this->enableLto,
+            'section_gc' => $this->isNanoMode(),
+            'wasi_exceptions' => $this->isNanoMode() && $this->isWasiTarget(),
         ];
 
         if ($this->debug && $this->isWindows()) {
@@ -90,7 +104,8 @@ trait NativeCommandOptionsTrait
     protected function getCCompileCommandOptions(): CompileOptions
     {
         $options = $this->getCommonCompileCommandOptions();
-        return $options->with('suppressed_warnings', ['4244', '4146']);
+        $options = $options->with('suppressed_warnings', ['4244', '4146']);
+        return $this->isNanoMode() ? $options->with('c_std', 'c11') : $options;
     }
 
     protected function getPrecompiledHeaderCompileCommandOptions(): CompileOptions
@@ -145,6 +160,15 @@ trait NativeCommandOptionsTrait
             $targetPlatform = $this->getFullStaticTargetTriple();
             $ldflags = trim('-static -B ' . escapeshellarg($this->getFullStaticMuslDir()) . ' ' . $ldflags);
         }
+        if ($this->isNanoMode()) {
+            $gcSections = $this->isMacos() ? '-Wl,-dead_strip' : '-Wl,--gc-sections';
+            $ldflags = trim($gcSections . ' ' . $ldflags);
+            if ($this->isWasiTarget()) {
+                $ldflags = trim(
+                    '-fwasm-exceptions -lsetjmp -lunwind ' . $ldflags,
+                );
+            }
+        }
 
         $options = [
             'library_paths' => $libraryPaths,
@@ -158,7 +182,9 @@ trait NativeCommandOptionsTrait
             'target_platform' => $targetPlatform,
         ];
 
-        $rpaths = $this->getPlatform()->getDefaultRpaths($this->getPhpxDir(), $this->getPhpDir());
+        $rpaths = $this->isNanoMode()
+            ? []
+            : $this->getPlatform()->getDefaultRpaths($this->getPhpxDir(), $this->getPhpDir());
         if (!empty($rpaths)) {
             $options['rpath'] = $rpaths;
         }

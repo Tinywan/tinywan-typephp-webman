@@ -22,7 +22,9 @@
 #include "phpx_operator.h"
 
 extern "C" {
+#ifndef PHPX_NANO
 #include <main/php_streams.h>
+#endif
 }
 
 #include <array>
@@ -188,6 +190,7 @@ static inline String toString(const Variant &v) {
     return v.toString();
 }
 
+#ifndef PHPX_NANO
 static inline Variant toStream(const Variant &v) {
     php_stream *stream = nullptr;
     if (EXPECTED(v.isResource())) {
@@ -199,6 +202,7 @@ static inline Variant toStream(const Variant &v) {
     }
     return v;
 }
+#endif
 
 static inline void throwExactTypeError(const Variant &v, const char *expected, const char *property = nullptr) {
     if (property) {
@@ -246,6 +250,72 @@ static inline String toStringExact(const Variant &v, const char *property = null
         return {};
     }
     return String(Z_STR_P(zv));
+}
+
+/**
+ * Native-type fast paths for ArgExact and Exact functions.
+ *
+ * Constrained templates ensure only the exact native type matches.
+ * Standard conversions (int→bool, double→int, etc.) do NOT match,
+ * so they fall through to the strict Variant overload and raise TypeError.
+ *
+ * callable_name / parameter_name use const String & to mirror the
+ * Variant overloads — generated AOT code that passes String objects
+ * can still hit the fast path.
+ */
+template <typename T, std::enable_if_t<std::is_same_v<T, Int>, int> = 0>
+static inline Int toIntArgExact(T v,
+                                const String &callable_name,
+                                zend_long argument_number,
+                                const String &parameter_name) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, Float>, int> = 0>
+static inline Float toFloatArgExact(T v,
+                                    const String &callable_name,
+                                    zend_long argument_number,
+                                    const String &parameter_name) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, Bool>, int> = 0>
+static inline Bool toBoolArgExact(T v,
+                                  const String &callable_name,
+                                  zend_long argument_number,
+                                  const String &parameter_name) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, String>, int> = 0>
+static inline String toStringArgExact(T v,
+                                      const String &callable_name,
+                                      zend_long argument_number,
+                                      const String &parameter_name) {
+    return v;
+}
+
+/**
+ * Native-type fast paths for Exact functions (property access).
+ */
+template <typename T, std::enable_if_t<std::is_same_v<T, Int>, int> = 0>
+static inline Int toIntExact(T v, const char *property = nullptr) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, Float>, int> = 0>
+static inline Float toFloatExact(T v, const char *property = nullptr) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, Bool>, int> = 0>
+static inline Bool toBoolExact(T v, const char *property = nullptr) {
+    return v;
+}
+
+template <typename T, std::enable_if_t<std::is_same_v<T, String>, int> = 0>
+static inline String toStringExact(T v, const char *property = nullptr) {
+    return v;
 }
 
 /**
@@ -333,6 +403,7 @@ static inline Object toObjectExact(const Variant &v, zend_class_entry *expected_
     return Object(v);
 }
 
+#ifndef PHPX_NANO
 static inline Variant toStreamExact(const Variant &v, const char *property = nullptr) {
     php_stream *stream = nullptr;
     if (EXPECTED(v.isResource())) {
@@ -344,6 +415,7 @@ static inline Variant toStreamExact(const Variant &v, const char *property = nul
     }
     return v;
 }
+#endif
 
 template <typename T>
 static inline Variant toBoxExact(const Variant &v, const char *property = nullptr, const char *expected = "Box") {
@@ -510,7 +582,7 @@ static inline zend_array *getCallExtraNamedArgs() {
 }
 
 static inline Variant getCallArg(uint32_t i, const Variant &defaultValue) {
-    if (i >= getCallArgNum()) {
+    if (i >= getCallArgNum() || Z_ISUNDEF_P(ZEND_CALL_ARG(EG(current_execute_data), i + 1))) {
         return defaultValue;
     } else {
         return getCallArg(i);
@@ -518,7 +590,7 @@ static inline Variant getCallArg(uint32_t i, const Variant &defaultValue) {
 }
 
 static inline Reference getCallArgByRef(uint32_t i, const Reference &defaultValue) {
-    if (i >= getCallArgNum()) {
+    if (i >= getCallArgNum() || Z_ISUNDEF_P(ZEND_CALL_ARG(EG(current_execute_data), i + 1))) {
         return defaultValue;
     } else {
         return getCallArgByRef(i);

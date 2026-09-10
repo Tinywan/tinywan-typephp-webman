@@ -105,7 +105,7 @@ Swoole-Compiler 是一种 PHP AOT 编译器。它将 PHP 源文件解析为抽�
 ```php
 $a = std::array(Type::Int, 100);
 $v = std::vector(Type::Float);
-$m = std::ordered_map(Type::String, Type::Int);
+$m = std::orderedMap(Type::String, Type::Int);
 $h = std::map(Type::Int, User::class);
 ```
 

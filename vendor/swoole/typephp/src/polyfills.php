@@ -185,6 +185,24 @@ class std
         return $value;
     }
 
+    public static function object(mixed $value, string $class): object
+    {
+        if (!is_object($value)) {
+            throw new TypeError(sprintf(
+                'std::object(): Argument #1 ($value) must be an object, %s given',
+                get_debug_type($value),
+            ));
+        }
+        if (!$value instanceof $class) {
+            throw new TypeError(sprintf(
+                'std::object(): Argument #1 ($value) must be an instance of %s, %s given',
+                $class,
+                $value::class,
+            ));
+        }
+        return $value;
+    }
+
     public static function &ref(mixed &$var): mixed
     {
         return $var;
@@ -205,7 +223,7 @@ class std
         return [];
     }
 
-    public static function ordered_map(mixed $key_type, mixed $value_type): array
+    public static function orderedMap(mixed $key_type, mixed $value_type): array
     {
         return [];
     }

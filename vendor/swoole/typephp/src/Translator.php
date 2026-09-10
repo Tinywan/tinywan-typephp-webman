@@ -18,6 +18,9 @@ use TypePhp\Build\CompileOptions;
 use TypePhp\Build\FileScanner;
 use TypePhp\Build\NativeCommandOptionsTrait;
 use TypePhp\Build\NativeBuilder;
+use TypePhp\Build\NanoBuildBackend;
+use TypePhp\Build\NativeDependencyAuditor;
+use TypePhp\Build\NanoSourceComposer;
 use TypePhp\Build\PrecompiledHeaderManager;
 use TypePhp\Build\SourcePipelineTrait;
 use TypePhp\Build\WasmInterfaceGenerator;
@@ -54,6 +57,7 @@ use TypePhp\Transform\ConstructorLowering;
 use TypePhp\Transform\ConstantExpressionValidationVisitor;
 use TypePhp\Transform\PropertyHookLowering;
 use TypePhp\Transform\RuntimeAttributeFactoryLowering;
+use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\VoidCastValidationVisitor;
 use PhpParser\Modifiers;
 use PhpParser\Node;
@@ -76,7 +80,7 @@ class Translator extends Preprocessor
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
-    public const string VERSION = '0.8.0';
+    public const string VERSION = '0.8.1';
     public const string APP_NAME = 'TypePHP Compiler (AOT)';
 
     protected bool $hasExplicitOutput = false;
@@ -153,6 +157,12 @@ class Translator extends Preprocessor
         }
         unset($this->internalFunctions[self::ENTRY_FUNCTION]);
         $this->internalConstants = $this->loadInternalConstants();
+
+        // Apply this before --help/--version so informational output also
+        // honours an explicitly requested plain-text mode.
+        if ($this->climate->arguments->defined('no-color')) {
+            $this->climate->forceAnsiOff();
+        }
         if ($this->climate->arguments->defined('help')) {
             $this->showUsage();
             exit(0);
@@ -160,11 +170,6 @@ class Translator extends Preprocessor
         if ($this->climate->arguments->defined('version')) {
             $this->showVersion();
             exit(0);
-        }
-
-        // Handle --no-color early so all subsequent output is colorless.
-        if ($this->climate->arguments->defined('no-color')) {
-            $this->climate->forceAnsiOff();
         }
 
 
@@ -350,12 +355,34 @@ class Translator extends Preprocessor
         global $argv;
         $cmd = $argv[0];
 
+        $printEntries = static function (array $entries) use ($climate): void {
+            $width = max(array_map(
+                static fn (array $entry): int => strlen($entry[0]),
+                $entries,
+            ));
+            foreach ($entries as [$syntax, $description]) {
+                $climate->tab()->out(str_pad($syntax, $width + 2) . $description);
+            }
+        };
+
         $climate->bold('USAGE:');
-        $climate->tab()->out($cmd . ' <file/dir/config.yml> [options]');
+        $climate->tab()->out($cmd . ' <input> [compilation options] [-- <program arguments...>]');
+        $climate->tab()->out($cmd . ' <subcommand> [arguments]');
         $climate->br();
 
         $climate->bold('ARGUMENTS:');
-        $climate->tab()->out('<file>    Input PHP file/directory/YAML config to compile');
+        $printEntries([
+            ['<input>', 'PHP file, source directory, YAML config, or native project.xml'],
+            ['-- <arguments...>', 'Arguments passed to the program when used with --run'],
+        ]);
+        $climate->br();
+
+        $climate->bold('SUBCOMMANDS:');
+        $printEntries([
+            ['--gen-python-helper <module> [--output-dir <dir>]', 'Generate a Python namespace IDE helper'],
+            ['--convert-python-to-php <file.py>', 'Convert Python source to TypePHP source'],
+            ['--generate-completion=bash', 'Generate a Bash completion script'],
+        ]);
         $climate->br();
 
         $climate->bold('EXAMPLES:');
@@ -364,42 +391,48 @@ class Translator extends Preprocessor
         $climate->tab()->out($cmd . ' project/config.yml -O2');
         $climate->tab()->out($cmd . ' my-ext/ -O2 -o myapp -m ext');
         $climate->tab()->out($cmd . ' app.php -r -O2 -- --flag1 value1');
+        $climate->tab()->out($cmd . ' --gen-python-helper builtins');
         $climate->br();
 
-        $climate->bold('OPTIONS:');
-        $climate->tab()->out('-O <level>           Optimization level (0-3, default: 0)');
-        $climate->tab()->out('--profile            Enable performance profiling (adds -lprofiler, forces recompile)');
-        $climate->tab()->out('-d, --debug            Enable debug mode (auto-disable optimizations, add debug symbols)');
-        $climate->tab()->out('-o, --output <file>  Output binary name (default: input basename)');
-        $climate->tab()->out('-v, --version        Show version');
-        $climate->tab()->out('-h, --help           Show this help message');
-        $climate->tab()->out('-f, --force          Force recompile phpx misc files (ignore cache)');
-        $climate->tab()->out('-m, --mode <mode>    Compilation mode: bin (binary), lib (shared library), or ext (PHP extension); default: bin');
-        $climate->tab()->out('-r, --run           Run the compiled binary after build');
-        $climate->tab()->out('-j, --job <num>      Number of parallel compilation jobs (default: 4)');
-        $climate->tab()->out('--cxx-std <ver>      C++ standard version (c++17, c++20, etc., default: c++17)');
-        $climate->tab()->out('--compiler <cmd>     C++ compiler command to use (e.g. --compiler=/usr/bin/clang)');
-        $climate->tab()->out('--march <arch>       Target CPU instruction set (e.g. native, x86-64-v3, armv8-a)');
-        $climate->tab()->out('--target-platform <triple> Cross-compilation target triple (e.g. aarch64-linux-gnu)');
-        $climate->tab()->out('--wasm[=profile]     Build WASI component (default) or browser output');
-        $climate->tab()->out('--gen-python-helper <module> [--output-dir <dir>] Generate a Python namespace IDE helper');
-        $climate->tab()->out('--convert-python-to-php <file.py> Convert Python source to TypePHP source');
-        $climate->tab()->out('--generate-completion=bash Generate Bash completion script');
-        $climate->tab()->out('--lto                Enable Link Time Optimization (-flto)');
-        $climate->tab()->out('--no-literal-strings Disable literal strings optimization');
-        $climate->tab()->out('--php-version <ver>  PHP language version to accept (8.4-8.5, default: 8.5)');
-        $climate->tab()->out('--no-progress        Disable progress bar, output per-file compilation progress line by line');
-        $climate->tab()->out('--no-console         Hide console window (Windows only, GUI application)');
-        $climate->tab()->out('--no-color           Disable ANSI color output');
-        $climate->tab()->out('--sanitize <type>    Enable sanitizers (address, undefined, etc.)');
-        $climate->tab()->out('--build-dir <dir>   Specify build directory for generated C++ code (default: <root>/build)');
-        $climate->tab()->out('--dry                Dry run: only generate C++ code, skip compilation and linking');
-        $climate->tab()->out('-I, --include-path <dir> Add an additional C++ include directory (repeatable)');
-        $climate->tab()->out('-D, --define <macro>  Define a preprocessor macro (repeatable, e.g. -D FOO=bar)');
-        $climate->tab()->out('--format             Enable clang-format code formatting (disabled by default)');
-        $climate->tab()->out('-l, --link-lib <lib> Link against a library (repeatable, e.g. -lcurl)');
-        $climate->tab()->out('-L, --link-path <dir> Add a library search path (repeatable, e.g. -L/usr/local/lib)');
-        $climate->tab()->out('--full-static        Link fully statically against the bundled SDK (phpx/full-static/sdk)');
+        $climate->bold('COMPILATION OPTIONS:');
+        $printEntries([
+            ['-O, --optimize <level>', 'Optimization level (0-3, default: 0)'],
+            ['--profile', 'Enable performance profiling (adds -lprofiler, forces recompile)'],
+            ['-d, --debug', 'Enable debug mode (disables optimizations and adds debug symbols)'],
+            ['-o, --output <file>', 'Output name or path (default: input basename)'],
+            ['-f, --force', 'Force recompilation and ignore the object cache'],
+            ['-m, --mode <mode>', 'Build mode: bin, lib, or ext (default: bin)'],
+            ['-r, --run', 'Run the compiled binary after a successful build'],
+            ['-j, --job <num>', 'Number of parallel compilation jobs (default: 4)'],
+            ['--cxx-std <ver>', 'C++ standard version (default: c++17)'],
+            ['--compiler <cmd>', 'C++ compiler command (for example /usr/bin/clang)'],
+            ['--march <arch>', 'Target CPU instruction set (for example native or armv8-a)'],
+            ['--target-platform <triple>', 'Cross-compilation target triple'],
+            ['--wasm[=browser|component]', 'Build WASI component (default) or browser output'],
+            ['--nano', 'Use the Nano policy and php-nano runtime outside Windows'],
+            ['--full-static', 'Link fully statically against the bundled SDK'],
+            ['--lto', 'Enable Link Time Optimization (-flto)'],
+            ['--no-literal-strings', 'Disable literal string optimization'],
+            ['--php-version <ver>', 'Accepted PHP language version (8.4-8.5, default: 8.5)'],
+            ['--no-progress', 'Print one compilation line per file instead of a progress bar'],
+            ['--no-console', 'Hide the console window (Windows GUI applications only)'],
+            ['--sanitize <type>', 'Enable a sanitizer such as address or undefined'],
+            ['--build-dir <dir>', 'Directory for generated C++ and build files'],
+            ['--dry', 'Generate C++ code without compiling or linking'],
+            ['-I, --include-path <dir>', 'Add a C++ include directory (repeatable)'],
+            ['-D, --define <macro>', 'Define a preprocessor macro (repeatable)'],
+            ['--format', 'Format generated C++ code with clang-format'],
+            ['-l, --link-lib <lib>', 'Link against a library (repeatable)'],
+            ['-L, --link-path <dir>', 'Add a library search path (repeatable)'],
+        ]);
+        $climate->br();
+
+        $climate->bold('GENERAL OPTIONS:');
+        $printEntries([
+            ['-h, --help', 'Show this help message'],
+            ['-v, --version', 'Show the compiler version'],
+            ['--no-color', 'Disable ANSI color output'],
+        ]);
         $climate->br();
     }
 
@@ -410,6 +443,17 @@ class Translator extends Preprocessor
     protected function applyCommandLineArguments(): void
     {
         $this->applyPhpVersionCommandLineArgument();
+
+        // The Nano syntax policy is platform-independent. On non-Windows hosts
+        // only the runtime source and link inputs change; argument parsing,
+        // translation, compilation scheduling and diagnostics remain shared.
+        if ($this->climate->arguments->defined('nano')) {
+            $this->nanoPolicyMode = true;
+            if (NanoBuildBackend::composesRuntimeSources(PHP_OS_FAMILY)) {
+                $this->nanoMode = true;
+                $this->noLiteralStrings = true;
+            }
+        }
 
         // Optimization level
         if ($this->climate->arguments->defined('optimize')) {
@@ -539,6 +583,21 @@ class Translator extends Preprocessor
         // multiple values)
         if ($this->hasRepeatableArgvFlag(['-L', '--link-path'])) {
             $this->linkPaths = $this->parseRepeatableArgv(['-L', '--link-path']);
+        }
+
+        if ($this->isNanoMode()) {
+            if (!$this->isBuildModeBin()) {
+                $this->error('--nano source composition only supports binary mode (-m bin)');
+            }
+            if ($this->cxxStd !== 'c++17') {
+                $this->error('--nano requires the C++17 language standard');
+            }
+            if ($this->fullStatic) {
+                $this->error('--nano already composes its runtime sources; --full-static is not applicable');
+            }
+            if ($this->linkLibs !== [] || $this->linkPaths !== []) {
+                $this->error('--nano does not permit external link libraries or library search paths');
+            }
         }
     }
 
@@ -884,7 +943,9 @@ class Translator extends Preprocessor
 
         // Embedded binaries populate the CLI script fields in $_SERVER at
         // request startup, even when the source does not reference $_SERVER.
-        if ($this->isBuildModeBin() && !$this->hasGlobalVar('_SERVER')) {
+        if (!$this->isNanoMode()
+            && $this->isBuildModeBin()
+            && !$this->hasGlobalVar('_SERVER')) {
             $this->addGlobalVar('_SERVER', Type::ARRAY);
         }
 
@@ -958,6 +1019,41 @@ class Translator extends Preprocessor
         }
     }
 
+    /** Generate the VM-less executable entry used by the Composer php-nano runtime. */
+    public function genNanoEntrypoint(): string
+    {
+        if (!$this->isNanoMode()) {
+            throw new \LogicException('Nano entry generation requires Nano mode');
+        }
+        if (!$this->hasFunction(self::ENTRY_FUNCTION)) {
+            throw new \RuntimeException('A Nano executable must define main()');
+        }
+
+        $entry = $this->getFunction(self::ENTRY_FUNCTION);
+        if (count($entry->argInfoList) !== 0 && count($entry->argInfoList) !== 2) {
+            throw new \RuntimeException(
+                'Nano main() accepts either no parameters or (int $argc, array $argv)'
+            );
+        }
+        if (!in_array($entry->returnType, [Type::INT, Type::VOID], true)) {
+            throw new \RuntimeException('Nano main() must return int or void');
+        }
+        $file = $this->getBuildDir() . '/nano-entry-' . $this->targetName . '.cc';
+        $call = count($entry->argInfoList) === 2
+            ? 'php_main(php::global("argc").toInt(), php::global("argv").toArray())'
+            : 'php_main()';
+        $entryCall = $entry->returnType === Type::VOID
+            ? $call . ';' . PHP_EOL . '    return 0;'
+            : 'return static_cast<int>(' . $call . ');';
+        $code = '#include <php_' . $this->targetName . '_func_decl.h>' . PHP_EOL . PHP_EOL;
+        $code .= 'extern "C" int typephp_nano_project_main() {' . PHP_EOL;
+        $code .= '    ' . $entryCall . PHP_EOL;
+        $code .= '}' . PHP_EOL;
+
+        $this->writeFile($file, $code);
+        return $file;
+    }
+
     /** @return array{declarations: string, registration: string} */
     private function genTraitMetadataCode(): array
     {
@@ -1027,7 +1123,7 @@ class Translator extends Preprocessor
         // Keep <new> out of the shared PCH dependency set used by every source.
         $code .= '#include <new>' . PHP_EOL;
 
-        if ($this->isBuildModeEmbed()) {
+        if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
             $code .= '#include <typephp_runtime.h>' . PHP_EOL;
         }
 
@@ -1036,7 +1132,10 @@ class Translator extends Preprocessor
             $code .= 'extern "C" void save_ps_args(int, char **) {}' . PHP_EOL;
         }
 
-        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
+        if (!$this->isNanoMode()
+            && $this->isBuildModeBin()
+            && !$this->isWasiTarget()
+            && !$this->isIosTarget()) {
             $cliHeaders = [
                 '#include "php_cli_process_title.h"',
                 '#include "php_cli_process_title_arginfo.h"',
@@ -1235,7 +1334,10 @@ CODE;
 
         $code .= "// clang-format off\n";
         $code .= "static const zend_function_entry ext_functions[] = {\n";
-        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
+        if (!$this->isNanoMode()
+            && $this->isBuildModeBin()
+            && !$this->isWasiTarget()
+            && !$this->isIosTarget()) {
             $code .= $this->getIndent() . "PHP_FE(cli_set_process_title,        arginfo_cli_set_process_title)\n";
             $code .= $this->getIndent() . "PHP_FE(cli_get_process_title,        arginfo_cli_get_process_title)\n";
         }
@@ -1294,7 +1396,7 @@ CODE;
         }
         $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
         $code .= '}' . PHP_EOL;
-        if (!$this->isWasiTarget()) {
+        if (!$this->isWasiTarget() && !$this->isNanoMode()) {
             $code .= 'typephp_register_fiber_generator_class();' . PHP_EOL;
         }
 
@@ -1341,7 +1443,7 @@ CODE;
         $code .= 'for (auto &slot : ' . self::PREFIX . self::PERSISTENT_PROP_MAP . ') {' . PHP_EOL;
         $code .= $this->getIndent() . 'php::resetPersistentCache(slot);' . PHP_EOL;
         $code .= '}' . PHP_EOL;
-        if (!$this->isWasiTarget()) {
+        if (!$this->isWasiTarget() && !$this->isNanoMode()) {
             $code .= 'typephp_unregister_fiber_generator_class();' . PHP_EOL;
         }
         if ($traitMetadata['registration'] !== '') {
@@ -1503,41 +1605,68 @@ CODE;
         // rinit begin
         $code .= 'PHP_RINIT_FUNCTION(' . $moduleName . ') {' . PHP_EOL;
         $code .= 'if (UNEXPECTED(php_request_cache != nullptr)) {' . PHP_EOL;
-        $code .= $this->getIndent() . 'php_error_docref(nullptr, E_WARNING, "TypePHP request cache is already initialized");' . PHP_EOL;
+        $code .= $this->getIndent() . ($this->nanoMode
+            ? 'zend_error(E_WARNING, "TypePHP request cache is already initialized");'
+            : 'php_error_docref(nullptr, E_WARNING, "TypePHP request cache is already initialized");') . PHP_EOL;
         $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
         $code .= '}' . PHP_EOL;
         $code .= 'php_request_cache = new (std::nothrow) php_request_cache_storage{};' . PHP_EOL;
         $code .= 'if (UNEXPECTED(php_request_cache == nullptr)) {' . PHP_EOL;
-        $code .= $this->getIndent() . 'php_error_docref(nullptr, E_WARNING, "Unable to allocate TypePHP request cache");' . PHP_EOL;
+        $code .= $this->getIndent() . ($this->nanoMode
+            ? 'zend_error(E_WARNING, "Unable to allocate TypePHP request cache");'
+            : 'php_error_docref(nullptr, E_WARNING, "Unable to allocate TypePHP request cache");') . PHP_EOL;
         $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
         $code .= '}' . PHP_EOL;
         $code .= 'php::request_init();' . PHP_EOL;
+        if ($this->isNanoPolicyMode() && !$this->isNanoMode()) {
+            // The full Windows runtime still contains standard/process modules.
+            // Remove command functions from Zend's table after every module has
+            // started so variable functions and call_user_func cannot bypass
+            // the compile-time named-call check.
+            $code .= 'zend_disable_functions('
+                . $this->genCharPtr($this->getNanoPolicyDisabledFunctionList(), true)
+                . ');' . PHP_EOL;
+        }
         $code .= 'module_init();' . PHP_EOL;
 
-        if ($this->isBuildModeBin()) {
+        if ($this->isBuildModeBin() && !$this->isNanoMode()) {
             $entryFunction = $this->symbols->function(self::ENTRY_FUNCTION);
-            // FunctionDef::sourceFile comes from loadFile()'s realpath(), so the
-            // CLI script fields always identify main()'s canonical absolute file.
-            $entryFile = $entryFunction->sourceFile;
-            $entryFileArg = $this->genCharPtr($entryFile, true);
-            $entryLineOffset = max(0, $entryFunction->startLine - 1);
-            if (count($entryFunction->argInfoList) == 2) {
-                $entryScript = 'global $argc, $argv; main($argc, $argv);';
+            if ($this->isNanoPolicyMode()) {
+                // Windows keeps the complete PHP/PHPX DLL runtime, but a Nano
+                // executable still enters generated code without ZendVM eval.
+                $code .= $this->registerServerEnvironment($entryFunction->sourceFile);
+                $entryCall = count($entryFunction->argInfoList) === 2
+                    ? 'php_main(php::global("argc").toInt(), php::global("argv").toArray());'
+                    : 'php_main();';
+                $code .= 'try {' . PHP_EOL;
+                $code .= $this->getIndent(2) . $entryCall . PHP_EOL;
+                $code .= '} catch (zend_object *) {' . PHP_EOL;
+                $code .= $this->getIndent(2) . 'return FAILURE;' . PHP_EOL;
+                $code .= '}' . PHP_EOL;
             } else {
-                $entryScript = 'main();';
-            }
+                // FunctionDef::sourceFile comes from loadFile()'s realpath(), so the
+                // CLI script fields always identify main()'s canonical absolute file.
+                $entryFile = $entryFunction->sourceFile;
+                $entryFileArg = $this->genCharPtr($entryFile, true);
+                $entryLineOffset = max(0, $entryFunction->startLine - 1);
+                if (count($entryFunction->argInfoList) == 2) {
+                    $entryScript = 'global $argc, $argv; main($argc, $argv);';
+                } else {
+                    $entryScript = 'main();';
+                }
 
-            $entryScriptArg = $this->genCharPtr($entryScript, true);
-            if ($entryLineOffset > 0) {
-                // entryLineOffset is main()'s source start line minus one. The
-                // generated std::string(N, '\n') supplies N padding newlines at
-                // runtime, so the eval() entry call is reported on main()'s
-                // original PHP source line. Constructing the padding at runtime
-                // avoids embedding hundreds of escaped newlines in the C++ file.
-                $entryScriptArg = 'std::string(' . $entryLineOffset . ", '\\n') + " . $entryScriptArg;
-            }
+                $entryScriptArg = $this->genCharPtr($entryScript, true);
+                if ($entryLineOffset > 0) {
+                    // entryLineOffset is main()'s source start line minus one. The
+                    // generated std::string(N, '\n') supplies N padding newlines at
+                    // runtime, so the eval() entry call is reported on main()'s
+                    // original PHP source line. Constructing the padding at runtime
+                    // avoids embedding hundreds of escaped newlines in the C++ file.
+                    $entryScriptArg = 'std::string(' . $entryLineOffset . ", '\\n') + " . $entryScriptArg;
+                }
 
-            $code .= 'php::eval(' . $entryScriptArg . ', ' . $entryFileArg . ');' . PHP_EOL;
+                $code .= 'php::eval(' . $entryScriptArg . ', ' . $entryFileArg . ');' . PHP_EOL;
+            }
         }
 
         $code .= 'return SUCCESS;' . PHP_EOL;
@@ -1586,7 +1715,7 @@ CODE;
         if ($this->isBuildModeExt()) {
             $code .= "ZEND_GET_MODULE({$moduleName});\n";
             $code .= '}  // namespace ' . $projectNamespace . PHP_EOL;
-        } elseif ($this->isBuildModeEmbed()) {
+        } elseif ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
             $code .= '}  // namespace ' . $projectNamespace . PHP_EOL . PHP_EOL;
             $code .= 'TYPEPHP_EMBED_GET_MODULE_FUNCTION(' . $this->targetName . ') {' . PHP_EOL;
             $code .= $this->getIndent() . 'return &' . $projectNamespace . '::' . $moduleName . '_module_entry;' . PHP_EOL;
@@ -1751,10 +1880,14 @@ CODE;
     {
         $isCacheableMiscFile = $this->isPhpxMiscFile($cppFile)
             && !$this->isProjectRuntimeEntryFile($cppFile);
+        $isNanoRuntimeSource = isset($this->nanoRuntimeSources[$cppFile]);
         if ($isCacheableMiscFile && $this->hasMiscObjectFileCache($cppFile)) {
             if (!$parallel) {
                 $this->climate->darkGray('[cache] skip: ' . $cppFile);
             }
+            return;
+        }
+        if ($isNanoRuntimeSource && $this->hasNanoObjectFileCache($cppFile, $objectFile)) {
             return;
         }
 
@@ -1780,6 +1913,28 @@ CODE;
         if ($isCacheableMiscFile) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
         }
+        if ($isNanoRuntimeSource) {
+            $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
+        }
+    }
+
+    private function hasNanoObjectFileCache(string $sourceFile, string $objectFile): bool
+    {
+        if ($this->climate->arguments->defined('force') || !is_file($objectFile)) {
+            return false;
+        }
+        $metadataFile = $this->getMiscObjectCacheMetadataFile($objectFile);
+        $cachedKey = is_file($metadataFile) ? file_get_contents($metadataFile) : false;
+        if ($cachedKey === false
+            || trim($cachedKey) !== $this->getMiscObjectCacheKey($sourceFile, $objectFile)) {
+            return false;
+        }
+        $objectMtime = filemtime($objectFile);
+        $sourceMtime = filemtime($sourceFile);
+        return $objectMtime !== false
+            && $sourceMtime !== false
+            && $objectMtime > $sourceMtime
+            && $objectMtime >= $this->nanoRuntimeHeaderMtime;
     }
 
     protected function getSourceCompileCommandOptions(string $sourceFile, ?string $language): CompileOptions
@@ -1806,8 +1961,10 @@ CODE;
     {
         $job = $this->maxJob;
 
+        if ($this->isNanoMode()) {
+            $sourceFiles = $this->composeNanoRuntimeSources($sourceFiles);
         // The embed build needs the main function and the CLI's built-in function definitions.
-        if ($this->isBuildModeEmbed()) {
+        } elseif ($this->isBuildModeEmbed()) {
             $runtimeSource = $this->getPhpxDir() . '/src/misc/typephp_runtime.cc';
             // PHPX 2.6.3 keeps the common runtime in typephp_main.cc. Newer
             // PHPX versions split it out so the object can be shared across
@@ -1818,12 +1975,17 @@ CODE;
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
         }
 
-        if ($this->isBuildModeBin() && !$this->isWasiTarget() && !$this->isIosTarget()) {
+        if (!$this->isNanoMode()
+            && $this->isBuildModeBin()
+            && !$this->isWasiTarget()
+            && !$this->isIosTarget()) {
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/php_cli_process_title.c';
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/ps_title.c';
         }
 
-        $this->preparePhpXPrecompiledHeader();
+        if (!$this->isNanoMode()) {
+            $this->preparePhpXPrecompiledHeader();
+        }
 
         // Windows: compile the resource file (icon, version info, etc.)
         $this->compileResourceFile();
@@ -1834,6 +1996,47 @@ CODE;
 
         // Unix/Linux/macOS compile in parallel using pcntl
         return $this->compileWithPcntl($sourceFiles, $job);
+    }
+
+    /** @param list<string> $generatedSources @return list<string> */
+    private function composeNanoRuntimeSources(array $generatedSources): array
+    {
+        $composition = (new NanoSourceComposer())->compose(
+            $this->getBuildDir(),
+            $this->targetName,
+            true,
+        );
+        $this->nanoRuntimeIncludePaths = $composition['includeDirs'];
+        $this->nanoRuntimeSources = array_fill_keys($composition['packageSources'], true);
+        $this->nanoRuntimeHeaderMtime = $this->latestNanoHeaderMtime(
+            $this->nanoRuntimeIncludePaths,
+        );
+
+        return array_values(array_unique([
+            ...$generatedSources,
+            ...$composition['packageSources'],
+            $composition['registry'],
+        ]));
+    }
+
+    /** @param list<string> $directories */
+    private function latestNanoHeaderMtime(array $directories): int
+    {
+        $latest = 0;
+        foreach ($directories as $directory) {
+            if (!is_dir($directory)) {
+                continue;
+            }
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
+            );
+            foreach ($iterator as $file) {
+                if ($file->isFile()) {
+                    $latest = max($latest, $file->getMTime());
+                }
+            }
+        }
+        return $latest;
     }
 
     protected function preparePhpXPrecompiledHeader(): void
@@ -2064,9 +2267,67 @@ CODE;
             $this->error($buildError);
         }
 
+        if ($this->isNanoMode()) {
+            $this->auditNanoArtifact($objectFiles, $targetFile);
+        }
+
         $this->climate->green('Build successful: ' . $targetFile);
 
         return $targetFile;
+    }
+
+    /** @param list<string> $objectFiles */
+    private function auditNanoArtifact(array $objectFiles, string $targetFile): void
+    {
+        $this->climate->info('Auditing Nano runtime dependencies');
+        $auditor = new NativeDependencyAuditor();
+        if ($this->isWasiTarget()) {
+            $nm = getenv('TYPEPHP_WASI_NM');
+            if (!is_string($nm) || $nm === '') {
+                $compiler = $this->getCompilerBackend()->getCompilerCommand();
+                $candidate = dirname($compiler) . DIRECTORY_SEPARATOR . 'llvm-nm';
+                $nm = is_executable($candidate) ? $candidate : 'llvm-nm';
+            }
+            $auditor->assertUndefinedSymbols(
+                'wasip2',
+                $this->captureNativeCommand([$nm, '--undefined-only', ...$objectFiles]),
+            );
+            return;
+        }
+        $auditor->assertUndefinedSymbols(
+            'native',
+            $this->captureNativeCommand(['nm', '-u', ...$objectFiles]),
+        );
+        $auditor->assertUndefinedSymbols(
+            'native',
+            $this->captureNativeCommand(['nm', '-u', $targetFile]),
+        );
+    }
+
+    /** @param list<string> $command */
+    private function captureNativeCommand(array $command): string
+    {
+        $process = proc_open(
+            $command,
+            [STDIN, ['pipe', 'w'], ['pipe', 'w']],
+            $pipes,
+            getcwd() ?: $this->rootPath,
+        );
+        if (!is_resource($process)) {
+            throw new \RuntimeException("Unable to start Nano audit tool: {$command[0]}");
+        }
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $status = proc_close($process);
+        if ($status !== 0) {
+            throw new \RuntimeException(
+                "Nano audit command failed with status {$status}"
+                . ($stderr === '' ? '' : ": {$stderr}"),
+            );
+        }
+        return (string) $stdout;
     }
 
     protected function getNativeBuilder(): NativeBuilder
@@ -2338,7 +2599,28 @@ CODE;
 
     public function genIncludeHeaderFiles(): string
     {
-        $headers = array_merge($this->globalHeaders, [
+        $globalHeaders = $this->isNanoMode()
+            ? [
+                'cstring',
+                'phpx.h',
+                'phpx_helper.h',
+                'typephp_helper.h',
+                'phpx_big_int.h',
+                'phpx_big_float.h',
+                'phpx_decimal.h',
+                'std/core.h',
+                'std/ctype.h',
+                'std/array.h',
+                'std/string.h',
+                'std/math.h',
+                'std/json.h',
+                'std/datetime.h',
+                'std/hash.h',
+                'std/misc.h',
+                'std/random.h',
+            ]
+            : $this->globalHeaders;
+        $headers = array_merge($globalHeaders, [
             "php_{$this->targetName}_func_decl.h",
             "php_{$this->targetName}_data_decl.h",
         ], $this->localHeaders);
@@ -3103,6 +3385,12 @@ CODE;
         $ast = $this->parser->parse($phpCode);
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+        if ($this->isNanoPolicyMode()) {
+            $traverser->addVisitor(new NanoSyntaxValidationVisitor(
+                fn (Node $node, string $message) => $this->fatalError($node, $message),
+                $this->isNanoMode(),
+            ));
+        }
         $traverser->addVisitor(new VoidCastValidationVisitor(
             fn (Node $node, string $message) => $this->fatalError($node, $message),
         ));
@@ -4864,7 +5152,7 @@ CODE;
         } else {
             $isEntryFunction = $this->hasFunction(self::ENTRY_FUNCTION)
                 && $functionDef === $this->getFunction(self::ENTRY_FUNCTION);
-            if ($this->isBuildModeBin() && $isEntryFunction) {
+            if ($this->isBuildModeBin() && !$this->isNanoMode() && $isEntryFunction) {
                 // $_SERVER initialization must live inside the main entry function so
                 // the runtime environment and superglobal context are fully ready
                 // before it is accessed.
@@ -5054,6 +5342,7 @@ CODE;
             }
         }
         $this->initializeImmutableFunctionContext();
+        $this->prepareReferenceCaptureDegradations($v->stmts, true);
 
         if ($this->functionDef->generator) {
             try {
@@ -5138,11 +5427,15 @@ CODE;
         // Native classes may be discovered after an earlier declaration was
         // normalized; the final ABI must use the precise native pointer type,
         // not a stale php::Object spelling cached during preprocessing.
-        $functionDeclCode .= $this->getNativeMethodParameterDeclarations($this->functionDef) . ')';
+        $functionDeclCode .= $this->getNativeMethodParameterDeclarations(
+            $this->functionDef,
+            useDegradedArgumentNames: true,
+        ) . ')';
 
         $code = $functionDeclCode . ' {' . PHP_EOL;
         $this->indentLevel++;
-        $preamble = $this->genScopeVarDecl();
+        $preamble = $this->genDegradedArgumentLocals();
+        $preamble .= $this->genScopeVarDecl();
         $preamble .= $this->genNativeObjectParameterChecks($this->functionDef);
         // Runtime union/nullable parameter type checks
         foreach ($this->functionDef->argInfoList as $i => $argInfo) {

@@ -18,7 +18,7 @@ function main(): void
     $vector[] = 'wasm';
     $map = std::map(Type::String, Type::Int);
     $map['answer'] = 42;
-    $ordered = std::ordered_map(Type::String, Type::Int);
+    $ordered = std::orderedMap(Type::String, Type::Int);
     $ordered['first'] = 1;
 
     echo $array[0], '|', $vector[0], '|', $map['answer'], '|', $ordered['first'], "\n";

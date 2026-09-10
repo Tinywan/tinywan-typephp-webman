@@ -1,9 +1,9 @@
 --TEST--
-std ordered_map: unset
+std orderedMap: unset
 --FILE--
 <?php
 function main() {
-    $map = std::ordered_map(Type::String, Type::Int);
+    $map = std::orderedMap(Type::String, Type::Int);
     $map["alpha"] = 10;
     $map["beta"] = 20;
     var_dump($map);

@@ -27,8 +27,8 @@ services:
       context: docker
       dockerfile: Dockerfile.linux-dynamic
       args:
-        TYPEPHP_VERSION: v0.8.0
-    image: tinywan/typephp-linux-x64:v0.8.0
+        TYPEPHP_VERSION: v0.8.1
+    image: tinywan/typephp-linux-x64:v0.8.1
     container_name: typephp-builder-linux-dynamic
     volumes:
       - ./:/app
@@ -42,8 +42,8 @@ services:
       context: docker
       dockerfile: Dockerfile.linux-static
       args:
-        TYPEPHP_VERSION: v0.8.0
-    image: tinywan/typephp-linux-x64-static:v0.8.0
+        TYPEPHP_VERSION: v0.8.1
+    image: tinywan/typephp-linux-x64-static:v0.8.1
     container_name: typephp-builder-linux-static
     volumes:
       - ./:/app

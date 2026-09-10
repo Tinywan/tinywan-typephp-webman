@@ -404,6 +404,15 @@ trait AssignOpTrait
         }
 
         if ($this->isNativeObjectClass($rightClass)) {
+            if ($this->isVarExpr($left)) {
+                $degradedName = $this->parseVariable($left);
+                if (isset($this->context->varTypeDegradations[$degradedName])) {
+                    $this->fatalError(
+                        $left,
+                        "Native object variable `\${$degradedName}` cannot be degraded to var for Closure reference capture",
+                    );
+                }
+            }
             $allowed = false;
             if ($this->isVarExpr($left)) {
                 $leftName = $this->parseVariable($left);
@@ -614,7 +623,13 @@ trait AssignOpTrait
                     $class = $this->parseIdentifier($right->class);
                     if ($this->isStdClassExpr($right->class)) {
                         $stdMethod = strtolower($right->name->toString());
-                        if (in_array($stdMethod, ['array', 'vector', 'map', 'ordered_map'], true)) {
+                        if (in_array($stdMethod, ['array', 'vector', 'map', 'orderedmap'], true)) {
+                            if (isset($this->context->varTypeDegradations[$var])) {
+                                $this->fatalError(
+                                    $left,
+                                    "Std container variable `\${$var}` cannot be degraded to var for Closure reference capture",
+                                );
+                            }
                             if ($this->hasScopeGlobalVar($var) || $this->hasStaticVar($var)) {
                                 $this->assertNativeStdContainerFunctionLocal($right);
                             }

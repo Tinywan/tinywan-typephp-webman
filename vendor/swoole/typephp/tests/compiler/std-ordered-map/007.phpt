@@ -1,9 +1,9 @@
 --TEST--
-std ordered_map: assign to PHP array
+std orderedMap: assign to PHP array
 --FILE--
 <?php
 function main() {
-    $map = std::ordered_map(Type::Int, Type::Int);
+    $map = std::orderedMap(Type::Int, Type::Int);
     $map[10] = 100;
     $map[20] = 200;
 

@@ -6,7 +6,7 @@
 
 TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最终只占用两个全局类符号：
 `Type::*` 仅用于扩展方法等元数据中的类型表示，`std::*` 承载 TypePHP 内置函数。
-对象类型断言使用 `toObject()` 关键词方法。
+对象类型断言使用 `std::object()` 或等价的 `toObject()` 关键词方法。
 
 遵循 PHP 规则，`std` / `Type` 类名以及 `std` 方法名不区分大小写；`Type::*`
 成员是类常量，其常量名仍区分大小写。
@@ -38,7 +38,7 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 
 ## `std::` 编译期入口
 
-当前 `std::` 编译期入口共 14 个。
+当前 `std::` 编译期入口共 15 个。
 
 | 名称 | 作用 | 主要限制 |
 | --- | --- | --- |
@@ -49,13 +49,14 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 | `std::decimal($value)` | 构造 Decimal。 | float 变量需改用字符串或整型；float 字面量会按原始字面量处理。 |
 | `std::bigFloat($value)` | 构造 BigFloat。 | 需要 1 个值参数。 |
 | `std::any([$value])` | 将表达式降级为 `mixed/any`；省略参数时，初始值为 `null`。 | Native 对象及包含 Native 对象的 std 容器不能通过它逃逸。 |
+| `std::object($value, ClassName::class)` | 检查对象并恢复具体类信息。 | 必须传入 2 个非展开参数，且类名必须能在编译期解析。 |
 | `std::ref($target)` | 显式以引用方式传递目标。 | 只接受变量、数组元素或对象属性，且仅可作为调用参数的引用包装器。 |
 | `std::expected($condition)` | 标记条件通常为真。 | 只接受一个非展开参数并返回 bool。 |
 | `std::unexpected($condition)` | 标记条件通常为假。 | 只接受一个非展开参数并返回 bool。 |
 | `std::array($type, $size[, ...$sizes])` | 构造固定大小 std array。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `std::vector($type[, $size])` | 构造 std vector。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `std::map($keyType, $valueType)` | 构造 std map。 | 只能在变量首次赋值的顶层作用域使用。 |
-| `std::ordered_map($keyType, $valueType)` | 构造 std ordered map。 | 只能在变量首次赋值的顶层作用域使用。 |
+| `std::orderedMap($keyType, $valueType)` | 构造 std ordered map。 | 只能在变量首次赋值的顶层作用域使用。 |
 
 ## Std 容器转换关键词方法
 
@@ -80,7 +81,7 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 
 - `std::any()` 使用统一的降级入口；赋值、参数、返回值、数组元素和运算子表达式共用相同语义。
 - `std::ref()` / `toRef()` 在参数解析、SSA 和优化器路径中共用同一个引用包装识别入口。
-- 已移除的全局 `objval()` 由 `toObject(ClassName::class)` 取代，对象类型断言复用现有关键词方法路径。
+- 已移除的全局 `objval()` 由 `std::object($value, ClassName::class)` 取代。它与 `$value->toObject(ClassName::class)` 等价，同时允许普通 PHP 项目提供兼容的 `std::object()` polyfill。
 - `std::expected()` / `std::unexpected()` 分别生成 `EXPECTED(...)` / `UNEXPECTED(...)`，不产生 PHP 运行时函数调用。
 
 后续重构目标：

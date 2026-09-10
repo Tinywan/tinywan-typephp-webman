@@ -171,13 +171,13 @@ $obj = (new MyClass())->toObject(MyClass::class);  // Not needed
 
 ### Differences from std:: Types
 
-| Feature | std::int/float/bool | toObject |
+| Feature | std::int/float/bool | std::object/toObject |
 |------|---------------------|--------|
 | **Purpose** | Numeric/boolean type optimization | Object type declaration |
 | **Performance** | ⚡ High performance (native type) | 🐢 Standard (ZVAL) |
 | **Memory** | 8B/1B | Pointer (16B+) |
 | **Timing** | Runtime optimization | Compile-time lowering plus runtime check when needed |
-| **Syntax** | `std::int(value)` | `$value->toObject(ClassName::class)` |
+| **Syntax** | `std::int(value)` | `std::object($value, ClassName::class)` or `$value->toObject(ClassName::class)` |
 
 ---
 
@@ -187,7 +187,7 @@ The following types **do not** use native types and still use ZVAL:
 
 - ❌ `std::string` - strings use ZVAL (php::Str)
 - ❌ `std::array` - arrays use ZVAL (php::Array)
-- ❌ `std::object` - objects use ZVAL (php::Object)
+- ❌ Objects remain ZVAL-backed (`php::Object`); `std::object()` restores class information but does not introduce native object storage
 - ❌ All other types - use ZVAL (php::Var)
 
 ## Type Mapping Table

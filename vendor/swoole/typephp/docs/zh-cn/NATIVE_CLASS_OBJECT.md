@@ -263,7 +263,7 @@ PHP 本身不允许将 `resource` 写成属性类型；TypePHP 中的 stream res
 - `std\array`
 - `std\vector`
 - `std\map`
-- `std\ordered_map`
+- `std\orderedMap`
 - 后续增加的其他 Std Container 类型
 
 这些类型具有独立的泛型布局、引用或所有权语义，将它们嵌入 Native Class 会显著扩大首版类型组合和生命周期分析范围。开发者可以使用普通 PHP `array` 字段；PHP array 中仍然不能保存 Native Object，因为 Native Object 没有 `zval` 表示。
@@ -864,7 +864,7 @@ Native Class 的字段可以保存 `php::Var`、`php::Array` 或 `php::Object`�
 - 保存到 ZendVM 全局变量或对象属性中。
 
 Box 不能保存 Native Object。Std Container 不能作为 Native Class 属性，但局部
-`std::array`、`std::vector`、`std::map` 和 `std::ordered_map` 可以使用具体
+`std::array`、`std::vector`、`std::map` 和 `std::orderedMap` 可以使用具体
 `NativeClass::class` 作为 value type，并保存该类或其 Native 子类。普通 PHP array
 仍然不能保存 Native Object。
 

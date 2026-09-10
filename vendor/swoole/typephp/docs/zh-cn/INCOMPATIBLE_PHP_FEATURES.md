@@ -52,16 +52,18 @@
   `$alias =& $value` 这类函数顶层的一次性绑定会生成 C++ `T&`；静态可解析的 TypePHP
   调用中，精确的 `int/string/float/bool/array &$arg` 同样直接传递 `T&`，不装箱也不
   创建 Zend reference。由于 C++ 引用不能改绑或逃逸，条件/循环内首次绑定、重新绑定、
-  `unset`、Closure 按引用捕获、按引用返回局部变量，以及把引用保存到属性、数组或全局
-  槽位均会在编译期拒绝。
+  `unset`、按引用返回局部变量，以及把引用保存到属性、数组或全局槽位均会在编译期拒绝。
+  Closure 的 `use (&$value)` 是一个显式退化边界：编译器会在解析函数体前发现捕获，并从
+  第一次赋值开始把该局部变量保存为 `php::Var`，使逃逸闭包能够持有正常的 Zend reference。
+  强类型参数保持原调用 ABI，并在函数入口复制到同名的 `php::Var` 本地槽位。
 - 动态函数、动态方法和 Closure 调用仍须显式使用 `std::ref()` / `toRef()`。TypePHP
   为本次调用建立 Zend reference，返回时校验类型并写回；动态代码若把临时引用保留到
   调用之外会得到明确错误。需要完整 PHP 引用身份时，应以 `std::any()` 初始化局部变量，
   继续使用既有 `php::Var` / `php::Ref` 动态路径。
-- 固定 object、resource/stream、高精度值、Native/typed object、Box 与 `std` 容器局部
-  变量禁止取引用。这些值本身已有句柄或引用式语义，对其静态局部槽位改绑只会削弱类型
-  系统。Typed Property 仍可取引用，Zend 会附加属性 type source；PHP 数组元素仍是
-  可取引用的动态槽位。
+- 普通 object、resource/stream 和高精度局部变量在被 Closure 按引用捕获时同样退化为
+  `php::Var`。Native object 和 `std` 容器不能安全丢弃其编译期存储布局，仍禁止这种捕获；
+  Typed Property 仍可取引用，Zend 会附加属性 type source；PHP 数组元素仍是可取引用的
+  动态槽位。
 - 带 unpack 且尾部追加 named arguments 的调用会退化为动态调用，不能使用 native call。
 
 ## 对象模型
@@ -84,7 +86,7 @@
 - `foreach` by reference 的 value 只能是变量。
 - `foreach` list destructuring 不支持按引用绑定元素。
 - 非 `int/bool` lowering 路径中的非空 `switch` case 必须以 `return`、`break`、`continue`、`exit` 或 `throw` 结束；不要依赖 PHP 的隐式 case fallthrough。当前 `int/bool` native switch 路径仍可保留 C++ fallthrough，因此项目代码应统一显式终止每个非空 case。
-- `std::vector`、`std::map`、`std::ordered_map` 在 `foreach` 期间禁止追加、插入、`unset()` 或整体替换；已有元素的非结构性更新仍可使用赋值运算符完成。
+- `std::vector`、`std::map`、`std::orderedMap` 在 `foreach` 期间禁止追加、插入、`unset()` 或整体替换；已有元素的非结构性更新仍可使用赋值运算符完成。
 - 固定 native typed object property 不允许按 PHP 未初始化语义自由 `unset()`。
 - native 类型变量执行 `unset()` 不会产生标准 PHP 的变量删除语义。
 

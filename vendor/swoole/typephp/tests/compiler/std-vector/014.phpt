@@ -43,7 +43,7 @@ function main() {
     $map["item"] = std_container_interface_mixed(new StdContainerInterfaceImpl(4));
     var_dump($map["item"]->getValue());
 
-    $ordered = std::ordered_map(Type::String, StdContainerInterfaceValue::class);
+    $ordered = std::orderedMap(Type::String, StdContainerInterfaceValue::class);
     $ordered["item"] = std_container_interface_mixed(new StdContainerInterfaceImpl(5));
     var_dump($ordered["item"]->getValue());
 

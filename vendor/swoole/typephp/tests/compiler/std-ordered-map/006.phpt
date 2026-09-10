@@ -1,5 +1,5 @@
 --TEST--
-std ordered_map: unsafe_cast type mismatch
+std orderedMap: unsafe_cast type mismatch
 --FILE--
 <?php
 function std_map_unsafe_ptr_type_mismatch($source): void
@@ -8,7 +8,7 @@ function std_map_unsafe_ptr_type_mismatch($source): void
 }
 
 function main() {
-    $map = std::ordered_map(Type::String, Type::Int);
+    $map = std::orderedMap(Type::String, Type::Int);
     try {
         std_map_unsafe_ptr_type_mismatch($map);
     } catch (TypeError $e) {

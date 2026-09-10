@@ -920,12 +920,68 @@ trait NativeClassSupportTrait
     }
 
     /**
+     * Lower a fixed Native property directly to the matching typed-reference
+     * ABI. The receiver is materialized as a precise Native root before the
+     * final C++ call so argument evaluation order cannot rebind or collect it.
+     *
+     * This is intentionally narrower than PHP reference acquisition: the
+     * resulting T& exists only for the statically resolved call. It does not
+     * make `$alias =& $object->property` or std::ref($object->property) legal.
+     */
+    protected function parseNativeTypedPropertyReferenceArg(
+        NodeAbstract $expr,
+        string $referenceType,
+        NodeAbstract $errorNode,
+    ): ?string {
+        if (!$expr instanceof Node\Expr\PropertyFetch) {
+            return null;
+        }
+
+        $receiverClass = $this->detectClassOfExpr($expr->var);
+        if (!$this->isNativeObjectClass($receiverClass)) {
+            return null;
+        }
+        if (!$expr->name instanceof Node\Identifier) {
+            $this->fatalError($errorNode, 'Dynamic native object property access is not supported');
+        }
+
+        $property = $expr->name->toString();
+        $resolution = $this->resolveNativeInstanceProperty($expr, $property, $receiverClass);
+        if ($resolution === null) {
+            $this->fatalError(
+                $errorNode,
+                "Native class `{$receiverClass}` has no property `\${$property}`",
+            );
+        }
+        $this->applyNativePropertyAccessResult($expr, $resolution);
+        $definition = $resolution->propertyDef;
+
+        if ($definition->nullable
+            || $definition->getter !== null
+            || $definition->setter !== null
+            || Type::getReferenceType($definition->type) !== $referenceType
+        ) {
+            return null;
+        }
+
+        $this->assertReadonlyPropertyReferenceForbidden($expr, $errorNode, false);
+        $this->assertPropertySetVisibility($expr);
+
+        $receiver = $this->materializeNativeObjectReceiver($expr->var, $receiverClass);
+        $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_VAR);
+        return $this->getNativeObjectMemberReceiver($receiver)
+            . $this->getNativeObjectPropertyCppName($definition, $resolution->classDef);
+    }
+
+    /**
      * Validate a Native reference entirely from compile-time metadata.
      *
      * A Native object variable is a typed pointer and must never expose its
-     * pointer slot as a PHP reference. A Native property may expose a reference
-     * only when it was explicitly declared `any`: that field intentionally
-     * permits arbitrary PHP values. Every other declaration, including
+     * pointer slot as a PHP reference. A Native property may expose a Zend
+     * reference only when it was explicitly declared `any`: that field
+     * intentionally permits arbitrary PHP values. Fixed fields passed directly
+     * to an exact typed-reference parameter are handled before this check and
+     * never expose a Zend reference. Every other declaration, including
      * `mixed`, must reject references because dynamic Zend code could replace
      * the referenced value with one that violates the Native field contract.
      */
@@ -1519,6 +1575,7 @@ trait NativeClassSupportTrait
     protected function getNativeMethodParameterDeclarations(
         FunctionDef $function,
         ?int $parameterCount = null,
+        bool $useDegradedArgumentNames = false,
     ): string
     {
         $args = [];
@@ -1526,6 +1583,12 @@ trait NativeClassSupportTrait
             ? $function->argInfoList
             : array_slice($function->argInfoList, 0, $parameterCount);
         foreach ($arguments as $argument) {
+            if ($useDegradedArgumentNames
+                && isset($this->context->varTypeDegradations[$argument->name])
+            ) {
+                $argument = clone $argument;
+                $argument->name = $this->getDegradedArgumentStorageName($argument->name);
+            }
             if ($argument->variadic) {
                 $declaration = Type::ARRAY . ' ' . $argument->name;
             } else {
@@ -1606,7 +1669,7 @@ trait NativeClassSupportTrait
             'std\\array',
             'std\\vector',
             'std\\map',
-            'std\\ordered_map',
+            'std\\orderedmap',
         ], true);
     }
 

@@ -7,7 +7,8 @@ This document records the compile-time functions, keyword methods, and related c
 TypePHP does not reserve global function names for compiler directives. The
 compile-time API occupies two global class symbols: `Type::*` only describes
 types for extension-method metadata, while `std::*` contains TypePHP built-in
-functions. Object type assertions use the `toObject()` keyword method.
+functions. Object type assertions use `std::object()` or the equivalent
+`toObject()` keyword method.
 
 The `std` / `Type` class names and `std` method names are case-insensitive, as
 PHP class and method names are. `Type::*` members are class constants, whose
@@ -40,7 +41,7 @@ Constraints:
 
 ## `std::` compile-time entry points
 
-There are currently 14 `std::` compile-time entry points.
+There are currently 15 `std::` compile-time entry points.
 
 | Name | Purpose | Main limitation |
 | --- | --- | --- |
@@ -51,13 +52,14 @@ There are currently 14 `std::` compile-time entry points.
 | `std::decimal($value)` | Constructs a Decimal. | A float variable must be converted via string or integer; float literals are handled per the original literal. |
 | `std::bigFloat($value)` | Constructs a BigFloat. | Requires 1 value parameter. |
 | `std::any([$value])` | Degrades the expression to `mixed/any`; when omitted, the value defaults to `null`. | Native objects and native-object std containers cannot escape through it. |
+| `std::object($value, ClassName::class)` | Checks an object and restores its concrete class information. | Requires exactly 2 non-unpacked arguments and a compile-time-resolvable class name. |
 | `std::ref($target)` | Explicitly passes a target by reference. | Only accepts variables, array elements, or object properties and is only valid as a call argument wrapper. |
 | `std::expected($condition)` | Marks a condition as usually true. | Accepts exactly one non-unpacked argument and returns bool. |
 | `std::unexpected($condition)` | Marks a condition as usually false. | Accepts exactly one non-unpacked argument and returns bool. |
 | `std::array($type, $size[, ...$sizes])` | Constructs a fixed-size std array. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::vector($type[, $size])` | Constructs a std vector. | Can only be used in the top-level scope of the variable's first assignment. |
 | `std::map($keyType, $valueType)` | Constructs a std map. | Can only be used in the top-level scope of the variable's first assignment. |
-| `std::ordered_map($keyType, $valueType)` | Constructs a std ordered map. | Can only be used in the top-level scope of the variable's first assignment. |
+| `std::orderedMap($keyType, $valueType)` | Constructs a std ordered map. | Can only be used in the top-level scope of the variable's first assignment. |
 
 ## Std container conversion keyword methods
 
@@ -82,7 +84,7 @@ Compile-time functions should be usable in any legal expression position and mai
 
 - `std::any()` is handled through one lowering entry; assignments, parameters, return values, array elements, and operator subexpressions share the same semantics.
 - `std::ref()` / `toRef()` share one reference-wrapper recognizer across argument parsing, SSA, and optimizer paths.
-- `toObject(ClassName::class)` replaces the removed global `objval()` helper and provides object type assertion through the existing keyword-method path.
+- `std::object($value, ClassName::class)` replaces the removed global `objval()` helper. It is equivalent to `$value->toObject(ClassName::class)`, while allowing ordinary PHP projects to provide a compatible `std::object()` polyfill.
 - `std::expected()` / `std::unexpected()` generate `EXPECTED(...)` / `UNEXPECTED(...)` respectively and produce no PHP runtime function call.
 
 Future refactoring goals:

@@ -96,6 +96,16 @@ abstract class GccLikeBackend extends CompilerBackend
             $cmd .= ' -march=' . $config['march'];
         }
 
+        if (!empty($config['section_gc'])) {
+            $cmd .= ' -ffunction-sections -fdata-sections';
+        }
+
+        if (!empty($config['wasi_exceptions'])) {
+            $cmd .= ' -fwasm-exceptions'
+                . ' -mllvm -wasm-enable-sjlj'
+                . ' -mllvm -wasm-use-legacy-eh=false';
+        }
+
         if (!empty($config['target_platform'])) {
             $cmd .= ' --target=' . $config['target_platform'];
         }
@@ -208,6 +218,10 @@ abstract class GccLikeBackend extends CompilerBackend
         $cmd .= ' -x c';
         $cmd .= ' ' . escapeshellarg($sourceFile);
         $cmd .= ' -o ' . escapeshellarg($outputFile);
+
+        if (!empty($options['c_std'])) {
+            $cmd .= ' -std=' . $options['c_std'];
+        }
 
         if (!empty($options['include_paths'])) {
             $cmd .= ' ' . $this->formatIncludePaths($options['include_paths']);

@@ -144,7 +144,7 @@ _typephp_tpc()
             return
             ;;
         -* )
-            COMPREPLY=( $(compgen -W '-O --optimize -o --output -h --help -v --version --profile --no-literal-strings --php-version -f --force -m --mode -r --run --debug -j --job --no-console --sanitize --cxx-std --march --compiler --target-platform --no-color --build-dir --dry -I --include-path -D --define --no-progress --lto --format -l --link-lib -L --link-path --full-static --wasm --wasm= --gen-python-helper --convert-python-to-php --output-dir --output-dir= --build-dir= --generate-completion=' -- "$current") )
+            COMPREPLY=( $(compgen -W '--nano -O --optimize -o --output -h --help -v --version --profile --no-literal-strings --php-version -f --force -m --mode -r --run --debug -j --job --no-console --sanitize --cxx-std --march --compiler --target-platform --no-color --build-dir --dry -I --include-path -D --define --no-progress --lto --format -l --link-lib -L --link-path --full-static --wasm --wasm= --gen-python-helper --convert-python-to-php --output-dir --output-dir= --build-dir= --generate-completion=' -- "$current") )
             return
             ;;
     esac

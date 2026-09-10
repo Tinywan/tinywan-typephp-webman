@@ -105,7 +105,7 @@ The present invention defines a set of strongly-typed container construction syn
 ```php
 $a = std::array(Type::Int, 100);
 $v = std::vector(Type::Float);
-$m = std::ordered_map(Type::String, Type::Int);
+$m = std::orderedMap(Type::String, Type::Int);
 $h = std::map(Type::Int, User::class);
 ```
 

@@ -200,9 +200,9 @@ class CompilerBase implements PropertyAccessContext
     ];
 
     /**
-     * APIs which cannot have the same semantics in Wasmtime and a browser.
-     * Keep this list at the language boundary so a WASI build never degrades
-     * into a link error or a browser-only implementation.
+     * APIs omitted by the smaller WASI capability profile. Keep the rejection
+     * at the language boundary so a direct call never degrades into a link
+     * error or an internal ENOTSUP compatibility stub.
      */
     private const array WASI_UNSUPPORTED_FUNCTIONS = [
         'exec',
@@ -215,23 +215,120 @@ class CompilerBase implements PropertyAccessContext
         'proc_terminate',
         'shell_exec',
         'system',
+        'flock',
+        'umask',
+        'chown',
+        'chgrp',
+        'lchown',
+        'lchgrp',
         'fsockopen',
         'pfsockopen',
         'stream_socket_accept',
         'stream_socket_client',
         'stream_socket_enable_crypto',
+        'stream_socket_get_crypto_status',
         'stream_socket_get_name',
         'stream_socket_pair',
         'stream_socket_recvfrom',
         'stream_socket_sendto',
         'stream_socket_server',
         'stream_socket_shutdown',
+        'gethostbyaddr',
+        'gethostbyname',
+        'gethostbynamel',
+        'gethostname',
+        'dns_check_record',
+        'dns_get_mx',
+        'dns_get_record',
     ];
 
     private const array WASI_UNSUPPORTED_FUNCTION_PREFIXES = [
         'pcntl_',
         'posix_',
         'socket_',
+    ];
+
+    /** APIs excluded by php-nano's C/C++/POSIX capability model. */
+    private const array NANO_UNSUPPORTED_FUNCTIONS = [
+        'dl',
+        'exec',
+        'passthru',
+        'popen',
+        'proc_close',
+        'proc_get_status',
+        'proc_nice',
+        'proc_open',
+        'proc_terminate',
+        'shell_exec',
+        'system',
+        'getenv',
+        'putenv',
+        'set_time_limit',
+        'parse_str',
+        'fsockopen',
+        'pfsockopen',
+        'stream_select',
+        'stream_get_transports',
+        'stream_get_filters',
+        'stream_filter_register',
+        'stream_bucket_make_writeable',
+        'stream_bucket_prepend',
+        'stream_bucket_append',
+        'stream_bucket_new',
+        'stream_socket_accept',
+        'stream_socket_client',
+        'stream_socket_enable_crypto',
+        'stream_socket_get_crypto_status',
+        'stream_socket_get_name',
+        'stream_socket_pair',
+        'stream_socket_recvfrom',
+        'stream_socket_sendto',
+        'stream_socket_server',
+        'stream_socket_shutdown',
+        'gethostbyaddr',
+        'gethostbyname',
+        'gethostbynamel',
+        'gethostname',
+        'dns_check_record',
+        'dns_get_mx',
+        'dns_get_record',
+        'header',
+        'header_remove',
+        'headers_list',
+        'headers_sent',
+        'http_response_code',
+        'mail',
+        'openlog',
+        'closelog',
+        'syslog',
+    ];
+
+    /** Calls forbidden by Nano policy even when the full Windows PHP DLL is used. */
+    private const array NANO_POLICY_UNSUPPORTED_FUNCTIONS = [
+        'exec',
+        'passthru',
+        'pcntl_exec',
+        'popen',
+        'proc_close',
+        'proc_get_status',
+        'proc_nice',
+        'proc_open',
+        'proc_terminate',
+        'shell_exec',
+        'system',
+    ];
+
+    private const array NANO_POLICY_UNSUPPORTED_FUNCTION_PREFIXES = [
+        'proc_',
+    ];
+
+    private const array NANO_UNSUPPORTED_FUNCTION_PREFIXES = [
+        'pcntl_',
+        'posix_',
+        'socket_',
+        'curl_',
+        'ftp_',
+        'opcache_',
     ];
     public const int DECL_TYPE_OF_RETURN = 1;
     public const int DECL_TYPE_OF_PROPERTY = 2;
@@ -422,6 +519,16 @@ class CompilerBase implements PropertyAccessContext
     protected array $userDefines = [];       // --define / -D: user-provided preprocessor macros
     protected bool $enableLto = false;       // --lto: enable Link Time Optimization (-flto)
     protected bool $fullStatic = false;      // --full-static: link against the bundled fully-static SDK
+    /** Generate a VM-less program entry for the Composer php-nano runtime. */
+    protected bool $nanoMode = false;
+    /** Enforce the VM-free and external-command restrictions of `--nano`. */
+    protected bool $nanoPolicyMode = false;
+    /** @var list<string> Include directories published by Nano Composer packages. */
+    protected array $nanoRuntimeIncludePaths = [];
+    /** @var array<string, true> Package source files compiled into a Nano executable. */
+    protected array $nanoRuntimeSources = [];
+    /** Latest header timestamp used by the shared object-cache path. */
+    protected int $nanoRuntimeHeaderMtime = 0;
     protected string $file;
     protected string $dir;
 
@@ -697,6 +804,16 @@ class CompilerBase implements PropertyAccessContext
         return $target === 'wasm32-unknown-wasip2' || $target === 'wasm32-wasip2';
     }
 
+    public function isNanoMode(): bool
+    {
+        return $this->nanoMode;
+    }
+
+    public function isNanoPolicyMode(): bool
+    {
+        return $this->nanoMode || $this->nanoPolicyMode;
+    }
+
     protected function assertWasiFunctionSupported(NodeAbstract $expr, string $name): void
     {
         if (!$this->isWasiTarget()) {
@@ -712,6 +829,43 @@ class CompilerBase implements PropertyAccessContext
                 $this->fatalError($expr, "Function `{$name}` is not supported by the WASI target");
             }
         }
+    }
+
+    protected function assertNanoFunctionSupported(NodeAbstract $expr, string $name): void
+    {
+        if (!$this->isNanoPolicyMode()) {
+            return;
+        }
+
+        $name = strtolower(ltrim($name, '\\'));
+        if (in_array($name, self::NANO_POLICY_UNSUPPORTED_FUNCTIONS, true)) {
+            $this->fatalError($expr, "Function `{$name}` is not supported in nano mode");
+        }
+        foreach (self::NANO_POLICY_UNSUPPORTED_FUNCTION_PREFIXES as $prefix) {
+            if (str_starts_with($name, $prefix)) {
+                $this->fatalError($expr, "Function `{$name}` is not supported in nano mode");
+            }
+        }
+
+        // Windows Nano uses the complete PHP/PHPX DLL set. Only the common
+        // policy above applies; php-nano's smaller host surface is Unix/WASI.
+        if (!$this->isNanoMode()) {
+            return;
+        }
+
+        if (in_array($name, self::NANO_UNSUPPORTED_FUNCTIONS, true)) {
+            $this->fatalError($expr, "Function `{$name}` is not supported in nano mode");
+        }
+        foreach (self::NANO_UNSUPPORTED_FUNCTION_PREFIXES as $prefix) {
+            if (str_starts_with($name, $prefix)) {
+                $this->fatalError($expr, "Function `{$name}` is not supported in nano mode");
+            }
+        }
+    }
+
+    protected function getNanoPolicyDisabledFunctionList(): string
+    {
+        return implode(',', self::NANO_POLICY_UNSUPPORTED_FUNCTIONS);
     }
 
     public function isBuildModeBin(): bool
@@ -1600,9 +1754,11 @@ class CompilerBase implements PropertyAccessContext
     {
         $this->assertNotNativeObjectArrayKey($expr);
         $key = $this->parseIdentifier($expr);
-        if (str_starts_with($key, self::LITERAL_STRING_GETTER . '(')) {
+        if ($expr instanceof Node\Scalar\String_) {
             // Array initializers and setters use zend_string* keys, while item()
-            // uses php::String to avoid an ambiguous conversion to Variant.
+            // uses php::String to avoid an ambiguous conversion to Variant. This
+            // must also cover inline literals used by native/Nano builds, where
+            // no persistent literal-string table is generated.
             return $keepStringObject ? $key : "{$key}.str()";
         }
         if ($this->isZeroLiteral($expr)) {
@@ -2200,6 +2356,14 @@ class CompilerBase implements PropertyAccessContext
             }
         }
         if ($this->isStaticCall($expr) and $this->isNameExpr($expr->class) and $this->isNamedMethod($expr->name)) {
+            if ($this->isStdClassExpr($expr->class)
+                && strtolower($this->parseIdentifier($expr->name)) === 'object'
+                && count($expr->args) === 2
+                && $expr->args[1] instanceof Node\Arg
+                && !$expr->args[1]->unpack
+            ) {
+                return $this->resolveClassNameArg($expr->args[1]->value);
+            }
             $class = $this->parseIdentifier($expr->class);
             if ($class === 'self') {
                 $class = $this->class;
@@ -3148,11 +3312,15 @@ class CompilerBase implements PropertyAccessContext
                 }
                 break;
             case 'Expr_FuncCall':
+                if ($expr->isFirstClassCallable()) {
+                    return Type::OBJECT;
+                }
                 if ($this->isNameExpr($expr->name)) {
                     $name = $this->parseIdentifier($expr->name);
                     $globalName = ltrim($name, '\\');
                     // Math function optimization: propagate Big* return types
-                    if (in_array($name, ['abs', 'pow', 'sqrt', 'floor', 'ceil', 'round'], true) && !empty($expr->args)) {
+                    if (in_array($name, ['abs', 'pow', 'sqrt', 'floor', 'ceil', 'round'], true)
+                        && !empty($expr->args)) {
                         $argType = $this->detectTypeOfExpr($expr->args[0]->value);
                         if (
                             $argType === Type::BIGINT
@@ -3175,9 +3343,6 @@ class CompilerBase implements PropertyAccessContext
                     }
                     if (in_array($name, self::STREAM_FUNCTIONS)) {
                         return Type::STREAM;
-                    }
-                    if (count($expr->args) === 1 and $this->isPlaceholderExpr($expr->args[0])) {
-                        return Type::OBJECT;
                     }
                     if ($this->hasFunction($name)) {
                         return $this->getFunction($name)->returnType;
@@ -3238,6 +3403,7 @@ class CompilerBase implements PropertyAccessContext
                             'bigint' => Type::BIGINT,
                             'decimal' => Type::DECIMAL,
                             'bigfloat' => Type::BIGFLOAT,
+                            'object' => Type::OBJECT,
                             'expected', 'unexpected' => Type::BOOL,
                             default => Type::VAR,
                         };
@@ -3465,6 +3631,12 @@ class CompilerBase implements PropertyAccessContext
             $this->validateInternalNamedCallArgs($ref, $expr->args);
         }
         if ($this->hasUnpackCallArg($expr->args)) {
+            return;
+        }
+        // `foo(...)` is PHP 8.1 first-class callable syntax: it creates a
+        // Closure instead of calling foo, so its single VariadicPlaceholder
+        // must not be counted/validated against foo's real signature.
+        if ($expr->isFirstClassCallable()) {
             return;
         }
         $actualArgCount = count($expr->args);
@@ -4909,6 +5081,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parseShellExec(Expr\ShellExec $expr): string
     {
+        if ($this->isNanoPolicyMode()) {
+            $this->fatalError($expr, 'Backtick shell execution is not supported in nano mode');
+        }
         if ($this->isWasiTarget()) {
             $this->fatalError($expr, 'Backtick shell execution is not supported by the WASI target');
         }
@@ -5340,8 +5515,7 @@ class CompilerBase implements PropertyAccessContext
             if (($info['kind'] ?? 'zval') === 'var') {
                 $code .= $this->getIndent() . Type::VAR . ' ' . $name . ' = ' . $info['getter'] . ';' . PHP_EOL;
             } else {
-                $zvalMacro = ($info['type'] === Type::FLOAT) ? 'Z_DVAL_P' : 'Z_LVAL_P';
-                $code .= $this->getIndent() . $info['type'] . ' &' . $name . ' = ' . $zvalMacro . '(' . $info['getter'] . '.unwrap_ptr());' . PHP_EOL;
+                $code .= $this->getIndent() . $info['type'] . ' &' . $name . ' = ' . $info['getter'] . ';' . PHP_EOL;
             }
         }
         foreach ($this->context->staticPropRefs as $info) {

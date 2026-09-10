@@ -28,7 +28,7 @@ function std_container_class_value_mixed(mixed $value): mixed
 }
 
 function main() {
-    $map = std::ordered_map(Type::String, StdContainerClassValue::class);
+    $map = std::orderedMap(Type::String, StdContainerClassValue::class);
     $map["a"] = new StdContainerClassValue(1);
     $item = $map["a"];
     var_dump($item->getValue());

@@ -85,14 +85,19 @@ final class VarIntTypesTest extends BaseTest
         self::assertStringNotContainsString('php::newClosureWithParameters(', $code);
     }
 
-    public function testExplicitAnySupportsReferenceCapture(): void
+    public function testExplicitAnyUsesDirectReferenceCaptureInNonEscapingClosure(): void
     {
         $code = $this->compileSource(
             $this->createCompiler(),
             TYPEPHP_ROOT_PATH . '/phpunit/code/any-reference-capture.php',
         );
+
         self::assertStringContainsString('php::Var changed', $code);
-        self::assertStringContainsString('changed.toReference()', $code);
+        self::assertStringContainsString(
+            'auto set = [&changed]() mutable -> php::Var {',
+            $code,
+        );
+        self::assertStringNotContainsString('php::newClosureWithParameters(', $code);
     }
 
     public function testDestructuringKeepsNativeTargetsAndConvertsDynamicItems(): void

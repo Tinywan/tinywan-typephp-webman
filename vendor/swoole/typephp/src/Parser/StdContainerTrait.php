@@ -37,7 +37,7 @@ trait StdContainerTrait
         }
 
         $method = strtolower($expr->name->toString());
-        if (!in_array($method, ['array', 'vector', 'map', 'ordered_map'], true)) {
+        if (!in_array($method, ['array', 'vector', 'map', 'orderedmap'], true)) {
             return '';
         }
 
@@ -69,7 +69,7 @@ trait StdContainerTrait
         }
         $typeInfo = $this->parseStdValueTypeInfo(
             $expr->args[$valueIndex]->value,
-            'std::' . $method,
+            $method === 'orderedmap' ? 'std::orderedMap' : 'std::' . $method,
         );
         $class = $typeInfo['class'] ?? '';
         return is_string($class) && $this->isNativeObjectClass($class) ? $class : '';
@@ -565,7 +565,7 @@ trait StdContainerTrait
             $this->fatalError($expr, 'std container expects a variable');
         }
         if (count($dims) !== 1) {
-            $this->fatalError($expr, 'Nested std::vector/std::map/std::ordered_map access is not supported');
+            $this->fatalError($expr, 'Nested std::vector/std::map/std::orderedMap access is not supported');
         }
         $dim = $dims[0];
         if ($dim === null) {
@@ -953,7 +953,7 @@ trait StdContainerTrait
 
     protected function parseStdOrderedMap(string $var, Expr\StaticCall $expr): string
     {
-        return $this->parseStdMapBase($var, $expr, 'std::ordered_map', Type::STD_ORDERED_MAP, 'ordered_map');
+        return $this->parseStdMapBase($var, $expr, 'std::orderedMap', Type::STD_ORDERED_MAP, 'ordered_map');
     }
 
     private function parseStdMapBase(string $var, Expr\StaticCall $expr, string $funcName, string $containerType, string $kind): string

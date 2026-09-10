@@ -3,6 +3,8 @@ use TypePhp\Translator;
 use TypePhp\Build\WasiToolchain;
 use TypePhp\Build\WasiProjectConfig;
 use TypePhp\Build\PhpxLocator;
+use TypePhp\Build\NativeSourceProjectBuilder;
+use TypePhp\Build\NativeSourceProjectConfig;
 use TypePhp\PythonTools\Command as PythonToolsCommand;
 use TypePhp\Cli\CompletionCommand;
 
@@ -39,6 +41,11 @@ function main(int $argc, array $argv): void
         if ($pythonToolStatus !== 0) {
             exit($pythonToolStatus);
         }
+        return;
+    }
+
+    if (shouldCompileNativeSourceProject($argv)) {
+        compileNativeSourceProject($argv);
         return;
     }
 
@@ -113,6 +120,84 @@ function main(int $argc, array $argv): void
     }
 }
 
+function shouldCompileNativeSourceProject(array $argv): bool
+{
+    foreach (array_slice($argv, 1) as $argument) {
+        if ($argument === '' || $argument[0] === '-') {
+            continue;
+        }
+        $path = $argument;
+        if ($path[0] !== '/' && preg_match('/^[A-Za-z]:[\\\\\/]/', $path) !== 1) {
+            $path = getcwd() . DIRECTORY_SEPARATOR . $path;
+        }
+        return NativeSourceProjectConfig::isNativeProject($path);
+    }
+    return false;
+}
+
+function compileNativeSourceProject(array $argv): void
+{
+    $input = null;
+    $buildDir = null;
+    $run = false;
+    $arguments = array_slice($argv, 1);
+    for ($i = 0, $count = count($arguments); $i < $count; ++$i) {
+        $argument = $arguments[$i];
+        if ($argument === '--run' || $argument === '-r') {
+            $run = true;
+            continue;
+        }
+        if ($argument === '--build-dir') {
+            if (!isset($arguments[$i + 1]) || $arguments[$i + 1] === '') {
+                fwrite(STDERR, "Option --build-dir requires a directory\n");
+                exit(1);
+            }
+            $buildDir = $arguments[++$i];
+            continue;
+        }
+        if (str_starts_with($argument, '--build-dir=')) {
+            $buildDir = substr($argument, strlen('--build-dir='));
+            if ($buildDir === '') {
+                fwrite(STDERR, "Option --build-dir requires a directory\n");
+                exit(1);
+            }
+            continue;
+        }
+        if ($argument !== '' && $argument[0] === '-') {
+            fwrite(STDERR, "Unsupported native option: {$argument}\n");
+            exit(1);
+        }
+        if ($input !== null) {
+            fwrite(STDERR, "Native mode accepts exactly one project.xml\n");
+            exit(1);
+        }
+        $input = $argument;
+    }
+
+    if ($input === null) {
+        fwrite(STDERR, "Usage: vendor/bin/tpc project.xml [--build-dir DIR] [--run]\n");
+        exit(1);
+    }
+
+    try {
+        $project = NativeSourceProjectConfig::load($input, $buildDir);
+        $builder = new NativeSourceProjectBuilder();
+        $result = $builder->build($project);
+        fwrite(
+            STDOUT,
+            "Native source build completed: {$result['sourceCount']} source file(s), "
+            . "{$result['compiledCount']} compiled, "
+            . "output {$result['output']}\n"
+        );
+        if ($run) {
+            $builder->runOutput($project);
+        }
+    } catch (RuntimeException $exception) {
+        fwrite(STDERR, "Native source build failed: {$exception->getMessage()}\n");
+        exit(1);
+    }
+}
+
 /**
  * Build a self-contained WASI 0.2 command component through the public CLI.
  * The lower-level build scripts are implementation details and are not part of
@@ -123,10 +208,15 @@ function compileWasmProgram(array $argv): void
     $input = null;
     $buildDir = null;
     $profile = null;
+    $nano = false;
     $arguments = array_slice($argv, 1);
     for ($i = 0, $count = count($arguments); $i < $count; $i++) {
         $argument = $arguments[$i];
         if ($argument === '--wasm') {
+            continue;
+        }
+        if ($argument === '--nano') {
+            $nano = true;
             continue;
         }
         if (str_starts_with($argument, '--wasm=')) {
@@ -188,7 +278,8 @@ function compileWasmProgram(array $argv): void
         exit(1);
     }
 
-    $builder = dirname(__DIR__) . '/wasm/build-program.sh';
+    $builder = dirname(__DIR__) . '/wasm/'
+        . ($nano ? 'build-nano-program.sh' : 'build-program.sh');
     if (!is_executable($builder)) {
         fwrite(STDERR, "TypePHP WASI builder is not executable: {$builder}\n");
         exit(1);
@@ -237,6 +328,7 @@ function compileWasmProgram(array $argv): void
     $environment['TYPEPHP_WASM_MODE'] = $project->mode;
     $environment['TYPEPHP_WASM_PACKAGE'] = $project->package;
     $environment['TYPEPHP_WASM_WORLD'] = $project->world;
+    $environment['TYPEPHP_WASM_NANO'] = $nano ? '1' : '0';
     $compilerExecutable = realpath($argv[0]);
     if ($compilerExecutable === false || !is_executable($compilerExecutable)) {
         fwrite(STDERR, "Unable to resolve the current TypePHP compiler executable: {$argv[0]}\n");

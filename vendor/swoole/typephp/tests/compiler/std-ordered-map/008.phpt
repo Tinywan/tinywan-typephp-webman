@@ -1,10 +1,10 @@
 --TEST--
-std ordered_map: same type copy
+std orderedMap: same type copy
 --FILE--
 <?php
 function main() {
-    $a = std::ordered_map(Type::Int, Type::Int);
-    $b = std::ordered_map(Type::Int, Type::Int);
+    $a = std::orderedMap(Type::Int, Type::Int);
+    $b = std::orderedMap(Type::Int, Type::Int);
 
     $b[10] = 100;
     $b[20] = 200;

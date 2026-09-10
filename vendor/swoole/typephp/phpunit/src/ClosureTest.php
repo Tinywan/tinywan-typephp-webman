@@ -17,9 +17,15 @@ class ClosureTest extends \BaseTest
         $code = file_get_contents($generated);
 
         self::assertIsString($code);
+        self::assertStringContainsString('php::Var arr;', $code);
+        self::assertStringContainsString('php::Var value;', $code);
         self::assertStringContainsString('auto copy = [arr = arr]() mutable -> php::Var {', $code);
-        self::assertSame(2, substr_count($code, 'php::newClosureWithParameters('));
-        self::assertSame(2, substr_count($code, 'php::ClosureStrictTypes::Enabled'));
+        self::assertStringContainsString('auto ref = [&arr]() mutable -> php::Var {', $code);
+        self::assertStringContainsString(
+            'auto returnCapturedRef = [&value]() mutable -> php::Var {',
+            $code,
+        );
+        self::assertStringNotContainsString('php::newClosureWithParameters(', $code);
     }
 
     public function testClosureRebindingIsRejectedAtCompileTime(): void

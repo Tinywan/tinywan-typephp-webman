@@ -78,12 +78,14 @@ enum TrimMode {
     TRIM_BOTH = 3,
 };
 
+#ifndef PHPX_NANO
 enum IncludeType {
     INCLUDE = ZEND_INCLUDE,
     INCLUDE_ONCE = ZEND_INCLUDE_ONCE,
     REQUIRE = ZEND_REQUIRE,
     REQUIRE_ONCE = ZEND_REQUIRE_ONCE,
 };
+#endif
 
 /**
  * Owns a persistent zend_string independently of the request memory pool.
@@ -141,9 +143,11 @@ PHPX_API bool updateConstant(const String &cls, const String &name, const Varian
 PHPX_API bool updateConstant(zend_class_entry *ce, const String &name, const Variant &data);
 PHPX_API void initGlobal(const String &name, Variant &var);
 PHPX_API void unsetGlobal(const String &name);
+#ifndef PHPX_NANO
 PHPX_API Variant include(Variant file, IncludeType type = INCLUDE);
 PHPX_API Variant include(Variant file, IncludeType type, const Array &scope);
 PHPX_API Variant eval(const String &script, const char *filename = nullptr);
+#endif
 PHPX_API Variant call(const Variant &func, Args &args, zend_array *named_args = nullptr);
 PHPX_API Variant call(const Variant &func, FixedArgs args, zend_array *named_args = nullptr);
 PHPX_API Variant call(const Variant &func, Array &args, zend_array *named_args = nullptr);
@@ -1291,6 +1295,8 @@ class Variant {
     PHPX_UNSAFE zend_object *object() const noexcept {
         return Z_OBJ_P(unwrap_ptr());
     }
+
+  protected:
     zend_object *checkedObject(const char *operation) const {
         if (UNEXPECTED(!isObject())) {
             throwError("%s on %s", operation, typeStr());
@@ -1298,6 +1304,8 @@ class Variant {
         }
         return object();
     }
+
+  public:
     PHPX_UNSAFE zval *zv() const noexcept {
         return Z_INDIRECT(val);
     }
@@ -1396,7 +1404,7 @@ class Variant {
         return zval_get_double(const_cast<zval *>(unwrap_ptr()));
     }
     bool toBool() const {
-        return zval_is_true(const_cast<zval *>(unwrap_ptr()));
+        return zend_is_true(unwrap_ptr());
     }
     Array toArray() const;
     Object toObject() const;
@@ -2648,6 +2656,28 @@ class Object : public Variant {
     }
     Object(const Variant &v, Ctor method = Ctor::Copy) : Object(v.unwrap_ptr(), method) {}
     Object() = default;
+    Int &attrInt(uintptr_t offset) const {
+        zval *value = unwrap_zval(OBJ_PROP(checkedObject("Attempt to read property"), offset));
+        if (UNEXPECTED(Z_TYPE_P(value) != IS_LONG)) {
+            throwExceptionEx(
+                zend_ce_type_error,
+                0,
+                "Object::attrInt() expects an int property, %s given",
+                zend_zval_type_name(value));
+        }
+        return Z_LVAL_P(value);
+    }
+    Float &attrFloat(uintptr_t offset) const {
+        zval *value = unwrap_zval(OBJ_PROP(checkedObject("Attempt to read property"), offset));
+        if (UNEXPECTED(Z_TYPE_P(value) != IS_DOUBLE)) {
+            throwExceptionEx(
+                zend_ce_type_error,
+                0,
+                "Object::attrFloat() expects a float property, %s given",
+                zend_zval_type_name(value));
+        }
+        return Z_DVAL_P(value);
+    }
     zend_class_entry *parent_ce() {
         return checkedObject("Cannot access parent class")->ce->parent;
     }

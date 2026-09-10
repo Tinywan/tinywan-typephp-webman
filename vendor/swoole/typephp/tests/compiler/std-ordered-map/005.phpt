@@ -1,5 +1,5 @@
 --TEST--
-std ordered_map: unsafe_cast
+std orderedMap: unsafe_cast
 --FILE--
 <?php
 function std_map_unsafe_ptr_update($source): void
@@ -15,7 +15,7 @@ function std_map_unsafe_ptr_update($source): void
 }
 
 function main() {
-    $map = std::ordered_map(Type::String, Type::Int);
+    $map = std::orderedMap(Type::String, Type::Int);
     $map["a"] = 1;
     $map["b"] = 7;
     $map["c"] = 3;

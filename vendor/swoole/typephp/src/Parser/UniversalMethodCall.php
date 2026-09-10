@@ -430,9 +430,9 @@ trait UniversalMethodCall
     }
 
     protected const array TO_CONVERT_FN = [
-        Type::BIGINT   => ['toInt' => 'php::BigInt::toInt', 'toFloat' => 'php::BigInt::toFloat', 'toString' => 'php::BigInt::toString'],
-        Type::BIGFLOAT => ['toInt' => 'php::BigFloat::toInt', 'toFloat' => 'php::BigFloat::toFloat', 'toString' => 'php::BigFloat::toString'],
-        Type::DECIMAL  => ['toInt' => 'php::Decimal::toInt', 'toFloat' => 'php::Decimal::toFloat', 'toString' => 'php::Decimal::toString'],
+        Type::BIGINT   => ['toInt' => 'php::BigInt::toInt', 'toFloat' => 'php::BigInt::toFloat', 'toString' => 'php::BigInt::toString', 'toBool' => 'php::BigInt::toBool'],
+        Type::BIGFLOAT => ['toInt' => 'php::BigFloat::toInt', 'toFloat' => 'php::BigFloat::toFloat', 'toString' => 'php::BigFloat::toString', 'toBool' => 'php::BigFloat::toBool'],
+        Type::DECIMAL  => ['toInt' => 'php::Decimal::toInt', 'toFloat' => 'php::Decimal::toFloat', 'toString' => 'php::Decimal::toString', 'toBool' => 'php::Decimal::toBool'],
     ];
 
     /**
@@ -600,6 +600,30 @@ trait UniversalMethodCall
      */
     protected function parseUniversalMethodCall(Node\Expr\MethodCall $expr, string $receiver, string $method, array $def, bool $isVar = true): ?string
     {
+        if ($this->isWasiTarget()) {
+            if ($def['handler'] === 'php_fn') {
+                $this->assertWasiFunctionSupported($expr, $def['fn']);
+            } elseif ($def['handler'] === 'cpp_fn'
+                && str_starts_with($def['fn'], 'php::fn::')
+            ) {
+                $this->assertWasiFunctionSupported(
+                    $expr,
+                    substr($def['fn'], strlen('php::fn::')),
+                );
+            }
+        }
+        if ($this->isNanoPolicyMode()) {
+            if ($def['handler'] === 'php_fn') {
+                $this->assertNanoFunctionSupported($expr, $def['fn']);
+            } elseif ($def['handler'] === 'cpp_fn'
+                && str_starts_with($def['fn'], 'php::fn::')
+            ) {
+                $this->assertNanoFunctionSupported(
+                    $expr,
+                    substr($def['fn'], strlen('php::fn::')),
+                );
+            }
+        }
         $this->validateUniversalMethodArgs($expr, $method, $def, $isVar);
 
         return match ($def['handler']) {

@@ -68,6 +68,8 @@ class FunctionContext
      */
     public array $stdContainers = [];
     public array $localVars = [];
+    /** @var array<string, string> Local variable => forced fallback storage type. */
+    public array $varTypeDegradations = [];
     /** @var array<string, true> Locals explicitly created through std::int/float/bool. */
     public array $explicitNativeTypeVars = [];
     /** @var array<string, string> C++ initializers folded into function-scope local declarations. */
@@ -145,6 +147,7 @@ class FunctionContext
     public function __construct()
     {
         $this->localVars = [];
+        $this->varTypeDegradations = [];
         $this->explicitNativeTypeVars = [];
         $this->localVarInitializers = [];
         $this->localClosureCandidates = [];

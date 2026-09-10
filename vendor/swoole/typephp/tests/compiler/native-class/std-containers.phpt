@@ -19,7 +19,7 @@ function main(): void
     $array = std::array(NativeContainerValue::class, 1);
     $vector = std::vector(NativeContainerValue::class);
     $map = std::map(Type::String, NativeContainerValue::class);
-    $ordered = std::ordered_map(Type::Int, NativeContainerValue::class);
+    $ordered = std::orderedMap(Type::Int, NativeContainerValue::class);
 
     $array[0] = new NativeContainerValue(11);
     $vector[] = new NativeContainerValue(22);

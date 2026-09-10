@@ -170,13 +170,13 @@ $obj = (new MyClass())->toObject(MyClass::class);  // 不需要
 
 ### 与 std:: 类型的区别
 
-| 特性 | std::int/float/bool | toObject |
+| 特性 | std::int/float/bool | std::object/toObject |
 |------|---------------------|--------|
 | **用途** | 数值/布尔类型优化 | 对象类型声明 |
 | **性能** | ⚡ 高性能（原生类型） | 🐢 标准（ZVAL） |
 | **内存** | 8B/1B | 指针（16B+） |
 | **时机** | 运行时优化 | 编译期降级，必要时运行时检查 |
-| **语法** | `std::int(值)` | `$value->toObject(ClassName::class)` |
+| **语法** | `std::int(值)` | `std::object($value, ClassName::class)` 或 `$value->toObject(ClassName::class)` |
 
 ---
 
@@ -186,7 +186,7 @@ $obj = (new MyClass())->toObject(MyClass::class);  // 不需要
 
 - ❌ `std::string` - 字符串使用 ZVAL (php::Str)
 - ❌ `std::array` - 数组使用 ZVAL (php::Array)
-- ❌ `std::object` - 对象使用 ZVAL (php::Object)
+- ❌ 对象仍使用 ZVAL（`php::Object`）；`std::object()` 只恢复类信息，不引入原生对象存储
 - ❌ 其他所有类型 - 使用 ZVAL (php::Var)
 
 ## 类型映射表

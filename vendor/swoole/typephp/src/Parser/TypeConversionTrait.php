@@ -125,7 +125,7 @@ trait TypeConversionTrait
     protected function convertBigFloatExpr(string $expr, string $fromType = ''): string
     {
         if ($fromType === Type::INT) {
-            return 'php::toBigFloat(' . $expr . ')';
+            return 'php::toBigFloat(php::toInt(' . $expr . '))';
         }
         if ($fromType === Type::FLOAT) {
             return 'php::toBigFloat(' . $expr . ')';

@@ -15,6 +15,11 @@ function replaceAny(mixed &$value, mixed $replacement): void
     $value = $replacement;
 }
 
+function appendNativeAnyString(string &$value): void
+{
+    $value .= ':typed';
+}
+
 function &getNativeAnyReference(NativeAnyReference $object): mixed
 {
     return $object->value;
@@ -46,6 +51,10 @@ function main(): void
     $returnedReference =& getNativeAnyReference($object);
     $returnedReference = 'returned reference';
     var_dump($source);
+
+    $object->value = 'dynamic';
+    appendNativeAnyString($object->value);
+    var_dump($object->value);
 }
 
 ?>
@@ -61,3 +70,4 @@ array(2) {
 string(15) "direct argument"
 string(14) "source changed"
 string(18) "returned reference"
+string(13) "dynamic:typed"

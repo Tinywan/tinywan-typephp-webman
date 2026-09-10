@@ -13,7 +13,7 @@ function main(): void
     }
     var_dump($vector[0], $vector[1]);
 
-    $map = std::ordered_map(Type::String, Type::Int);
+    $map = std::orderedMap(Type::String, Type::Int);
     $map['a'] = 3;
     $map['b'] = 4;
     foreach ($map as $mapKey => $mapValue) {

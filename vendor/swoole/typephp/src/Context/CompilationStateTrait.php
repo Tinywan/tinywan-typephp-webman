@@ -14,12 +14,82 @@ use TypePhp\Entity\ClassDef;
 use TypePhp\Entity\FunctionDef;
 use TypePhp\Entity\InterfaceDef;
 use TypePhp\Exception\Skip;
+use TypePhp\Analysis\ReferenceCaptureAnalyzer;
+use TypePhp\Type;
 
 trait CompilationStateTrait
 {
     protected function addLocalVar(string $name, string $type): void
     {
-        $this->context->localVars[$name] = $type;
+        $this->context->localVars[$name] = $this->context->varTypeDegradations[$name] ?? $type;
+    }
+
+    /**
+     * Build the function-local degradation table before parsing any statement.
+     * A local captured through use (&$var) must own a Zend-compatible php::Var
+     * slot from its first assignment.
+     *
+     * @param NodeAbstract|list<NodeAbstract>|null $body
+     */
+    protected function prepareReferenceCaptureDegradations(
+        NodeAbstract|array|null $body,
+        bool $degradeArguments = false,
+    ): void
+    {
+        $analysis = (new ReferenceCaptureAnalyzer())->analyze($body);
+        foreach ($analysis['captures'] as $sourceName => $_) {
+            $name = $this->escapeVarName($sourceName);
+            if (isset($this->context->arguments[$name])) {
+                $type = $this->getRawVarType($name);
+                if (!$degradeArguments
+                    || $type === Type::VAR
+                    || $type === Type::REF
+                    || Type::isTypedRefType($type)
+                    || $this->isNativeObjectVar($name)
+                ) {
+                    continue;
+                }
+
+                // Keep the public/native ABI fixed, but make the PHP-visible
+                // parameter a local Var copy. Its declaration is emitted in the
+                // function preamble under the original source name.
+                $this->context->varTypeDegradations[$name] = Type::VAR;
+                $this->context->localVars[$name] = Type::VAR;
+                unset(
+                    $this->context->objects[$name],
+                    $this->context->declaredObjects[$name],
+                    $this->context->stableObjects[$name],
+                    $this->context->exactObjects[$name],
+                    $this->context->nonNullNativeObjects[$name],
+                );
+                continue;
+            }
+
+            $this->context->varTypeDegradations[$name] = Type::VAR;
+            if (!isset($analysis['nonLocals'][$sourceName]) && !$this->hasVar($name)) {
+                // Reserve the slot now so object/std/native assignment paths do
+                // not commit metadata for a fixed local before seeing the use.
+                $this->context->localVars[$name] = Type::VAR;
+            }
+        }
+    }
+
+    protected function getDegradedArgumentStorageName(string $name): string
+    {
+        return '__typephp_captured_arg_' . $name;
+    }
+
+    protected function genDegradedArgumentLocals(): string
+    {
+        $code = '';
+        foreach ($this->context->arguments as $name => $_type) {
+            if (!isset($this->context->varTypeDegradations[$name])) {
+                continue;
+            }
+            $code .= $this->getIndent() . Type::VAR . ' ' . $name . ' = '
+                . $this->getDegradedArgumentStorageName($name) . ';' . PHP_EOL;
+        }
+        return $code;
     }
 
     protected function addTypedRefLocal(string $name, string $target, string $type): void
@@ -67,6 +137,7 @@ trait CompilationStateTrait
         if ($this->hasVar($name)) {
             $this->fatalError($var, 'Duplicate variable `$' . $var->name . '`');
         }
+        $type = $this->context->varTypeDegradations[$name] ?? $type;
         $this->context->staticVars[$name] = $type;
         // A static variable is actually a reference to a global variable.
         $globalVar = $this->escapeStaticVar($name);

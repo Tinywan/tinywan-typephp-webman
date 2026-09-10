@@ -1382,6 +1382,11 @@ trait PropertyAccessTrait
             if (!$this->canHoistObjectProp($objectVar, $propName, $def)) {
                 return null;
             }
+            if ($def->type === Type::INT) {
+                $getter = $objectVar . '.attrInt(' . $propertyId . ')';
+            } elseif ($def->type === Type::FLOAT) {
+                $getter = $objectVar . '.attrFloat(' . $propertyId . ')';
+            }
             $this->registerHoistedObjectPropVar($propVar, $def->type, $getter);
             $this->setNativePropertyVar($expr, $propVar);
             $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_VAR);
