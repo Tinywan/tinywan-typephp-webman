@@ -46,7 +46,6 @@ sources:
 
 ignore:
   - config
-  - public
   - runtime
   - vendor/workerman/webman-framework/src/support/bootstrap.php
   - vendor/workerman/webman-framework/src/start.php
