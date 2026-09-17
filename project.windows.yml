@@ -45,25 +45,11 @@ sources:
   - app
 
 ignore:
-  - config
-  - public
-  - runtime
-  - app/view
-  - support
   - vendor/workerman/webman-framework/src/support/bootstrap.php
   - vendor/workerman/webman-framework/src/start.php
   - vendor/workerman/webman-framework/src/windows.php
   - vendor/workerman/webman-framework/src/Install.php
-  - vendor/nikic/fast-route/src/bootstrap.php
-  - vendor/nikic/fast-route/src/DataGenerator/CharCountBased.php
-  - vendor/nikic/fast-route/src/DataGenerator/GroupPosBased.php
-  - vendor/nikic/fast-route/src/DataGenerator/MarkBased.php
-  - vendor/nikic/fast-route/src/Dispatcher/CharCountBased.php
-  - vendor/nikic/fast-route/src/Dispatcher/GroupPosBased.php
-  - vendor/nikic/fast-route/src/Dispatcher/MarkBased.php
   - vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php
-  - vendor/workerman/coroutine/tests
-  - vendor/workerman/coroutine/stubs
   - vendor/workerman/coroutine/src/Barrier/Swow.php
   - vendor/workerman/coroutine/src/Channel/Swow.php
   - vendor/workerman/coroutine/src/Context/Swow.php
@@ -72,8 +58,6 @@ ignore:
   - vendor/workerman/workerman/src/Events/Swow.php
   - vendor/workerman/coroutine/src/Pool.php
   - vendor/workerman/coroutine/src/Utils/DestructionWatcher.php
-  - app/model
-  - app/process/Monitor.php
 
 output: build/webman-server
 mode: bin
