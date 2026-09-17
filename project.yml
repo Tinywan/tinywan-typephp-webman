@@ -51,6 +51,7 @@ ignore:
   - config                                              # 配置文件在运行时由 PHP 动态读取，不编译进二进制
   - public                                              # 静态资源文件目录（CSS/JS/图片等）
   - runtime                                             # 运行期临时日志与 PID 缓存目录
+  - app/model                                           # 数据库模型（未引入 illuminate/database 或 support\Model 时排除）
 
   # ==========================================
   # 2. Webman 框架初始化与辅助脚本排除

@@ -48,6 +48,7 @@ ignore:
   - config
   - public
   - runtime
+  - app/model
   - vendor/workerman/webman-framework/src/support/bootstrap.php
   - vendor/workerman/webman-framework/src/start.php
   - vendor/workerman/webman-framework/src/windows.php
