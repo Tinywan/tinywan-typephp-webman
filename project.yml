@@ -52,6 +52,7 @@ ignore:
   - public                                              # 静态资源文件目录（CSS/JS/图片等）
   - runtime                                             # 运行期临时日志与 PID 缓存目录
   - app/model                                           # 数据库模型（未引入 illuminate/database 或 support\Model 时排除）
+  - app/process/Monitor.php                             # 源码热重载监控进程（AOT 编译为二进制后无需热重载）
 
   # ==========================================
   # 2. Webman 框架初始化与辅助脚本排除
