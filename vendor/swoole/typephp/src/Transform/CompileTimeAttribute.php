@@ -14,6 +14,26 @@ use TypePhp\Exception\SyntaxError;
 
 final class CompileTimeAttribute
 {
+    public static function validateStdContainerParameterTarget(Node\FunctionLike $node): void
+    {
+        if ($node instanceof Node\Stmt\Function_ || $node instanceof Node\Stmt\ClassMethod) {
+            return;
+        }
+        foreach ($node->getParams() as $parameter) {
+            foreach (['StdVector', 'StdMap', 'StdOrderedMap', 'StdList', 'StdDict'] as $name) {
+                $attribute = self::find($parameter, $name);
+                if ($attribute !== null) {
+                    throw new CompileTimeAttributeError(
+                        $name . ' can only be applied to named function or method parameters',
+                        $parameter,
+                        $name,
+                        $attribute,
+                    );
+                }
+            }
+        }
+    }
+
     public static function validateNode(Node $node): void
     {
         if (!property_exists($node, 'attrGroups')) {

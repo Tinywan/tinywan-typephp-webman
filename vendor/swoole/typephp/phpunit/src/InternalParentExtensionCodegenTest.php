@@ -43,6 +43,14 @@ PHP);
         $extension = file_get_contents($compiler->genExtension());
 
         self::assertStringContainsString(
+            'static zend_class_entry *php_class_entry_ArrayObject = nullptr;',
+            $extension,
+        );
+        self::assertStringContainsString(
+            'static zend_class_entry *php_class_entry_InternalParentChild = nullptr;',
+            $extension,
+        );
+        self::assertStringContainsString(
             'php_class_entry_ArrayObject = php::getInternalClassEntrySafe("ArrayObject");',
             $extension,
         );

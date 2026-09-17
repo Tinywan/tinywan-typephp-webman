@@ -1,0 +1,93 @@
+name: typephp_os
+mode: bin
+sources:
+  - kernel
+  - thirdparty/openlibm/src
+  - thirdparty/lwip/src/core/init.c
+  - thirdparty/lwip/src/core/def.c
+  - thirdparty/lwip/src/core/dns.c
+  - thirdparty/lwip/src/core/inet_chksum.c
+  - thirdparty/lwip/src/core/ip.c
+  - thirdparty/lwip/src/core/mem.c
+  - thirdparty/lwip/src/core/memp.c
+  - thirdparty/lwip/src/core/netif.c
+  - thirdparty/lwip/src/core/pbuf.c
+  - thirdparty/lwip/src/core/stats.c
+  - thirdparty/lwip/src/core/sys.c
+  - thirdparty/lwip/src/core/timeouts.c
+  - thirdparty/lwip/src/core/tcp.c
+  - thirdparty/lwip/src/core/tcp_in.c
+  - thirdparty/lwip/src/core/tcp_out.c
+  - thirdparty/lwip/src/core/udp.c
+  - thirdparty/lwip/src/core/ipv4/acd.c
+  - thirdparty/lwip/src/core/ipv4/etharp.c
+  - thirdparty/lwip/src/core/ipv4/icmp.c
+  - thirdparty/lwip/src/core/ipv4/ip4.c
+  - thirdparty/lwip/src/core/ipv4/ip4_addr.c
+  - thirdparty/lwip/src/core/ipv4/ip4_frag.c
+  - thirdparty/lwip/src/netif/ethernet.c
+objects:
+  - build/objects/kernel64-entry.o
+link-paths:
+  - build
+link-libs:
+  - compiler-rt-builtins
+build-dir: build/generated
+output: build/kernel64.elf
+cxx-std: c++17
+include-paths:
+  - kernel/core/abi
+  - kernel/core/net
+  - thirdparty/lwip/src/include
+  - thirdparty/openlibm/include
+  - thirdparty/openlibm/src
+  - thirdparty/openlibm/amd64
+defines:
+  - TYPEPHP_NO_MAIN=1
+  - PHPX_NO_EXCEPTION=1
+  - PHPX_NO_RTTI=1
+  - PHP_NANO_NO_LIBC=1
+  - HAVE_SYS_SOCKET_H=1
+  - HAVE_NETINET_IN_H=1
+  - HAVE_SHUTDOWN=1
+  - __NO_CTYPE=1
+  - ZEND_MM_ERROR=0
+  - ZEND_MM_CUSTOM=0
+  - ASSEMBLER=1
+  - __BSD_VISIBLE=1
+cxx-flags:
+  - -O2
+  - -U_FORTIFY_SOURCE
+  - -D_FORTIFY_SOURCE=0
+  - -ffreestanding
+  - -fno-builtin
+  - -fno-stack-protector
+  - -fno-pic
+  - -fno-pie
+  - -m64
+  - -mno-red-zone
+  - -mcmodel=small
+  - -fno-rtti
+  - -fno-threadsafe-statics
+c-flags:
+  - -O2
+  - -U_FORTIFY_SOURCE
+  - -D_FORTIFY_SOURCE=0
+  - -ffreestanding
+  - -fno-builtin
+  - -fno-stack-protector
+  - -fno-pic
+  - -fno-pie
+  - -m64
+  - -mno-red-zone
+  - -mcmodel=small
+asm-flags:
+  - -m64
+  - -mno-red-zone
+  - -mcmodel=small
+ld-flags:
+  - -nostdlib
+  - -no-pie
+  - -Wl,-m,elf_x86_64
+  - -Wl,--build-id=none
+  - -Wl,-T,boot/kernel64.ld

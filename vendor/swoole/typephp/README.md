@@ -93,7 +93,7 @@ This two-phase design keeps multi-file and self-hosted builds deterministic.
 - **Compile-time functions & keywords** — `std::any()`, `std::object()`,
   `std::ref()`, `std::expected()`, `std::unexpected()`, plus `toObject()`,
   `toInt()`, `toString()`, `toArray()` and friends.
-- **Compile-time safety** — `#[Immutable]` read-only contracts and `#[ArrayDef]`
+- **Compile-time safety** — `#[Immutable]` read-only contracts and `StdList` / `StdDict`
   array-shape metadata, checked at compile time with zero runtime cost.
 - **Compile-time code generation** — `#[Getter]`, `#[Setter]`, `#[With]`,
   `#[Constructor]`, `#[Printer]`, and `#[Arrayable]` generate type-safe methods
@@ -336,6 +336,12 @@ sources:
   - path: src/windows
     if: PHP_OS_FAMILY == "Windows"
 
+# Precompiled by the project's external native build.
+objects:
+  - native/build/startup.o
+  - path: native/build/platform.obj
+    if: PHP_OS_FAMILY == "Windows"
+
 ignore:
   - src/experimental
 
@@ -360,6 +366,15 @@ directory; conditional entries support `PHP_VERSION`, `PHP_VERSION_ID`, and
 `PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Native linker
 dependencies belong in `link-libs`; `ext-deps` writes `ZEND_MOD_REQUIRED`
 entries so Zend can reject loading when a required PHP extension is missing.
+The generic `objects` list adds existing `.o`/`.obj` files directly to the
+link step. TypePHP never recompiles these files; the project owns their native
+compiler, architecture, flags, and incremental build. Keep native files that
+use the common target options in `sources`; use `objects` for separately built
+translation units that remain ABI-compatible with the final target. A `-m32`
+object cannot be linked into a 64-bit target and requires a project-owned
+post-link packaging step after tpc emits its ELF.
+Project-wide `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` are applied to
+C++, C, assembler, and link commands respectively.
 
 The build directory contains generated C++, dependency objects, and the
 precompiled-header cache. Reusing it makes incremental builds much faster;
@@ -780,7 +795,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 - [Compile-time functions](docs/en/COMPILE_TIME_FUNCTIONS.md) — `std::any()`, `std::ref()`, `std::expected()`, …
 - [Mixed C++/PHP](docs/en/MIXED_CPP_PHP.md) — C++/PHP interop
 - [`#[Immutable]`](docs/en/IMMUTABLE.md) — compile-time read-only contracts
-- [`#[ArrayDef]`](docs/en/ARRAY_DEF.md) — typed array-property contracts
+- [Typed PHP arrays and type annotations](docs/en/TYPED_ARRAYS.md) — typed array-property contracts
 - [Property hooks](docs/en/PROPERTY_HOOKS.md) — PHP 8.4 hook lowering and runtime metadata
 - [Object storage models](docs/en/OBJECT_STORAGE_AND_PASSING_MODELS.md) — Zend object, Box, and Native class boundaries
 - [Generators](docs/en/YIELD_GENERATOR.md) — generator lowering and lifecycle

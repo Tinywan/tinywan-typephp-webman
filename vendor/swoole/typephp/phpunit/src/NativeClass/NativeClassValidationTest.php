@@ -6,6 +6,25 @@ use TypePhp\Exception\TestError;
 
 final class NativeClassValidationTest extends \BaseTest
 {
+    /**
+     * @dataProvider nativeMemberNameConflictProvider
+     */
+    public function testRejectsNativePropertyAndMethodNameConflicts(string $fixture): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('conflicts with');
+        $this->compile($fixture);
+    }
+
+    public static function nativeMemberNameConflictProvider(): array
+    {
+        return [
+            ['native-class-member-name-conflict.php'],
+            ['native-class-inherited-member-name-conflict.php'],
+            ['native-class-inherited-property-name-conflict.php'],
+        ];
+    }
+
     public function testDiscoversNativeTypesBeforeCrossFileSignaturePreprocessing(): void
     {
         global $translator;
@@ -44,15 +63,15 @@ final class NativeClassValidationTest extends \BaseTest
         $code = file_get_contents($reader);
         self::assertIsString($code);
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardGlobal, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardGlobal, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardPolymorphic, "NativeForwardBase").value',
+            'php::nativeRequireObject(nativeForwardPolymorphic, "NativeForwardBase")->value',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardCoalesced, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardCoalesced, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringContainsString(
@@ -60,11 +79,11 @@ final class NativeClassValidationTest extends \BaseTest
             $code,
         );
         self::assertMatchesRegularExpression(
-            '/php::nativeDeref\\(tmp_var_\\d+, "NativeForwardGlobalValue"\\)\\.value/',
+            '/php::nativeRequireObject\\(tmp_var_\\d+, "NativeForwardGlobalValue"\\)->value/',
             $code,
         );
         self::assertStringContainsString(
-            'php::nativeDeref(nativeForwardClosureGlobal, "NativeForwardGlobalValue").value',
+            'php::nativeRequireObject(nativeForwardClosureGlobal, "NativeForwardGlobalValue")->value',
             $code,
         );
         self::assertStringNotContainsString('nativeForwardGlobal.attr(', $code);
@@ -910,11 +929,38 @@ final class NativeClassValidationTest extends \BaseTest
         $this->compile('native-class-get-called-class.php');
     }
 
+    public function testRejectsQualifiedGetCalledClassInNativeClass(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Native classes do not support late static binding');
+        $this->compile('native-class-get-called-class-qualified.php');
+    }
+
+    public function testRejectsNamespacedGetCalledClassInNativeClass(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Native classes do not support late static binding');
+        $this->compile('native-class-get-called-class-namespaced.php');
+    }
+
+    public function testAllowsCompiledNamespacedGetCalledClassShadowInNativeClass(): void
+    {
+        $this->compile('native-class-get-called-class-shadow.php');
+        $this->addToAssertionCount(1);
+    }
+
     public function testRejectsGetClassForNativeObject(): void
     {
         $this->expectException(TestError::class);
         $this->expectExceptionMessage('Native classes do not support runtime class introspection');
         $this->compile('native-class-get-class.php');
+    }
+
+    public function testRejectsNamespacedGetClassForNativeObject(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Native classes do not support runtime class introspection');
+        $this->compile('native-class-get-class-namespaced.php');
     }
 
     public function testRejectsImplicitGetClassInNativeMethod(): void
@@ -929,6 +975,19 @@ final class NativeClassValidationTest extends \BaseTest
         $this->expectException(TestError::class);
         $this->expectExceptionMessage('Native classes do not support runtime class introspection');
         $this->compile('native-class-get-parent-class.php');
+    }
+
+    public function testRejectsNamespacedGetParentClassForNativeObject(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Native classes do not support runtime class introspection');
+        $this->compile('native-class-get-parent-class-namespaced.php');
+    }
+
+    public function testAllowsCompiledNamespacedGetClassShadowsInNativeClass(): void
+    {
+        $this->compile('native-class-get-class-shadow.php');
+        $this->addToAssertionCount(1);
     }
 
     public function testRejectsChangingAnInferredNativeGlobalType(): void

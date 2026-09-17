@@ -47,6 +47,7 @@
                 "src/core/class.cc",
                 "src/core/closure.cc",
                 "src/core/decimal_nano.cc",
+                "src/core/debug.cc",
                 "src/core/foreach_iterator.cc",
                 "src/core/native_gc.cc",
                 "src/core/object.cc",
@@ -57,6 +58,7 @@
                 "src/std/core.cc",
                 "src/std/array.cc",
                 "src/std/datetime.cc",
+                "src/std/fs.cc",
                 "src/std/hash.cc",
                 "src/std/math.cc",
                 "src/std/misc.cc",
@@ -64,10 +66,59 @@
                 "src/typephp/typephp_attribute.cc",
                 "src/typephp/typephp_call.cc",
                 "src/typephp/typephp_nano.cc",
+                "src/typephp/typephp_main_nano.cc",
                 "src/typephp/typephp_property.cc",
                 "src/typephp/typephp_trait.cc",
                 "thirdparty/wren-gc/src/wren_gc.c"
-            ]
+            ],
+            "components": {
+                "standard.core": {
+                    "extension": "standard",
+                    "sources": ["src/std/core.cc"]
+                },
+                "standard.array": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/array.cc"]
+                },
+                "standard.string": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/string.cc"]
+                },
+                "standard.filesystem": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/fs.cc"]
+                },
+                "standard.math": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/math.cc"]
+                },
+                "standard.hash": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/hash.cc"]
+                },
+                "standard.misc": {
+                    "extension": "standard",
+                    "requires": ["standard.core"],
+                    "sources": ["src/std/misc.cc"]
+                },
+                "date": {
+                    "extension": "date",
+                    "sources": ["src/std/datetime.cc"]
+                },
+                "bcmath": {
+                    "extension": "bcmath",
+                    "sources": [
+                        "src/core/big_float_nano.cc",
+                        "src/core/big_int_nano.cc",
+                        "src/core/decimal_nano.cc"
+                    ]
+                }
+            }
         }
     }
 }

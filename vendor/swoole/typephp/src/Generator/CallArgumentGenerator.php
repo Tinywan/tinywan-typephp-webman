@@ -22,11 +22,107 @@ trait CallArgumentGenerator
     /** Guard against a broken lowering path producing an unbounded call. */
     private const CALL_ARGUMENT_LIMIT = 65_536;
 
+    private function argInfoAcceptsCallable(?ArgInfo $argInfo): bool
+    {
+        return $argInfo?->acceptsCallable ?? false;
+    }
+
+    private function reflectionTypeAcceptsCallable(?\ReflectionType $type): bool
+    {
+        if ($type instanceof \ReflectionNamedType) {
+            return strcasecmp($type->getName(), 'callable') === 0;
+        }
+        if ($type instanceof \ReflectionUnionType) {
+            foreach ($type->getTypes() as $member) {
+                if ($this->reflectionTypeAcceptsCallable($member)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private function callArgumentAcceptsCallable(
+        string $funcName,
+        string $className,
+        int $index,
+        ?string $argName,
+    ): bool {
+        if ($funcName === '') {
+            return false;
+        }
+
+        $argInfo = $argName === null
+            ? $this->getAotCallArgInfo($funcName, $className, $index)
+            : $this->getAotCallArgInfoByName($funcName, $className, $argName);
+        if ($argInfo !== null) {
+            return $this->argInfoAcceptsCallable($argInfo);
+        }
+
+        if ($className !== '') {
+            if ($className === self::DYNAMIC_CALLED_CLASS) {
+                return false;
+            }
+            $class = Reflection::getClass($className);
+            if ($class === null || !$class->hasMethod($funcName)) {
+                return false;
+            }
+            $parameters = $class->getMethod($funcName)->getParameters();
+        } else {
+            $function = Reflection::getFunction($funcName);
+            if ($function === null) {
+                return false;
+            }
+            $parameters = $function->getParameters();
+        }
+
+        $variadic = null;
+        foreach ($parameters as $parameterIndex => $parameter) {
+            if ($parameter->isVariadic()) {
+                $variadic = $parameter;
+            }
+            if (($argName !== null && $parameter->getName() === $argName)
+                || ($argName === null && $parameterIndex === $index)
+            ) {
+                return $this->reflectionTypeAcceptsCallable($parameter->getType());
+            }
+        }
+
+        return $argName === null
+            && $variadic !== null
+            && $this->reflectionTypeAcceptsCallable($variadic->getType());
+    }
+
+    private function normalizeBareFunctionCallableArgument(
+        Node\Arg $arg,
+        bool $acceptsCallable,
+    ): Node\Arg {
+        if (!$acceptsCallable
+            || $arg->unpack
+            || !$arg->value instanceof Expr\ConstFetch
+        ) {
+            return $arg;
+        }
+
+        $function = $this->resolveBareCallableFunctionName($arg->value);
+        if ($function === null) {
+            return $arg;
+        }
+
+        $normalized = clone $arg;
+        $normalized->value = new Node\Scalar\String_(
+            $function,
+            $arg->value->getAttributes(),
+        );
+        return $normalized;
+    }
+
     protected function parseNativeCallArgs(
         array $callArgs,
         string $nativeFunc,
         int $parameterOffset = 0,
         bool $deferTrailingDefaults = false,
+        bool $materializeTrailingDefaults = false,
     ): string {
         $this->assertCallArgumentLimit($callArgs);
         $this->context->typedRefBridgeScopes[] = [];
@@ -122,6 +218,24 @@ trait CallArgumentGenerator
                 }
             }
 
+            // Generated Native C++ class members deliberately do not expose
+            // C++ default arguments: PHP defaults belong to the selected PHP
+            // declaration, and virtual calls use arity-specific adapters.
+            // Direct member/constructor calls therefore materialize every
+            // omitted trailing default at the call site.
+            if ($materializeTrailingDefaults) {
+                foreach ($functionDef->argInfoList as $k => $argInfo) {
+                    if ($k < $parameterOffset || isset($providedArgs[$k]) || isset($defaultArgs[$k])) {
+                        continue;
+                    }
+                    if ($argInfo->variadic) {
+                        $defaultArgs[$k] = '{}';
+                    } elseif ($argInfo->hasDefaultValue()) {
+                        $defaultArgs[$k] = $this->genDefaultArgumentExpr($nativeFunc, $k);
+                    }
+                }
+            }
+
             // If the function only accepts a single variadic parameter and the call
             // supplies no arguments, pass an empty array directly
             if (count($sourceArgs) === 0
@@ -151,6 +265,8 @@ trait CallArgumentGenerator
             // expressions/temporaries may then be rearranged safely for the native
             // C++ ABI without changing observable call order.
             foreach ($sourceArgs as $sourceIndex => [$sourceArgIndex, $variadicName, $arg]) {
+                $typedParameter = $this->getArgInfoByIndex($functionDef, $sourceArgIndex);
+                $this->assertTypedArrayArgument($arg, $typedParameter, $typedParameter?->byRef ?? false, !$functionDef->stub);
                 if ($sourceIndex < $lastHoistingSourceIndex
                     && $arg instanceof Node\Arg
                     && !$arg->unpack
@@ -453,6 +569,18 @@ trait CallArgumentGenerator
                 if ($this->isPlaceholderExpr($arg)) {
                     throw new PlaceHolder();
                 }
+                if (!$arg->unpack && $arg->value instanceof Expr\ConstFetch) {
+                    $arg = $this->normalizeBareFunctionCallableArgument(
+                        $arg,
+                        $this->callArgumentAcceptsCallable(
+                            $funcName,
+                            $className,
+                            $i,
+                            $arg->name?->name,
+                        ),
+                    );
+                }
+                $this->validateTypedArrayDynamicArgument($arg, $funcName, $className, $i);
                 if ($arg->unpack) {
                     if ($hasNamedArg) {
                         $this->fatalError($arg, 'Cannot use argument unpacking after named arguments');
@@ -862,6 +990,7 @@ trait CallArgumentGenerator
             if (count($expr->args) !== 1) {
                 $this->fatalError($errorNode, 'The std::ref function only accepts one parameter');
             }
+            $this->assertTypedArrayReferenceForbidden($expr->args[0]->value);
             return $expr->args[0]->value;
         }
 
@@ -869,6 +998,7 @@ trait CallArgumentGenerator
             if (!empty($expr->args)) {
                 $this->fatalError($errorNode, 'The toRef method does not accept parameters');
             }
+            $this->assertTypedArrayReferenceForbidden($expr->var);
             return $expr->var;
         }
 

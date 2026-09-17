@@ -102,6 +102,7 @@ class BackendTest extends TestCase
             'user_defines' => ['FEATURE_X=1'],
             'lto' => true,
             'is_zts' => true,
+            'cflags' => '/experimental:c11atomics',
         ]);
 
         $this->assertStringContainsString('/TC', $cmd);
@@ -111,8 +112,20 @@ class BackendTest extends TestCase
         $this->assertStringContainsString('/DFEATURE_X=1', $cmd);
         $this->assertStringContainsString('/GL', $cmd);
         $this->assertStringContainsString('/DZTS', $cmd);
+        $this->assertStringContainsString('/experimental:c11atomics', $cmd);
         $this->assertStringNotContainsString('/EHsc', $cmd);
         $this->assertStringNotContainsString('/std:', $cmd);
+    }
+
+    public function testMsvcLargeObjectFormatAppliesToGeneratedAndNativeCommands(): void
+    {
+        $compiler = new Msvc(new Windows());
+        foreach ([false, true] as $debug) {
+            $options = ['debug' => $debug];
+            $this->assertStringContainsString('/bigobj', $compiler->buildCompileCommand('generated.cc', 'generated.obj', $options));
+            $this->assertStringContainsString('/bigobj', $compiler->buildNativeCompileCommand('native.c', 'native.obj', $options, 'c'));
+        }
+        $this->assertStringNotContainsString('/bigobj', $compiler->buildLinkOptions());
     }
 
     public function testMsvcDebugPdbOptionsApplyToCppAndCCommands(): void
@@ -214,6 +227,7 @@ class BackendTest extends TestCase
             'march' => 'native',
             'target_platform' => 'aarch64-linux-gnu',
             'build_mode' => 'ext',
+            'cflags' => '-ffreestanding -fno-builtin',
         ]);
 
         $this->assertStringContainsString('-fsanitize=address', $cmd);
@@ -224,6 +238,19 @@ class BackendTest extends TestCase
         $this->assertStringContainsString('-march=native', $cmd);
         $this->assertStringContainsString('--target=aarch64-linux-gnu', $cmd);
         $this->assertStringContainsString('-fPIC', $cmd);
+        $this->assertStringContainsString('-ffreestanding -fno-builtin', $cmd);
+    }
+
+    public function testGccBuildAssemblerCommandUsesNativeFlags(): void
+    {
+        $compiler = new Gcc(new Linux());
+
+        $cmd = $compiler->buildNativeCompileCommand('entry.S', 'entry.o', [
+            'nativeflags' => '-m64 -mno-red-zone',
+        ], 'assembler');
+
+        $this->assertStringContainsString('-x assembler', $cmd);
+        $this->assertStringContainsString('-m64 -mno-red-zone', $cmd);
     }
 
     public function testGccBuildLinkCommandIncludesPlatformPathsOptionsAndLibraries(): void
@@ -312,6 +339,26 @@ class BackendTest extends TestCase
         $lines = file($rspFile, FILE_IGNORE_NEW_LINES);
         $this->assertSame('"' . $objectWithSpace . '"', $lines[0]);
         $this->assertSame('"' . $objectWithoutSpace . '"', $lines[1]);
+    }
+
+    public function testResponseFileCanBePlacedInTheBuildDirectory(): void
+    {
+        $platform = new Linux();
+        $compiler = new Gcc($platform, 'g++');
+        $dir = $this->createTemporaryDirectory('backend response build directory');
+        $target = $dir . '/output/my app';
+        $rspFile = $dir . '/build/my app.rsp';
+        $object = $dir . '/object.o';
+
+        $cmd = $compiler->buildLinkCommand(
+            [$object],
+            $target,
+            ['response_file' => $rspFile],
+        );
+
+        $this->assertStringContainsString(escapeshellarg('@' . $rspFile), $cmd);
+        $this->assertFileExists($rspFile);
+        $this->assertFileDoesNotExist($target . '.rsp');
     }
 
     /**

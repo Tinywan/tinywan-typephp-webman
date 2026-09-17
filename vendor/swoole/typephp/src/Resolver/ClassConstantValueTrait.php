@@ -69,6 +69,19 @@ trait ClassConstantValueTrait
                     : $value;
             }
         }
+        if ($this->hasInterface($class)) {
+            $constant = $this->findCompileTimeInterfaceConstant($class, $name);
+            if ($constant !== null) {
+                [$interface, $constantDef] = $constant;
+                return $this->evaluateCompileTimeClassConstant(
+                    $expr,
+                    $interface,
+                    $constantDef,
+                    $name,
+                    $interface,
+                );
+            }
+        }
         [$inheritedFound, $inherited] = $this->resolveInheritedClassConst($class, $name);
         if ($inheritedFound) {
             return $inherited;

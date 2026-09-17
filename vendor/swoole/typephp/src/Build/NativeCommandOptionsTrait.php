@@ -41,6 +41,7 @@ trait NativeCommandOptionsTrait
                 'PHPX_NANO=1',
                 '_POSIX_C_SOURCE=200809L',
             );
+            array_push($userDefines, ...$this->nanoRuntimeDefines);
             if ($this->isWasiTarget()) {
                 $userDefines[] = 'ZEND_MM_ERROR=0';
             }
@@ -90,7 +91,7 @@ trait NativeCommandOptionsTrait
         if ($this->isBuildModeLib()) {
             $options = $options->with(
                 'forced_include',
-                $this->getIncludeDir() . '/php_' . $this->targetName . '_func_decl.h'
+                $this->getIncludeDir() . '/php_' . $this->targetName . '_all_decl.h'
             );
         }
 
@@ -104,7 +105,9 @@ trait NativeCommandOptionsTrait
     protected function getCCompileCommandOptions(): CompileOptions
     {
         $options = $this->getCommonCompileCommandOptions();
-        $options = $options->with('suppressed_warnings', ['4244', '4146']);
+        $options = $options
+            ->with('cflags', $this->cFlags)
+            ->with('suppressed_warnings', ['4244', '4146']);
         return $this->isNanoMode() ? $options->with('c_std', 'c11') : $options;
     }
 
@@ -122,6 +125,10 @@ trait NativeCommandOptionsTrait
 
         if ($language === 'objective-c++') {
             $options = $options->with('cpp_std', $this->cxxStd)->with('cxxflags', $this->cxxFlags);
+        } elseif ($language === 'assembler') {
+            $options = $options->with('nativeflags', $this->asmFlags);
+        } elseif ($language === 'objective-c') {
+            $options = $options->with('nativeflags', $this->cFlags);
         }
 
         return $options;
@@ -180,6 +187,8 @@ trait NativeCommandOptionsTrait
             'sanitize' => $this->sanitize,
             'lto' => $this->enableLto,
             'target_platform' => $targetPlatform,
+            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR
+                . basename($this->getTargetFileName()) . '.rsp',
         ];
 
         $rpaths = $this->isNanoMode()

@@ -1118,10 +1118,10 @@ trait FuncCallOptimizer
                 'Native classes do not support runtime class introspection; use `NativeClass::class`',
             );
         }
-        if ($this->isVarExpr($obj) && $this->isStableObject($obj->name)) {
-            return $this->getLiteralString($this->getObjectType($obj->name));
+        if ($this->isVarExpr($obj) && isset($this->context->exactObjects[$obj->name])) {
+            return $this->getLiteralString($this->context->exactObjects[$obj->name]);
         }
-        return 'php::fn::get_class(' . $this->parseIdentifier($obj) . ')';
+        return false;
     }
 
     protected function genGetParentClass(string $n, Node\Expr\FuncCall $e, array $c): string
@@ -1367,7 +1367,7 @@ trait FuncCallOptimizer
         foreach ($funcDef->argInfoList as $i => $argInfo) {
             if ($argInfo->variadic) {
                 $tmpVar = $this->addTmpVar(Type::ARRAY);
-                $this->context->beforeStmtLines[] = $this->genArray($list) . ';';
+                $this->context->beforeStmtLines[] = $tmpVar . ' = ' . $this->genArray($list) . ';';
                 $this->context->beforeStmtLines[] = $tmpVar . '.merge(' . $argInfo->name . ');';
                 return $tmpVar;
             }
@@ -1427,7 +1427,7 @@ trait FuncCallOptimizer
                 // A function whose ABI contains Native pointers is callable
                 // only from generated TypePHP C++. It has no Zend wrapper and
                 // therefore must remain invisible to function_exists().
-                return $this->functionUsesNativeObject($this->getFunction($nativeFunction))
+                return $this->functionRequiresNativeAbi($this->getFunction($nativeFunction))
                     ? 'false'
                     : 'true';
             }

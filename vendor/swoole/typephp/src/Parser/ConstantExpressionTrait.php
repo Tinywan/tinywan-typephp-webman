@@ -139,7 +139,10 @@ trait ConstantExpressionTrait
     {
         $class = $this->classDef?->getNamespacedName(false)
             ?? (($this->namespace ? $this->namespace . '\\' : '') . $this->class);
-        $function = ($this->namespace ? $this->namespace . '\\' : '') . $this->function;
+        $function = $this->function;
+        if ($function !== '' && $this->methodDef === null && $this->namespace !== '') {
+            $function = $this->namespace . '\\' . $function;
+        }
         switch ($expr->getType()) {
             case 'Scalar_MagicConst_Dir':
                 return '"' . $this->escapeString($this->dir) . '"';

@@ -8,7 +8,7 @@ class NativePrivateBase
 {
     private int $baseValue = 10;
 
-    public function baseValue(): int
+    public function getBaseValue(): int
     {
         return $this->baseValue;
     }
@@ -24,7 +24,7 @@ class NativePrivateChild extends NativePrivateBase
 {
     private int $childValue = 20;
 
-    public function childValue(): int
+    public function getChildValue(): int
     {
         return $this->childValue;
     }
@@ -38,10 +38,10 @@ class NativePrivateChild extends NativePrivateBase
 function main(): void
 {
     $value = new NativePrivateChild();
-    var_dump($value->baseValue(), $value->childValue());
+    var_dump($value->getBaseValue(), $value->getChildValue());
     $value->setBaseValue(11);
     $value->setChildValue(22);
-    var_dump($value->baseValue(), $value->childValue());
+    var_dump($value->getBaseValue(), $value->getChildValue());
 }
 ?>
 --EXPECT--

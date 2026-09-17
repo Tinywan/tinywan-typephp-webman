@@ -39,6 +39,7 @@ final class NativeSourceProjectBuilder
 
         $generatedSources = [];
         $generatedIncludeDir = null;
+        $translator = null;
         if ($project->phpSources !== []) {
             $this->writeProgress(
                 'Generating C++ from ' . count($project->phpSources) . ' TypePHP source file(s)'
@@ -59,6 +60,7 @@ final class NativeSourceProjectBuilder
             $project->buildDir,
             $this->projectSymbolName($project),
             $project->phpSources !== [],
+            $translator?->getCompilationStatistics(),
         );
         $packages = $composition['packages'];
         $extensionRegistry = $composition['registry'];
@@ -73,6 +75,14 @@ final class NativeSourceProjectBuilder
         $sources = array_values(array_unique($sources));
         $includeDirs = array_values(array_unique($includeDirs));
         $sourceCount = count($sources);
+        $selection = $composition['selection'];
+        if ($selection !== null) {
+            $selected = [...$selection->extensions, ...$selection->features];
+            $this->writeProgress(
+                'Nano capability selection: ' . ($selected === [] ? 'core only' : implode(', ', $selected))
+                . ($selection->completeFallback ? ' (complete fallback)' : ''),
+            );
+        }
         $this->writeProgress(
             "Resolved {$sourceCount} C/C++ source file(s) from " . count($packages) . ' Composer package(s)'
         );
@@ -99,6 +109,10 @@ final class NativeSourceProjectBuilder
                 '-DPHP_NANO=1',
                 '-DPHPX_NANO=1',
                 '-D_POSIX_C_SOURCE=200809L',
+                ...array_map(
+                    static fn(string $define): string => '-D' . $define,
+                    $composition['defines'],
+                ),
                 '-ffunction-sections',
                 '-fdata-sections',
                 // Package headers are passed with -isystem to suppress upstream
@@ -414,10 +428,8 @@ final class NativeSourceProjectBuilder
         }
 
         $nm = $this->resolveExecutable('nm');
-        $auditor->assertUndefinedSymbols(
-            $project->target,
-            $this->runCapture([$nm, '-u', ...$objects], dirname($project->file)),
-        );
+        /* Native objects may deliberately provide an OS ABI to one another.
+         * The linked artifact is the actual host-capability boundary. */
         $auditor->assertUndefinedSymbols(
             $project->target,
             $this->runCapture(

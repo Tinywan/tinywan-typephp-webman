@@ -22,9 +22,8 @@
     "marcj/topsort": "^2.0",
     "symfony/var-dumper": "^8.0",
     "symfony/yaml": "^8.0",
-    "swoole/phpx": "~2.8.1",
-    "ajaxray/ansikit": "^0.3",
-    "ext-dom": "*"
+    "swoole/phpx": "~2.9.0",
+    "ajaxray/ansikit": "^0.3"
   },
   "require-dev": {
     "phpunit/phpunit": "^10.4",
@@ -41,8 +40,5 @@
     "cs-fix": "php-cs-fixer fix $1",
     "analyse": "phpstan analyse --memory-limit 1G -c phpstan.neon",
     "rector": "rector process --clear-cache"
-  },
-  "suggest": {
-    "ext-pcntl": "Required for process control features."
   }
 }

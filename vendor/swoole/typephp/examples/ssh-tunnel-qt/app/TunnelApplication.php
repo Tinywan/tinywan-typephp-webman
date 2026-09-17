@@ -71,6 +71,8 @@ class TunnelApplication
                 $this->refresh();
             } elseif ($type === 'start') {
                 $this->start($id);
+            } elseif ($type === 'start_all') {
+                $this->startAll();
             } elseif ($type === 'stop') {
                 $this->stop($id);
             } elseif ($type === 'process_started') {
@@ -124,6 +126,33 @@ class TunnelApplication
             $this->states[$id] = 'error';
             $this->refresh();
             throw new RuntimeException('无法启动 ssh，请确认 OpenSSH 客户端已安装并位于 PATH');
+        }
+    }
+
+    /**
+     * Start every rule that is not already running or transitioning.  A
+     * failing rule must not prevent the remaining tunnels from being
+     * attempted, so failures are collected and reported together.
+     */
+    private function startAll(): void
+    {
+        $failures = [];
+        foreach ($this->repository->all() as $rule) {
+            $state = (string) ($this->states[$rule->id] ?? 'stopped');
+            if ($state === 'running' || $state === 'starting' || $state === 'stopping') {
+                continue;
+            }
+            try {
+                $this->start($rule->id);
+            } catch (Throwable $error) {
+                $failures[] = $rule->name . '：' . $error->getMessage();
+            }
+        }
+
+        // Always refresh so the button re-enables when nothing was startable.
+        $this->refresh();
+        if ($failures !== []) {
+            throw new RuntimeException("以下隧道启动失败：\n" . implode("\n", $failures));
         }
     }
 

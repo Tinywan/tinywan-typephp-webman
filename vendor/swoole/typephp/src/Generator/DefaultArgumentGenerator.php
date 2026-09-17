@@ -43,10 +43,13 @@ trait DefaultArgumentGenerator
         return "do {\n" . $plan->init . $body . $plan->clean . "} while (0);\n";
     }
 
-    protected function genDefaultArgumentHelperDeclarations(): string
+    protected function genDefaultArgumentHelperDeclarations(?string $sourceFile = null): string
     {
         $code = '';
         foreach ($this->symbols->functions() as $nativeName => $func) {
+            if ($sourceFile !== null && $func->sourceFile !== $sourceFile) {
+                continue;
+            }
             foreach ($func->argInfoList as $argumentIndex => $argInfo) {
                 if (!$this->shouldGenerateDefaultArgumentHelper($argInfo)) {
                     continue;

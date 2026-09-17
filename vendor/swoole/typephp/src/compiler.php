@@ -20,12 +20,19 @@ function main(int $argc, array $argv): void
     if (!defined('TYPEPHP_DEBUG')) {
         define('TYPEPHP_DEBUG', true);
     }
+    if (!defined('TYPEPHP_COMPILER_EXECUTABLE')) {
+        $compilerExecutable = realpath($argv[0]);
+        define(
+            'TYPEPHP_COMPILER_EXECUTABLE',
+            $compilerExecutable !== false ? $compilerExecutable : $argv[0],
+        );
+    }
 
     // The Zend PHP entrypoint loads the consumer project's Composer autoloader
     // in bin/bootstrap.php. The AOT compiler starts here directly and therefore
     // must load the dependencies packaged alongside tpc itself.
     if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')) {
-        require_once TYPEPHP_ROOT_PATH . '/vendor/autoload.php';
+        require_once resolveComposerAutoloader();
     }
 
     $completionStatus = CompletionCommand::execute($argv);
@@ -44,7 +51,13 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    if (shouldCompileNativeSourceProject($argv)) {
+    try {
+        $nativeSourceProject = shouldCompileNativeSourceProject($argv);
+    } catch (RuntimeException $exception) {
+        fwrite(STDERR, 'Native source build failed: ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+    if ($nativeSourceProject) {
         compileNativeSourceProject($argv);
         return;
     }
@@ -111,13 +124,53 @@ function main(int $argc, array $argv): void
     }
 
     // Compile all C++ source files.
-    $objectFiles = $translator->compile($sourceFiles);
+    $objectFiles = [
+        ...$translator->compile($sourceFiles),
+        ...$translator->getProjectObjectFiles(),
+    ];
     // Link all object files to produce the executable.
     $binaryFile = $translator->build($objectFiles);
     // If --run / -r was specified, execute immediately after compilation.
     if ($translator->isRunRequested()) {
         $translator->run($binaryFile); // never returns
     }
+}
+
+/**
+ * Locate the Composer autoloader that ships with the compiler.
+ *
+ * A source checkout and a Unix-like package keep it below TYPEPHP_ROOT_PATH,
+ * while a packaged SDK extracts it below PHP_HOME.
+ */
+function resolveComposerAutoloader(): string
+{
+    $candidates = [];
+    $roots = [TYPEPHP_ROOT_PATH, getenv('PHP_HOME') ?: null];
+    foreach ($roots as $root) {
+        if (!is_string($root) || $root === '') {
+            continue;
+        }
+        $autoloadFile = rtrim($root, '/\\') . '/vendor/autoload.php';
+        if (!in_array($autoloadFile, $candidates, true)) {
+            $candidates[] = $autoloadFile;
+        }
+    }
+
+    foreach ($candidates as $candidate) {
+        if (is_file($candidate)) {
+            return $candidate;
+        }
+    }
+
+    fwrite(STDERR, "Unable to find the Composer autoloader (vendor/autoload.php).\n");
+    fwrite(STDERR, "Searched in:\n");
+    foreach ($candidates as $candidate) {
+        fwrite(STDERR, "  - {$candidate}\n");
+    }
+    fwrite(STDERR, "\nInstall the TypePHP dependencies with Composer first:\n");
+    fwrite(STDERR, "  cd " . TYPEPHP_ROOT_PATH . " && composer install\n");
+    fwrite(STDERR, "Or point PHP_HOME at a TypePHP installation that already contains vendor/autoload.php.\n");
+    exit(1);
 }
 
 function shouldCompileNativeSourceProject(array $argv): bool

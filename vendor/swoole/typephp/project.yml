@@ -1,7 +1,8 @@
 name: tpc
 build-mode: bin
-version: 0.8.1
+version: 0.9.0
 cxx-std: c++17
+optimize: 2
 cxx-flags:
   - -Wall
 
@@ -12,8 +13,8 @@ resource:
   icon: swoole-logo.ico
   # 版本信息
   version-info:
-    file-version: 0.8.1.1112
-    product-version: 0.8.1
+    file-version: 0.9.0.1112
+    product-version: 0.9.0
     company-name: "上海识沃网络科技有限公司"
     file-description: "TypePHP Compiler"
     internal-name: "typephp"

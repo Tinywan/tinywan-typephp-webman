@@ -32,6 +32,7 @@ final readonly class NativeSourceProjectConfig
         if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'xml' || !is_file($path)) {
             return false;
         }
+        self::requireDomExtension();
         $document = new DOMDocument();
         if (!@$document->load($path, LIBXML_NONET | LIBXML_NOBLANKS)) {
             return false;
@@ -47,6 +48,7 @@ final readonly class NativeSourceProjectConfig
             throw new RuntimeException("Native project does not exist: {$path}");
         }
 
+        self::requireDomExtension();
         $document = new DOMDocument();
         if (!@$document->load($file, LIBXML_NONET | LIBXML_NOBLANKS)) {
             throw new RuntimeException("Unable to parse native project XML: {$file}");
@@ -143,6 +145,17 @@ final readonly class NativeSourceProjectConfig
         }
         $value = trim($nodes->item(0)?->textContent ?? '');
         return $value === '' ? null : $value;
+    }
+
+    private static function requireDomExtension(): void
+    {
+        if (!extension_loaded('dom')
+            || !class_exists(DOMDocument::class)
+            || !class_exists(DOMElement::class)) {
+            throw new RuntimeException(
+                'Native project.xml support requires the PHP DOM extension (ext-dom)'
+            );
+        }
     }
 
     private static function absolutePath(string $base, string $path): string

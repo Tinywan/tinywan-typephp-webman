@@ -342,6 +342,10 @@ trait AssignOpTrait
     {
         $this->assertImmutableMutationTarget($left);
         $this->recordImmutableAlias($left, $right);
+        $typedArrayAssignment = $this->parseTypedArrayAssignment($left, $right);
+        if ($typedArrayAssignment !== null) {
+            return $typedArrayAssignment;
+        }
         $this->assertNotNullsafeWriteContext($left);
         $this->assertNativeArrayAccessDirectWrite($left, true);
         if ($left instanceof Expr\ArrayDimFetch
@@ -555,6 +559,9 @@ trait AssignOpTrait
                 if ($copyAssign !== null) {
                     return $copyAssign;
                 }
+                if ($this->isStdContainerParameter($var)) {
+                    $this->fatalError($left, 'Std container parameter bindings cannot be replaced; modify the container contents instead');
+                }
             }
             // Infer the type and obtain the object's class name; return an empty string for non-objects
             $rightClass = $this->detectClassOfExpr($right);
@@ -729,9 +736,9 @@ trait AssignOpTrait
             return $this->parseAssignPropertyArrayDim($left, $right);
         } elseif ($this->isArrayDimFetch($left) and $this->isStaticPropertyFetch($left->var)) {
             // Keep ordinary static-array writes on their established lowering
-            // path. Only ArrayDef needs the specialized key/value plan below.
+            // path. Only typed-array properties need the specialized key/value plan below.
             $this->preparePropertyWriteTarget($left->var);
-            if ($this->getNativePropertyDef($left->var)?->arrayDef !== null) {
+            if ($this->getNativePropertyDef($left->var)?->typedArray !== null) {
                 return $this->parseAssignStaticPropertyArrayDim($left, $right);
             }
         }
@@ -906,6 +913,11 @@ trait AssignOpTrait
 
     protected function parseAssignOp(Expr\AssignOp $node, string $op): string
     {
+        $this->assertImmutableMutationTarget($node->var);
+        if ($this->getTypedArrayDefinition($node->var) !== null
+            || $this->getTypedArrayAccessDefinition($node->var) !== null) {
+            $this->fatalError($node, 'Typed array compound writes require an explicit checked element assignment');
+        }
         if ($node->var instanceof Expr\ArrayDimFetch
             && !$this->canUpdateKnownArraySlotInPlace($node, $op)
         ) {
@@ -1523,6 +1535,29 @@ trait AssignOpTrait
     {
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertImmutableMutationTarget($expr->expr);
+        if ($expr->var instanceof Expr\ArrayDimFetch || $expr->expr instanceof Expr\ArrayDimFetch) {
+            $this->assertTypedArrayReferenceForbidden($expr->var);
+            $this->assertTypedArrayReferenceForbidden($expr->expr);
+        }
+        if ($this->isVarExpr($expr->var) && $this->isVarExpr($expr->expr)) {
+            $definition = $this->getTypedArrayDefinition($expr->expr);
+            if ($definition !== null) {
+                $left = $this->parseWritableIdentifier($expr->var);
+                $right = $this->parseIdentifier($expr->expr);
+                if ($this->hasVar($left) || $this->context->scopeLevel !== 1
+                    || isset($this->context->varTypeDegradations[$left])) {
+                    $this->fatalError($expr, 'Typed array aliases require a new top-level local');
+                }
+                $this->addTypedRefLocal($left, $right, Type::ARRAY_REF);
+                $this->context->typedArrays[$left] = $definition;
+                return $expr->getAttribute(self::ATTR_STATEMENT_EXPRESSION, false) ? '' : $left;
+            }
+            if ($this->getTypedArrayDefinition($expr->var) !== null) {
+                $this->fatalError($expr, 'Cannot rebind a typed array to untyped storage');
+            }
+        }
+        $this->assertTypedArrayReferenceForbidden($expr->var);
+        $this->assertTypedArrayReferenceForbidden($expr->expr);
         $this->assertNativeArrayAccessReferenceForbidden($expr->var);
         $this->assertNativeArrayAccessReferenceForbidden($expr->expr);
         $this->assertNotNullsafeWriteContext($expr->var);
@@ -1717,18 +1752,18 @@ trait AssignOpTrait
         $propertyWriteTarget = $this->preparePropertyWriteTarget($left->var);
         $code     = '';
         $value    = $this->parseExprAsValue($right);
-        $arrayDefWrite = $this->prepareArrayDefDirectWrite($left, $right, $value);
-        if ($arrayDefWrite !== null) {
-            $value = $arrayDefWrite->value;
+        $typedArrayWrite = $this->prepareTypedArrayPropertyDirectWrite($left, $right, $value);
+        if ($typedArrayWrite !== null) {
+            $value = $typedArrayWrite->value;
         }
 
         $tmp = $this->genTmpVarName();
         $this->addLocalVar($tmp, Type::VAR);
 
-        if ($left->dim === null || ($arrayDefWrite !== null && $arrayDefWrite->append)) {
+        if ($left->dim === null || ($typedArrayWrite !== null && $typedArrayWrite->append)) {
             return $code . '((' . $tmp . ' = ' . $value . ', ' . $this->emitDynamicPropertyFetchAppendArray($left->var, $tmp, $propertyWriteTarget) . '), ' . $tmp . ')';
         }
-        $dim = $arrayDefWrite?->key ?? $this->parseIdentifier($left->dim);
+        $dim = $typedArrayWrite?->key ?? $this->parseIdentifier($left->dim);
 
         return $code . '((' . $tmp . ' = ' . $value . ', ' . $this->emitDynamicPropertyFetchUpdateArray($left->var, $dim, $tmp, $propertyWriteTarget) . '), ' . $tmp . ')';
     }
@@ -1736,22 +1771,26 @@ trait AssignOpTrait
     protected function parseAssignStaticPropertyArrayDim(Expr\ArrayDimFetch $left, Expr $right): string
     {
         $value = $this->parseExprAsValue($right);
-        $arrayDefWrite = $this->prepareArrayDefDirectWrite($left, $right, $value);
+        $typedArrayWrite = $this->prepareTypedArrayPropertyDirectWrite($left, $right, $value);
         $array = $this->parseWritableIdentifier($left->var);
 
         $tmp = $this->genTmpVarName();
         $this->addLocalVar($tmp, Type::VAR);
-        $value = $arrayDefWrite?->value ?? $value;
+        $value = $typedArrayWrite?->value ?? $value;
 
-        if ($left->dim === null || ($arrayDefWrite !== null && $arrayDefWrite->append)) {
+        if ($left->dim === null || ($typedArrayWrite !== null && $typedArrayWrite->append)) {
             return '((' . $tmp . ' = ' . $value . ', ' . $array . '.newItem() = ' . $tmp . '), ' . $tmp . ')';
         }
-        $dim = $arrayDefWrite?->key ?? $this->parseIdentifier($left->dim);
+        $dim = $typedArrayWrite?->key ?? $this->parseIdentifier($left->dim);
         return '((' . $tmp . ' = ' . $value . ', ' . $array . '.item(' . $dim . ', true) = ' . $tmp . '), ' . $tmp . ')';
     }
 
     protected function parseAssignOpCoalesce(Expr\AssignOp\Coalesce $expr): string
     {
+        if ($this->getTypedArrayDefinition($expr->var) !== null
+            || $this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array compound writes require an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->checkLeftValue($expr->var);

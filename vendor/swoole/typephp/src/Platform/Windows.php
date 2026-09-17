@@ -226,11 +226,6 @@ class Windows extends PlatformBase
         return $warnings;
     }
 
-    public function supportsPcntlParallelCompile(): bool
-    {
-        return false;
-    }
-
     /**
      * Get the debug options.
      */

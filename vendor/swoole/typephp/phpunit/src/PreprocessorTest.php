@@ -272,6 +272,23 @@ class PreprocessorTest extends TestCase
         $this->assertIsArray($files);
     }
 
+    public function testSortFilesAllowsCircularFunctionDependencies(): void
+    {
+        $this->setProperty('symbolDeclInFile', [
+            'function:a' => '/a.php',
+            'function:b' => '/b.php',
+        ]);
+        $this->setProperty('symbolCallInFile', [
+            '/a.php' => ['function:b'],
+            '/b.php' => ['function:a'],
+            '/consumer.php' => ['function:a'],
+        ]);
+
+        $files = $this->invokeMethod('getSortedFiles', ['/consumer.php', '/a.php', '/b.php']);
+
+        $this->assertSame(['/b.php', '/a.php', '/consumer.php'], $files);
+    }
+
     public function testPrepareFileParsesInterfaceMembersAndTypeChecks(): void
     {
         $file = __DIR__ . '/../code/preprocessor/interface_members.php';

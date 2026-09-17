@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "23d94fc76d003d8d05b2e22b0b540f48",
+    "content-hash": "bdbda53a2250b2d28896f993e4b14f9c",
     "packages": [
         {
             "name": "firebase/php-jwt",
@@ -693,11 +693,11 @@
         },
         {
             "name": "nikic/php-parser",
-            "version": "v5.8.0",
+            "version": "v5.9.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/nikic/php-parser/v5.8.0/nikic-php-parser-v5.8.0.zip",
-                "reference": "044a6a392ff8ad0d61f14370a5fbbd0a0107152f",
+                "url": "https://mirrors.tencent.com/repository/composer/nikic/php-parser/v5.9.0/nikic-php-parser-v5.9.0.zip",
+                "reference": "9e33da9553fe7786f0962b35f4e4ecf01be89def",
                 "shasum": ""
             },
             "require": {
@@ -738,9 +738,9 @@
             ],
             "support": {
                 "issues": "https://github.com/nikic/PHP-Parser/issues",
-                "source": "https://github.com/nikic/PHP-Parser/tree/v5.8.0"
+                "source": "https://github.com/nikic/PHP-Parser/tree/v5.9.0"
             },
-            "time": "2026-07-04T14:30:18+00:00"
+            "time": "2026-09-13T18:51:52+00:00"
         },
         {
             "name": "seld/cli-prompt",
@@ -793,11 +793,11 @@
         },
         {
             "name": "swoole/phpx",
-            "version": "v2.8.1",
+            "version": "v2.9.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.8.1/swoole-phpx-v2.8.1.zip",
-                "reference": "285809544b4f6f33f4df5d58c27258e4572427c0",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/phpx/v2.9.0/swoole-phpx-v2.9.0.zip",
+                "reference": "6f2089379cbc7ae22dacf0faa65dd05e40d72c20",
                 "shasum": ""
             },
             "require": {
@@ -827,6 +827,7 @@
                         "src/core/class.cc",
                         "src/core/closure.cc",
                         "src/core/decimal_nano.cc",
+                        "src/core/debug.cc",
                         "src/core/foreach_iterator.cc",
                         "src/core/native_gc.cc",
                         "src/core/object.cc",
@@ -837,6 +838,7 @@
                         "src/std/core.cc",
                         "src/std/array.cc",
                         "src/std/datetime.cc",
+                        "src/std/fs.cc",
                         "src/std/hash.cc",
                         "src/std/math.cc",
                         "src/std/misc.cc",
@@ -844,11 +846,88 @@
                         "src/typephp/typephp_attribute.cc",
                         "src/typephp/typephp_call.cc",
                         "src/typephp/typephp_nano.cc",
+                        "src/typephp/typephp_main_nano.cc",
                         "src/typephp/typephp_property.cc",
                         "src/typephp/typephp_trait.cc",
                         "thirdparty/wren-gc/src/wren_gc.c"
                     ],
                     "c-standard": 11,
+                    "components": {
+                        "date": {
+                            "sources": [
+                                "src/std/datetime.cc"
+                            ],
+                            "extension": "date"
+                        },
+                        "bcmath": {
+                            "sources": [
+                                "src/core/big_float_nano.cc",
+                                "src/core/big_int_nano.cc",
+                                "src/core/decimal_nano.cc"
+                            ],
+                            "extension": "bcmath"
+                        },
+                        "standard.core": {
+                            "sources": [
+                                "src/std/core.cc"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.hash": {
+                            "sources": [
+                                "src/std/hash.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.math": {
+                            "sources": [
+                                "src/std/math.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.misc": {
+                            "sources": [
+                                "src/std/misc.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.array": {
+                            "sources": [
+                                "src/std/array.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.string": {
+                            "sources": [
+                                "src/std/string.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        },
+                        "standard.filesystem": {
+                            "sources": [
+                                "src/std/fs.cc"
+                            ],
+                            "requires": [
+                                "standard.core"
+                            ],
+                            "extension": "standard"
+                        }
+                    },
                     "cxx-standard": 17,
                     "include-dirs": [
                         "include",
@@ -868,28 +947,27 @@
             ],
             "support": {
                 "issues": "https://github.com/swoole/phpx/issues",
-                "source": "https://github.com/swoole/phpx/tree/v2.8.1"
+                "source": "https://github.com/swoole/phpx/tree/v2.9.0"
             },
-            "time": "2026-09-10T04:56:25+00:00"
+            "time": "2026-09-17T01:45:47+00:00"
         },
         {
             "name": "swoole/typephp",
-            "version": "v0.8.1",
+            "version": "v0.9.0",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.8.1/swoole-typephp-v0.8.1.zip",
-                "reference": "0fda2fe4ab45e46f9bc0170abe581bdb216cad29",
+                "url": "https://mirrors.tencent.com/repository/composer/swoole/typephp/v0.9.0/swoole-typephp-v0.9.0.zip",
+                "reference": "f127dadf5dc6e554ff5182fd35a6c499fea47242",
                 "shasum": ""
             },
             "require": {
                 "ajaxray/ansikit": "^0.3",
                 "composer-runtime-api": "^2.2",
-                "ext-dom": "*",
                 "league/climate": "^3.10",
                 "marcj/topsort": "^2.0",
                 "nikic/php-parser": "^5.6",
                 "php": ">=8.4 <8.6",
-                "swoole/phpx": "~2.8.1",
+                "swoole/phpx": "~2.9.0",
                 "symfony/var-dumper": "^8.0",
                 "symfony/yaml": "^8.0"
             },
@@ -898,9 +976,6 @@
                 "phpstan/phpstan": "^2.2",
                 "phpunit/phpunit": "^10.4",
                 "swoole/php-nano": "^1.0.0"
-            },
-            "suggest": {
-                "ext-pcntl": "Required for process control features."
             },
             "bin": [
                 "bin/tpc",
@@ -925,9 +1000,9 @@
             "description": "TypePHP native AOT compiler",
             "support": {
                 "issues": "https://github.com/swoole/typephp/issues",
-                "source": "https://github.com/swoole/typephp/tree/v0.8.1"
+                "source": "https://github.com/swoole/typephp/tree/v0.9.0"
             },
-            "time": "2026-09-10T06:21:32+00:00"
+            "time": "2026-09-17T04:23:39+00:00"
         },
         {
             "name": "symfony/polyfill-ctype",
@@ -1051,11 +1126,11 @@
         },
         {
             "name": "symfony/var-dumper",
-            "version": "v8.1.6",
+            "version": "v8.1.7",
             "dist": {
                 "type": "zip",
-                "url": "https://mirrors.tencent.com/repository/composer/symfony/var-dumper/v8.1.6/symfony-var-dumper-v8.1.6.zip",
-                "reference": "3783365b58972f4779254d98372af80fbf15e170",
+                "url": "https://mirrors.tencent.com/repository/composer/symfony/var-dumper/v8.1.7/symfony-var-dumper-v8.1.7.zip",
+                "reference": "741a8c4c948b0bb9bd3653daacd3644c73c40ea5",
                 "shasum": ""
             },
             "require": {
@@ -1108,9 +1183,9 @@
                 "dump"
             ],
             "support": {
-                "source": "https://github.com/symfony/var-dumper/tree/v8.1.6"
+                "source": "https://github.com/symfony/var-dumper/tree/v8.1.7"
             },
-            "time": "2026-08-30T20:10:55+00:00"
+            "time": "2026-09-03T16:02:27+00:00"
         },
         {
             "name": "symfony/yaml",

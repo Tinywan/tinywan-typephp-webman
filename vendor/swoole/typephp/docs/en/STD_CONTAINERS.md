@@ -1,5 +1,7 @@
 # Swoole AOT Strongly-Typed High-Performance Containers — Array Access Performance Improved by 10x
 
+This document focuses on C++ containers. StdArray / StdVector / StdMap / StdOrderedMap / StdList / StdDict are collectively type annotations. See [Unified Type Annotation Design](TYPE_ANNOTATIONS.md) for their contracts and storage boundaries, and [Typed PHP Arrays](TYPED_ARRAYS.md) for PHP-array list/dict storage.
+
 > Std Container uses a PHPX Box to hold a concrete C++ template instance. For its storage
 > and passing boundary relative to ordinary Zend Objects and Native
 > Class Objects, see

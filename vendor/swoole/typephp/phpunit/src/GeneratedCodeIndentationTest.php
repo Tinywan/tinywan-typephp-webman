@@ -30,7 +30,11 @@ class GeneratedCodeIndentationTest extends \PHPUnit\Framework\TestCase
             $code,
         );
         $this->assertStringContainsString(
-            "\ttry {\n\t\tphp::checkCallArgCount(1, 1, false);",
+            "\tPHPX_TRY {\n\t\tphp::checkCallArgCount(1, 1, false);",
+            $code,
+        );
+        $this->assertStringContainsString(
+            "\t} PHPX_CATCH(zend_object *, typephp_wrapper_exception) {",
             $code,
         );
         $this->assertStringNotContainsString("\ntry {", $code);

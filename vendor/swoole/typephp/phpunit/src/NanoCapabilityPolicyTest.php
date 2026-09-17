@@ -49,6 +49,34 @@ final class NanoCapabilityPolicyCompiler extends CompilerTest
 
 final class NanoCapabilityPolicyTest extends BaseTest
 {
+    public function testFunctionImportCannotBypassNanoPolicy(): void
+    {
+        $this->assertImportedFunctionRejected(false);
+    }
+
+    public function testFunctionImportCannotBypassWasiPolicy(): void
+    {
+        $this->assertImportedFunctionRejected(true);
+    }
+
+    private function assertImportedFunctionRejected(bool $wasi): void
+    {
+        global $translator;
+        $compiler = new NanoCapabilityPolicyCompiler(TYPEPHP_ROOT_PATH);
+        if ($wasi) {
+            $compiler->enableWasiForTest();
+        } else {
+            $compiler->enableNanoForTest();
+        }
+        $translator = $compiler;
+        $source = __DIR__ . '/../code/function-import-policy.php';
+        $compiler->addFiles([$source]);
+        $compiler->prepareFile($source);
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Function `exec` is not supported');
+        $compiler->convertFile($source);
+    }
+
     public function testRejectsForbiddenDirectCallMissingFromBuildTimePhp(): void
     {
         global $translator;
@@ -197,6 +225,36 @@ final class NanoCapabilityPolicyTest extends BaseTest
         $this->expectExceptionMessage(
             'Function `stream_socket_client` is not supported by the WASI target',
         );
+        $compiler->convertFile($source);
+    }
+
+    public function testNanoRejectsNamespacedRestrictedBuiltinFallback(): void
+    {
+        global $translator;
+        $compiler = new NanoCapabilityPolicyCompiler(TYPEPHP_ROOT_PATH);
+        $compiler->enableNanoForTest();
+        $translator = $compiler;
+        $source = __DIR__ . '/../code/namespaced-restricted-functions.php';
+        $compiler->addFiles([$source]);
+        $compiler->prepareFile($source);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Function `shell_exec` is not supported in nano mode');
+        $compiler->convertFile($source);
+    }
+
+    public function testWasiRejectsNamespacedRestrictedBuiltinFallback(): void
+    {
+        global $translator;
+        $compiler = new NanoCapabilityPolicyCompiler(TYPEPHP_ROOT_PATH);
+        $compiler->enableWasiForTest();
+        $translator = $compiler;
+        $source = __DIR__ . '/../code/namespaced-wasi-restricted-function.php';
+        $compiler->addFiles([$source]);
+        $compiler->prepareFile($source);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Function `stream_socket_client` is not supported by the WASI target');
         $compiler->convertFile($source);
     }
 

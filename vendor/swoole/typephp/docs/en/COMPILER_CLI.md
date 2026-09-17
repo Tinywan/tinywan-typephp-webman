@@ -117,6 +117,28 @@ Corresponding long options:
 
 When a `project.yml` is passed, command-line arguments take precedence over same-named settings in the YAML. For the project file format, see the user documentation and the project configuration parser in the code.
 
+### Precompiled object files
+
+A project can add object files produced by an external native toolchain as
+generic link inputs:
+
+```yaml
+objects:
+  - build/startup.o
+  - path: build/platform.obj
+    if: PHP_OS_FAMILY == "Windows"
+```
+
+Paths are resolved relative to `project.yml` and accept the same conditions as
+`sources`. `tpc` only loads and links `.o`/`.obj` files; it does not recompile
+their C, C++, or assembly sources. Native sources using the project's common
+options should remain in `sources`; `objects` is intended for separately built
+translation units that remain ABI-compatible with the final target. Objects
+built with `-m32` cannot be linked into a 64-bit target and need a separate
+project-owned packaging step after tpc emits its ELF.
+Use `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` for project-wide C++,
+C, assembler, and linker options.
+
 ### PHP Extension Dependencies
 
 When a program depends on other PHP extensions, the required modules can be written into the Zend module dependency table:

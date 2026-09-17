@@ -30,7 +30,7 @@ final readonly class PrecompiledHeaderManager
             throw new \LogicException($this->backend->getName() . ' does not support precompiled headers');
         }
 
-        $fingerprint = $this->buildFingerprint($headers, $dependencyDirectories, $options);
+        $fingerprint = $this->buildFingerprint($headers, $dependencyDirectories, $options, $cacheDirectory);
         $directory = rtrim($cacheDirectory, '/\\') . DIRECTORY_SEPARATOR . $fingerprint;
         if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
             throw new \RuntimeException('Cannot create precompiled header cache directory: ' . $directory);
@@ -116,7 +116,7 @@ final readonly class PrecompiledHeaderManager
     }
 
     /** @param list<string> $headers @param list<string> $dependencyDirectories */
-    private function buildFingerprint(array $headers, array $dependencyDirectories, CompileOptions $options): string
+    private function buildFingerprint(array $headers, array $dependencyDirectories, CompileOptions $options, string $cacheDirectory): string
     {
         $compilerVersion = [];
         exec(escapeshellcmd($this->backend->getCompilerCommand()) . ' --version 2>&1', $compilerVersion);
@@ -148,7 +148,14 @@ final readonly class PrecompiledHeaderManager
             }
         }
         sort($files, SORT_STRING);
+        $digestFile = rtrim($cacheDirectory, '/\\') . '/dependency-digests.json';
+        $saved = is_file($digestFile) ? json_decode((string) file_get_contents($digestFile), true) : [];
+        $digests = [];
+        // Windows ctime can mean creation time rather than metadata-change
+        // time, so it cannot safely detect in-place mtime-preserving rewrites.
+        $strict = PHP_OS_FAMILY === 'Windows' || getenv('TYPEPHP_STRICT_CACHE') === '1';
         foreach ($files as $file) {
+            clearstatcache(true, $file);
             $metadata = stat($file);
             if ($metadata === false) {
                 throw new \RuntimeException('Cannot stat precompiled-header dependency: ' . $file);
@@ -158,10 +165,34 @@ final readonly class PrecompiledHeaderManager
             // the metadata as well as the content so such SDK refreshes select
             // a new cache entry before native compilation begins.
             hash_update($context, $file . "\0" . $metadata['size'] . "\0" . $metadata['mtime'] . "\0");
-            if (!hash_update_file($context, $file)) {
+            $signature = [$metadata['dev'], $metadata['ino'], $metadata['size'], $metadata['mtime'], $metadata['ctime']];
+            $entry = is_array($saved) ? ($saved[$file] ?? null) : null;
+            // Like mature timestamp-based build tools, reuse digests for stable
+            // SDK files. ctime detects rewrites preserving mtime; always read
+            // recent files to close PHP stat()'s same-second timestamp window.
+            $digest = !$strict && max($metadata['mtime'], $metadata['ctime']) < time() - 2
+                && is_array($entry) && ($entry['signature'] ?? null) === $signature
+                && is_string($entry['digest'] ?? null)
+                && preg_match('/^[a-f0-9]{64}$/D', $entry['digest']) === 1
+                ? $entry['digest'] : hash_file('sha256', $file);
+            if (!is_string($digest)) {
                 throw new \RuntimeException('Cannot fingerprint precompiled-header dependency: ' . $file);
             }
-            hash_update($context, "\0");
+            $digests[$file] = ['signature' => $signature, 'digest' => $digest];
+            hash_update($context, $digest . "\0");
+        }
+
+        if ($digests !== $saved && is_dir($cacheDirectory)) {
+            $temporary = tempnam($cacheDirectory, '.pch-digests-');
+            if ($temporary !== false) {
+                try {
+                    if (file_put_contents($temporary, json_encode($digests, JSON_THROW_ON_ERROR)) !== false) {
+                        @rename($temporary, $digestFile);
+                    }
+                } finally {
+                    @unlink($temporary);
+                }
+            }
         }
 
         return substr(hash_final($context), 0, 24);

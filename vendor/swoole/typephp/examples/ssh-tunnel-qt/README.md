@@ -11,6 +11,8 @@
 - SOCKS5：通过 SSH 服务器建立本地 SOCKS5 代理（OpenSSH `-D`）。
 - 新建、查看、编辑和删除规则。
 - 单条隧道启动、停止、状态展示和 SSH 输出日志。
+- “全部启动”一键启动所有未运行（含错误）状态的隧道，已在运行或正在
+  切换状态的隧道会被跳过；单条失败会汇总提示，不影响其余隧道。
 - 支持中文输入法组合事件（Linux IBus/Fcitx、Windows TSF/IMM）。
 - 表格列宽可拖动调整，刷新规则时不会重置列宽。
 - 映射端点分别显示为“本机地址”和“远程地址”；远程转发会按实际方向交换显示。
@@ -104,4 +106,5 @@ Windows 10/11 可在“可选功能”中安装 OpenSSH Client。
 ```bash
 php tests/domain_test.php
 php tests/startup_test.php
+php tests/start_all_test.php
 ```

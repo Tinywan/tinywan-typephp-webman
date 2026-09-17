@@ -11,6 +11,7 @@ final readonly class ComposerNativePackage
     /**
      * @param list<string> $includeDirs
      * @param list<string> $sources
+     * @param array<string, ComposerNativeComponent> $components
      */
     private function __construct(
         public string $name,
@@ -21,6 +22,7 @@ final readonly class ComposerNativePackage
         public int $cxxStandard,
         public array $includeDirs,
         public array $sources,
+        public array $components,
         public ?string $extensionName,
         public ?string $extensionModuleEntry,
     ) {
@@ -150,6 +152,65 @@ final readonly class ComposerNativePackage
             }
         }
 
+        $components = [];
+        foreach (($native['components'] ?? []) as $componentName => $component) {
+            if (!is_string($componentName)
+                || preg_match('/^[a-z][a-z0-9_.-]*$/', $componentName) !== 1
+                || !is_array($component)) {
+                throw new RuntimeException("Invalid native component metadata in `{$package}`");
+            }
+            $componentExtension = $component['extension'] ?? strstr($componentName, '.', true);
+            if ($componentExtension === false) {
+                $componentExtension = $componentName;
+            }
+            if (!is_string($componentExtension)
+                || preg_match('/^[a-z][a-z0-9_]*$/', $componentExtension) !== 1) {
+                throw new RuntimeException("Invalid extension name for component `{$componentName}`");
+            }
+            $componentSourceEntries = $component['sources'] ?? [];
+            if (!is_array($componentSourceEntries)) {
+                throw new RuntimeException(
+                    "Invalid source list in component `{$package}:{$componentName}`"
+                );
+            }
+            $componentSources = $componentSourceEntries === []
+                ? []
+                : self::resolveEntries(
+                    $root,
+                    $componentSourceEntries,
+                    false,
+                    "{$package}:{$componentName}",
+                );
+            foreach ($componentSources as $source) {
+                if (!in_array($source, $sources, true)) {
+                    throw new RuntimeException(
+                        "Component `{$package}:{$componentName}` owns a source not published by the package"
+                    );
+                }
+            }
+            $defines = self::stringList($component['defines'] ?? [], 'define', $package, $componentName);
+            foreach ($defines as $define) {
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*(?:=.*)?$/', $define) !== 1) {
+                    throw new RuntimeException("Invalid define in component `{$package}:{$componentName}`");
+                }
+            }
+            $requires = self::stringList($component['requires'] ?? [], 'requirement', $package, $componentName);
+            $moduleEntry = $component['module-entry'] ?? null;
+            if ($moduleEntry !== null
+                && (!is_string($moduleEntry)
+                    || preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $moduleEntry) !== 1)) {
+                throw new RuntimeException("Invalid module entry in component `{$package}:{$componentName}`");
+            }
+            $components[$componentName] = new ComposerNativeComponent(
+                $componentName,
+                $componentExtension,
+                $componentSources,
+                $defines,
+                $requires,
+                $moduleEntry,
+            );
+        }
+
         return new self(
             $package,
             $root,
@@ -159,9 +220,28 @@ final readonly class ComposerNativePackage
             $cxxStandard,
             self::resolveEntries($root, $native['include-dirs'] ?? null, true, $package),
             $sources,
+            $components,
             $extensionName,
             $extensionModuleEntry,
         );
+    }
+
+    /** @return list<string> */
+    private static function stringList(
+        mixed $values,
+        string $label,
+        string $package,
+        string $component,
+    ): array {
+        if (!is_array($values)) {
+            throw new RuntimeException("Invalid {$label} list in component `{$package}:{$component}`");
+        }
+        foreach ($values as $value) {
+            if (!is_string($value) || $value === '') {
+                throw new RuntimeException("Invalid {$label} in component `{$package}:{$component}`");
+            }
+        }
+        return array_values(array_unique($values));
     }
 
     /**

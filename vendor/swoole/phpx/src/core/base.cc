@@ -28,12 +28,6 @@ namespace php {
 void initDecimalContext();
 
 const char *box_res_name = "php::box";
-DebugInfo debug_info{
-    false,
-    {},
-    0,
-};
-
 void error(int level, const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -162,86 +156,6 @@ void initGlobal(const String &name, Variant &var) {
 
 void unsetGlobal(const String &name) {
     zend_hash_del(&EG(symbol_table), name.str());
-}
-
-void pushDebugFrame(const char *file, int lineno, const char *function) {
-    if (!debug_info.enable || debug_info.depth >= PHPX_MAX_DEBUG_DEPTH) {
-        return;
-    }
-    auto &frame = debug_info.frames[debug_info.depth++];
-    frame.file = file;
-    frame.line = lineno;
-    frame.function = function;
-}
-
-void popDebugFrame() {
-    if (debug_info.depth > 0) {
-        debug_info.depth--;
-    }
-}
-
-void traceDebugInfo(const char *file, int lineno) {
-    if (!debug_info.enable) {
-        return;
-    }
-    if (debug_info.depth == 0) {
-        pushDebugFrame(file, lineno, nullptr);
-    } else {
-        auto &frame = debug_info.frames[debug_info.depth - 1];
-        frame.file = file;
-        frame.line = lineno;
-    }
-}
-
-void enableDebugInfo(bool enable) {
-    debug_info.enable = enable;
-}
-
-void augmentException() {
-    if (!debug_info.enable || debug_info.depth == 0 || !EG(exception)) {
-        return;
-    }
-
-    FakeScopeGuard fake_scope_guard{EG(exception)->ce};
-
-    // Set file/line from the innermost frame
-    auto &top = debug_info.frames[debug_info.depth - 1];
-    zval tmp;
-    ZVAL_STRING(&tmp, top.file ? top.file : "");
-    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_FILE), &tmp);
-    zval_ptr_dtor(&tmp);
-
-    ZVAL_LONG(&tmp, top.line);
-    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
-
-    // Build backtrace array in zend_fetch_debug_backtrace format
-    // Each frame: {file, line, function, class?, type?, args}
-    Array trace;
-    for (int i = debug_info.depth - 1; i >= 0; i--) {
-        auto &frame = debug_info.frames[i];
-
-        Array entry;
-        entry.set(ZSTR_KNOWN(ZEND_STR_FILE), String(frame.file ? frame.file : ""));
-        entry.set(ZSTR_KNOWN(ZEND_STR_LINE), frame.line);
-
-        const char *func = frame.function ? frame.function : "";
-        const char *colon = func ? strstr(func, "::") : nullptr;
-
-        if (colon && colon > func) {
-            // ClassName::methodName
-            entry.set(ZSTR_KNOWN(ZEND_STR_CLASS), String(func, colon - func));
-            entry.set(ZSTR_KNOWN(ZEND_STR_TYPE), String("::"));
-            entry.set(ZSTR_KNOWN(ZEND_STR_FUNCTION), String(colon + 2));
-        } else {
-            entry.set(ZSTR_KNOWN(ZEND_STR_FUNCTION), String(func));
-        }
-
-        entry.set(ZSTR_KNOWN(ZEND_STR_ARGS), Array());
-
-        trace.append(entry);
-    }
-
-    zend_update_property_ex(EG(exception)->ce, EG(exception), ZSTR_KNOWN(ZEND_STR_TRACE), trace.ptr());
 }
 
 Variant constant(const String &name) {
@@ -1201,6 +1115,95 @@ bool exists(const Variant &v, const OperationChain &list, Variant &tmp) {
 bool exists(const Variant &v, const OperationChain &list) {
     Variant tmp;
     return exists_impl(v, list, tmp, false);
+}
+
+void unset(Variant &v, const OperationChain &list) {
+    if (list.size() == 0) {
+        throwError("unset() requires a non-empty operation chain");
+        return;
+    }
+
+    // Keep each step bound to its source slot. Ordinary Variant copies would
+    // detach nested arrays, so offsetUnset() would only change a temporary.
+    std::vector<Variant> path;
+    path.reserve(list.size());
+    path.emplace_back(v.unwrap_ptr(), Ctor::Indirect);
+
+    const auto append_path = [&path](Variant &&next) {
+        // Variant's move constructor intentionally materializes an indirect
+        // value. Keep the borrowed slot instead, or later mutations would
+        // only affect a detached copy.
+        if (next.isIndirect()) {
+            path.emplace_back(next.direct_ptr(), Ctor::Indirect);
+        } else {
+            path.emplace_back(std::move(next));
+        }
+    };
+
+    size_t index = 0;
+    for (const auto &expr : list) {
+        Variant &current = path.back();
+        if (current.isNull() || current.isUndef()) {
+            return;
+        }
+        const bool last = ++index == list.size();
+        if (expr.first == ArrayDimFetch) {
+            if (!current.isArray() && !current.isObject()) {
+                throwError("Cannot unset offsets");
+                return;
+            }
+            // An array's null key denotes "", whereas item(key, true)
+            // normally treats null as append. Object dimension handlers must
+            // still receive the original null key.
+            Variant empty_key;
+            const Variant &key = current.isArray() && expr.second.isNull()
+                ? (empty_key = "")
+                : expr.second;
+            if (last) {
+                current.offsetUnset(key);
+                return;
+            }
+
+            if (current.isArray()) {
+                // Probe without separating or creating a missing bucket. A
+                // successful update lookup then separates the parent array
+                // before returning an indirect wrapper for its child slot.
+                Variant existing = current.item(key);
+                if (existing.isNull() || existing.isUndef()) {
+                    return;
+                }
+                append_path(current.item(key, true));
+            } else {
+                // ArrayAccess must be fetched only once: offsetGet may have
+                // side effects and a writable reference may be returned.
+                Variant next = current.item(key, true);
+                if (next.isNull() || next.isUndef()) {
+                    return;
+                }
+                append_path(std::move(next));
+            }
+        } else if (expr.first == PropertyFetch) {
+            if (!current.isObject()) {
+                throwError("Cannot unset property on a non-object value");
+                return;
+            }
+            if (last) {
+                current.unsetProperty(expr.second);
+                return;
+            }
+            Variant next = current.attr(expr.second, AttrMode::Isset);
+            if (next.isNull() || next.isUndef()) {
+                return;
+            }
+            append_path(std::move(next));
+        } else {
+            abort();
+        }
+    }
+}
+
+void unset(Variant &&v, const OperationChain &list) {
+    unset(v, list);
 }
 
 Reference toReference(const Variant &v, const OperationChain &list) {

@@ -58,6 +58,8 @@ extern "C" {
 #define PHPX_UNSAFE
 
 #include "phpx_native_gc.h"
+#include "phpx_exception_policy.h"
+#include "phpx_cast_policy.h"
 
 #define IS_STR_OFFSET_SET (1 << 5)
 
@@ -299,6 +301,8 @@ PHPX_API bool empty(const Variant &v, const OperationChain &list);
 PHPX_API bool empty(const Variant &v, const OperationChain &list, Variant &result);
 PHPX_API bool exists(const Variant &v, const OperationChain &list);
 PHPX_API bool exists(const Variant &v, const OperationChain &list, Variant &result);
+PHPX_API void unset(Variant &v, const OperationChain &list);
+PHPX_API void unset(Variant &&v, const OperationChain &list);
 PHPX_API Reference toReference(const Variant &v, const OperationChain &list);
 
 PHPX_API void pushDebugFrame(const char *file, int lineno, const char *function = nullptr);
@@ -311,7 +315,7 @@ void augmentException();
 inline void throwErrorIfOccurred() {
     if (UNEXPECTED(EG(exception) != nullptr)) {
         augmentException();
-        throw EG(exception);
+        PHPX_THROW(EG(exception));
     }
 }
 
@@ -2437,13 +2441,13 @@ class Args {
         params.reserve(n);
     }
     Args(const Args &other) : Args(other.params.size()) {
-        try {
+        PHPX_TRY {
             for (const auto &param : other.params) {
                 append(&param);
             }
-        } catch (...) {
+        } PHPX_CATCH_ALL {
             release();
-            throw;
+            PHPX_RETHROW();
         }
     }
     Args(Args &&other) noexcept {
@@ -2898,7 +2902,7 @@ T *Variant::toBox() {
         throwError("This resource is not type of `%s`.", box_res_name);
         return nullptr;
     }
-    auto *typed_box = dynamic_cast<T *>(static_cast<Box *>(res->ptr));
+    auto *typed_box = PHPX_POLYMORPHIC_CAST(T *, static_cast<Box *>(res->ptr));
     if (UNEXPECTED(typed_box == nullptr)) {
         throwError("This box resource has an unexpected concrete type.");
         return nullptr;

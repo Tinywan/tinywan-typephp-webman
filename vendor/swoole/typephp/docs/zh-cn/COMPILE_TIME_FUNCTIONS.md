@@ -38,7 +38,7 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 
 ## `std::` 编译期入口
 
-当前 `std::` 编译期入口共 15 个。
+当前 `std::` 编译期入口共 17 个。
 
 | 名称 | 作用 | 主要限制 |
 | --- | --- | --- |
@@ -57,10 +57,14 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 | `std::vector($type[, $size])` | 构造 std vector。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `std::map($keyType, $valueType)` | 构造 std map。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `std::orderedMap($keyType, $valueType)` | 构造 std ordered map。 | 只能在变量首次赋值的顶层作用域使用。 |
+| `std::list($valueType)` | 创建整数键强类型 PHP 数组，支持负数、稀疏索引和追加。 | 新函数局部变量首次赋值；动态键严格检查，禁止动态引用修改。 |
+| `std::dict($keyType, $valueType)` | 创建强类型 PHP 字典，键为 `Type::Int` 或 `Type::Str`。 | 新函数局部变量首次赋值；必须显式提供键，不支持追加。 |
+
+list/dict 保留普通 PHP 数组存储和写时复制。值要求静态类型匹配，`any` / `var` 键插入内部严格检查；仅允许只读动态 PHP 数组调用，禁止 `std::ref()`。参数使用完全一致的 `StdList` / `StdDict` 类型注解，PHP 类型可省略或为 `array`，不允许 `mixed`；同类型的原生 `&` 参数可以修改调用方。详细示例及边界见[强类型 PHP 数组与类型注解](TYPED_ARRAYS.md)。
 
 ## Std 容器转换关键词方法
 
-当前 Std 容器转换关键词方法共 4 个。
+当前 Std 容器转换关键词方法共 6 个。
 
 | 名称 | 作用 | 主要限制 |
 | --- | --- | --- |
@@ -68,6 +72,8 @@ TypePHP 不再为编译器指令保留任何全局函数名。编译期 API 最�
 | `toStdVector(...)` | 将变量包装为 std vector。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `toStdMap(...)` | 将变量包装为 std map。 | 只能在变量首次赋值的顶层作用域使用。 |
 | `toStdOrderedMap(...)` | 将变量包装为 std ordered map。 | 只能在变量首次赋值的顶层作用域使用。 |
+| `toStdList($valueType)` | 转为整数键强类型 PHP 数组。 | 同契约来源直接赋值；其他来源逐项严格校验键和值。 |
+| `toStdDict($keyType, $valueType)` | 转为强类型 PHP 字典。 | 键类型只能为 `Type::Int` 或 `Type::Str`；其他规则同 `toStdList()`。 |
 
 ## 不计入本文清单的机制
 

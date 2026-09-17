@@ -21,6 +21,7 @@ use PhpParser\NodeVisitorAbstract;
 final class PropertyHookLowering
 {
     public const string BACKING_ACCESS_ATTRIBUTE = 'typephpPropertyHookBackingAccess';
+    public const string INTERNAL_METHOD_ATTRIBUTE = 'typephpPropertyHookInternalMethod';
     public const string METHOD_ATTRIBUTE = 'typephpPropertyHookMethod';
     public const string PROPERTY_ATTRIBUTE = 'typephpPropertyHooks';
     private const string GET_PREFIX = '__typephp_property_get_';
@@ -116,6 +117,7 @@ final class PropertyHookLowering
                 'kind' => $kind,
                 'property' => $propertyName,
             ]);
+            $method->setAttribute(self::INTERNAL_METHOD_ATTRIBUTE, true);
             $methods[] = $method;
             $hookMethods[$kind] = $methodName;
             $hasBackingStorage = $hasBackingStorage || self::containsBackingAccess($stmts);
@@ -168,13 +170,15 @@ final class PropertyHookLowering
 
     private static function visibilityMarker(string $name, array $attributes): Stmt\ClassMethod
     {
-        return new Stmt\ClassMethod($name, [
+        $method = new Stmt\ClassMethod($name, [
             // A child declaration may replace the generated visibility marker.
             // This method is metadata for the object handler, not a final PHP API.
             'flags' => Modifiers::PUBLIC,
             'returnType' => new Node\Identifier('void'),
             'stmts' => [],
         ], $attributes);
+        $method->setAttribute(self::INTERNAL_METHOD_ATTRIBUTE, true);
+        return $method;
     }
 
     /** @return list<Stmt> */

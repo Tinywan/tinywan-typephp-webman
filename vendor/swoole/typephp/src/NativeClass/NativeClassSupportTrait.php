@@ -14,6 +14,7 @@ use TypePhp\Entity\FunctionDef;
 use TypePhp\Entity\MethodDef;
 use TypePhp\Entity\PropertyDef;
 use TypePhp\Resolver\Reflection;
+use TypePhp\Transform\PropertyHookLowering;
 use PhpParser\Modifiers;
 use TypePhp\Type;
 use PhpParser\NodeAbstract;
@@ -22,6 +23,160 @@ use PhpParser\Node;
 trait NativeClassSupportTrait
 {
     private const string NATIVE_VIRTUAL_CLONE_METHOD = '__typephp_native_clone';
+
+    /** @var array<string, bool> */
+    private array $nativeStackMethodSafety = [];
+
+    /** @var array<string, true> */
+    private array $nativeStackMethodSafetyVisiting = [];
+
+    protected function getNativeStackSlotForAllocation(Node\Expr\New_ $allocation): ?string
+    {
+        $allocationId = spl_object_id($allocation);
+        foreach ($this->context->nativeStackPromotions as $promotion) {
+            if ($promotion['allocationId'] === $allocationId) {
+                return $promotion['slot'];
+            }
+        }
+        return null;
+    }
+
+    protected function nativeObjectClassCanUseStackStorage(string $class): bool
+    {
+        if (!$this->isNativeObjectClass($class)) {
+            return false;
+        }
+
+        $exactClass = $this->getClass($class);
+        if ($exactClass->extends !== '' && $this->isNativeObjectClass($exactClass->extends)) {
+            // `$this->privateMethod()` is lexically bound to the declaring
+            // class rather than selected only from the exact runtime class.
+            // Model that distinction before promoting inherited layouts.
+            return false;
+        }
+
+        $current = $class;
+        while ($current !== '' && $this->isNativeObjectClass($current)) {
+            $classDef = $this->getClass($current);
+            if ($classDef->hasMethod('__destruct')) {
+                // PHP-level finalizer exceptions and resurrection currently
+                // belong to the Wren finalization pipeline. Keep these objects
+                // on that path until stack finalization has identical semantics.
+                return false;
+            }
+            foreach ($classDef->properties as $property) {
+                if ($property->getter !== null || $property->setter !== null) {
+                    // A property access invokes its hook implicitly. Private
+                    // and overridden hooks have lexical dispatch subtleties;
+                    // keep hooked layouts on the GC path until the escape pass
+                    // models those call edges explicitly.
+                    return false;
+                }
+            }
+            $current = $classDef->extends;
+        }
+
+        $constructor = $this->findNativeObjectMethod($class, '__construct');
+        return $constructor === null
+            || $this->nativeObjectMethodPreservesReceiver($class, '__construct');
+    }
+
+    protected function nativeObjectMethodPreservesReceiver(string $dispatchClass, string $method): bool
+    {
+        $resolved = $this->findNativeObjectMethod($dispatchClass, $method);
+        if ($resolved === null
+            || $resolved->functionDef === null
+            || $resolved->functionDef->returnsByRef
+            || $resolved->node?->stmts === null
+        ) {
+            return false;
+        }
+
+        $key = strtolower(ltrim($dispatchClass, '\\') . '::' . $method);
+        if (array_key_exists($key, $this->nativeStackMethodSafety)) {
+            return $this->nativeStackMethodSafety[$key];
+        }
+        if (isset($this->nativeStackMethodSafetyVisiting[$key])) {
+            // Proving a mutually recursive call graph requires a fixed-point
+            // pass. Keep recursive receivers on the GC heap for now.
+            return false;
+        }
+
+        $this->nativeStackMethodSafetyVisiting[$key] = true;
+        $safe = !$this->nativeMethodBodyEscapesReceiver(
+            $resolved->node->stmts,
+            $dispatchClass,
+        );
+        unset($this->nativeStackMethodSafetyVisiting[$key]);
+        return $this->nativeStackMethodSafety[$key] = $safe;
+    }
+
+    /** @param list<Node> $ancestors */
+    private function nativeMethodBodyEscapesReceiver(
+        mixed $value,
+        string $dispatchClass,
+        ?Node $parent = null,
+        string $parentField = '',
+        int $functionDepth = 0,
+        array $ancestors = [],
+    ): bool {
+        foreach (is_array($value) ? $value : [$value] as $node) {
+            if (!$node instanceof Node) {
+                continue;
+            }
+
+            // parent::method() and similar calls can forward the implicit
+            // receiver without containing an explicit `$this` AST node.
+            if ($functionDepth === 0 && $node instanceof Node\Expr\StaticCall) {
+                return true;
+            }
+
+            if ($node instanceof Node\Expr\Variable && $node->name === 'this') {
+                if ($functionDepth !== 0) {
+                    return true;
+                }
+                if (($parent instanceof Node\Expr\PropertyFetch
+                        || $parent instanceof Node\Expr\NullsafePropertyFetch)
+                    && $parentField === 'var'
+                ) {
+                    foreach ($ancestors as $ancestor) {
+                        if ($ancestor instanceof Node\Expr\AssignRef || $ancestor instanceof Node\Arg) {
+                            return true;
+                        }
+                    }
+                    continue;
+                }
+                if (($parent instanceof Node\Expr\MethodCall
+                        || $parent instanceof Node\Expr\NullsafeMethodCall)
+                    && $parentField === 'var'
+                    && $parent->name instanceof Node\Identifier
+                    && $this->nativeObjectMethodPreservesReceiver(
+                        $dispatchClass,
+                        $parent->name->toString(),
+                    )
+                ) {
+                    continue;
+                }
+                return true;
+            }
+
+            $childFunctionDepth = $functionDepth + ($node instanceof Node\FunctionLike ? 1 : 0);
+            $childAncestors = [...$ancestors, $node];
+            foreach ($node->getSubNodeNames() as $field) {
+                if ($this->nativeMethodBodyEscapesReceiver(
+                    $node->{$field},
+                    $dispatchClass,
+                    $node,
+                    $field,
+                    $childFunctionDepth,
+                    $childAncestors,
+                )) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     /**
      * Magic methods whose semantics require Zend object handlers, runtime
@@ -180,6 +335,7 @@ trait NativeClassSupportTrait
         }
         $node = $this->reflectionTypeToNode($type, $declaringClass);
         $argument->typeStr = $this->typeCheckNodeToString($node);
+        $argument->acceptsCallable = $this->typeNodeContainsCallable($node);
         if ($node instanceof Node\NullableType
             || $node instanceof Node\UnionType
             || $node instanceof Node\IntersectionType
@@ -700,6 +856,86 @@ trait NativeClassSupportTrait
     protected function getNativeObjectDescriptorName(string|ClassDef $class): string
     {
         return $this->getNativeObjectCppName($class) . '__type';
+    }
+
+    protected function getNativeObjectMethodCppName(string $method): string
+    {
+        return $this->escapeVarName(strtolower($method));
+    }
+
+    /**
+     * Validate the completed declaration graph at the convert boundary.
+     * prepare() deliberately permits arbitrary source order; by this point
+     * every parent and composed Trait is available, so inheritance-wide name
+     * rules do not depend on preparation order.
+     */
+    protected function validateNativeObjectMemberNames(): void
+    {
+        foreach ($this->getNativeObjectClassesInDeclarationOrder() as $class) {
+            $lineage = [];
+            $current = $class;
+            while (true) {
+                $lineage[] = $current;
+                if ($current->extends === '' || !$this->hasClass($current->extends)) {
+                    break;
+                }
+                $current = $this->getClass($current->extends);
+            }
+
+            foreach ($class->properties as $property) {
+                foreach ($lineage as $owner) {
+                    foreach ([...$owner->methods, ...$owner->abstractMethodDefs] as $method) {
+                        if (strcasecmp($property->name, $method->name) !== 0) {
+                            continue;
+                        }
+                        if ($property->node !== null) {
+                            $this->fatalError(
+                                $property->node,
+                                "Native class property `\${$property->name}` conflicts with method `"
+                                    . $owner->getNamespacedName(false) . "::{$method->name}()`",
+                            );
+                        }
+                    }
+                }
+            }
+
+            foreach ([...$class->methods, ...$class->abstractMethodDefs] as $method) {
+                if (str_starts_with(strtolower($method->name), '__typephp_')
+                    && $method->node?->getAttribute(
+                        PropertyHookLowering::INTERNAL_METHOD_ATTRIBUTE,
+                    ) !== true
+                    && $method->node !== null
+                ) {
+                    $this->fatalError(
+                        $method->node,
+                        "Native class method `{$method->name}()` uses a compiler-reserved name",
+                    );
+                }
+                foreach ($lineage as $owner) {
+                    foreach ($owner->properties as $property) {
+                        if (strcasecmp($method->name, $property->name) !== 0) {
+                            continue;
+                        }
+                        if ($method->node !== null) {
+                            $this->fatalError(
+                                $method->node,
+                                "Native class method `{$method->name}()` conflicts with property `"
+                                    . $owner->getNamespacedName(false) . "::\${$property->name}`",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** @return list<string> */
+    private function getNativeMethodArgumentNames(FunctionDef $function): array
+    {
+        return array_map(
+            static fn (ArgInfo $argument): string => $argument->name,
+            $function->argInfoList,
+        );
     }
 
     protected function getNativeObjectPointerType(string|ClassDef $class): string
@@ -1237,7 +1473,14 @@ trait NativeClassSupportTrait
 
     protected function getNativeObjectMemberReceiver(string $name): string
     {
-        return $this->getNativeObjectReceiver($name) . '.';
+        if ($name === 'this_') {
+            return 'this_.';
+        }
+        if ($this->isNativeObjectKnownNonNull($name)) {
+            return $name . '->';
+        }
+        $class = $this->getNativeObjectVarClass($name);
+        return 'php::nativeRequireObject(' . $name . ', "' . addslashes($class) . '")->';
     }
 
     /**
@@ -1604,7 +1847,7 @@ trait NativeClassSupportTrait
      * uses the default declared by the dynamically selected override. Emit an
      * overload for every positional arity instead of putting C++ defaults on
      * a virtual declaration. Each override adapter can then call its concrete
-     * php_* function with the supplied prefix and let that declaration provide
+     * concrete C++ member function with the supplied prefix and let that declaration provide
      * the correct dynamic defaults.
      *
      * @return list<int>
@@ -1746,25 +1989,52 @@ trait NativeClassSupportTrait
         $ordered[] = $class;
     }
 
-    protected function genNativeObjectDeclarations(): string
+    protected function genNativeObjectDeclarations(?string $sourceFile = null): string
     {
+        $this->validateNativeObjectMemberNames();
         $classes = $this->getNativeObjectClassesInDeclarationOrder();
+        if ($sourceFile !== null) {
+            $classes = array_values(array_filter(
+                $classes,
+                static fn (ClassDef $class): bool => $class->sourceFile === $sourceFile,
+            ));
+        }
         if ($classes === []) {
             return '';
         }
 
         $code = '// TypePHP Native Object declarations' . PHP_EOL;
-        foreach ($classes as $class) {
-            $code .= 'struct ' . $this->getNativeObjectCppName($class) . ';' . PHP_EOL;
+        if ($sourceFile === null) {
+            $code .= $this->genNativeObjectForwardDeclarations();
         }
-        $code .= PHP_EOL;
 
         foreach ($classes as $class) {
             $name = $this->getNativeObjectCppName($class);
+            $hasNativeDestructor = $this->findNativeObjectMethod(
+                $class->getNamespacedName(false),
+                '__destruct',
+            ) !== null;
             $parent = $class->extends !== '' && $this->isNativeObjectClass($class->extends)
                 ? ' : public ' . $this->getNativeObjectCppName($class->extends)
                 : '';
-            $code .= 'struct ' . $name . $parent . ' {' . PHP_EOL;
+            $code .= 'class ' . $name . $parent . ' {' . PHP_EOL;
+            $code .= 'public:' . PHP_EOL;
+            $code .= '    explicit ' . $name . '(typephp_native_storage_constructor_t) noexcept;' . PHP_EOL;
+            $constructor = $this->findNativeObjectMethod($class->getNamespacedName(false), '__construct');
+            $code .= '    ' . $name . '(';
+            if ($constructor !== null && $constructor->functionDef !== null) {
+                $code .= $this->getNativeMethodParameterDeclarations($constructor->functionDef);
+            }
+            $code .= ');' . PHP_EOL;
+            $code .= '    virtual ~' . $name . '() '
+                . ($hasNativeDestructor ? 'noexcept(false)' : 'noexcept')
+                . ($class->extends !== '' && $this->isNativeObjectClass($class->extends) ? ' override' : '')
+                . ';' . PHP_EOL;
+            if ($class->hasMethod('__destruct')) {
+                $code .= '    void __typephp_finalize_destructor();' . PHP_EOL;
+                $code .= '    void __typephp_suppress_destructor() noexcept;' . PHP_EOL;
+                $code .= '    php::NativeDestructorState __typephp_destructor_state;' . PHP_EOL;
+            }
             foreach ($class->properties as $property) {
                 if ($property->flags & Modifiers::STATIC
                     || $this->isNativeObjectInheritedPropertyRedeclaration($class, $property)
@@ -1788,6 +2058,18 @@ trait NativeClassSupportTrait
                     $code .= ' = ' . $default;
                 }
                 $code .= ';' . PHP_EOL;
+            }
+            foreach ($class->methods as $method) {
+                if ($method->flags & Modifiers::ABSTRACT) {
+                    continue;
+                }
+                $function = $method->functionDef;
+                if ($function === null) {
+                    continue;
+                }
+                $code .= '    ' . $this->getNativeMethodReturnCppType($function)
+                    . ' ' . $this->getNativeObjectMethodCppName($method->name) . '('
+                    . $this->getNativeMethodParameterDeclarations($function) . ');' . PHP_EOL;
             }
             foreach ([...$class->methods, ...$class->abstractMethodDefs] as $method) {
                 foreach ($this->getNativeVirtualMethodSlots($class, $method) as [$slotClass, $slotMethod]) {
@@ -1825,10 +2107,27 @@ trait NativeClassSupportTrait
         return $code;
     }
 
+    protected function genNativeObjectForwardDeclarations(): string
+    {
+        $classes = $this->getNativeObjectClassesInDeclarationOrder();
+        if ($classes === []) {
+            return '';
+        }
+        $code = 'struct typephp_native_storage_constructor_t {};' . PHP_EOL;
+        foreach ($classes as $class) {
+            $code .= 'class ' . $this->getNativeObjectCppName($class) . ';' . PHP_EOL;
+        }
+        return $code . PHP_EOL;
+    }
+
     protected function genNativeObjectRuntimeDefinition(ClassDef $class): string
     {
         $cpp = $this->getNativeObjectCppName($class);
         $prefix = $cpp . '__gc';
+        $hasNativeDestructor = $this->findNativeObjectMethod(
+            $class->getNamespacedName(false),
+            '__destruct',
+        ) !== null;
         $code = '';
         $code .= 'void ' . $this->getNativeObjectInitializerName($class)
             . '(' . $cpp . ' &this_) {' . PHP_EOL;
@@ -1848,12 +2147,49 @@ trait NativeClassSupportTrait
             $code .= '    this_.' . $this->getNativeObjectPropertyCppName($property, $class) . ' = ' . $value . ';' . PHP_EOL;
         }
         $code .= '}' . PHP_EOL . PHP_EOL;
+        $baseConstructor = $class->extends !== '' && $this->isNativeObjectClass($class->extends)
+            ? ' : ' . $this->getNativeObjectCppName($class->extends) . '(typephp_native_storage_constructor_t{})'
+            : '';
+        $code .= $cpp . '::' . $cpp . '(typephp_native_storage_constructor_t) noexcept'
+            . $baseConstructor . ' {}' . PHP_EOL . PHP_EOL;
+
+        $constructor = $this->findNativeObjectMethod($class->getNamespacedName(false), '__construct');
+        $constructorFunction = $constructor?->functionDef;
+        $code .= $cpp . '::' . $cpp . '(';
+        if ($constructorFunction !== null) {
+            $code .= $this->getNativeMethodParameterDeclarations($constructorFunction);
+        }
+        $code .= ')' . $baseConstructor . ' {' . PHP_EOL;
+        $code .= '    PHPX_TRY {' . PHP_EOL;
+        $code .= '        ' . $this->getNativeObjectInitializerName($class) . '(*this);' . PHP_EOL;
+        if ($constructorFunction !== null) {
+            $code .= '        this->' . $this->getNativeObjectMethodCppName('__construct') . '('
+                . implode(', ', $this->getNativeMethodArgumentNames($constructorFunction)) . ');' . PHP_EOL;
+        }
+        $code .= '    } PHPX_CATCH_ALL {' . PHP_EOL;
+        $code .= '        php::nativeConstructorFailed();' . PHP_EOL;
+        $code .= '    }' . PHP_EOL;
+        $code .= '}' . PHP_EOL . PHP_EOL;
+
+        $code .= $cpp . '::~' . $cpp . '() '
+            . ($hasNativeDestructor ? 'noexcept(false)' : 'noexcept') . ' {' . PHP_EOL;
+        if ($class->hasMethod('__destruct')) {
+            $code .= '    __typephp_finalize_destructor();' . PHP_EOL;
+        }
+        $code .= '}' . PHP_EOL . PHP_EOL;
+        if ($class->hasMethod('__destruct')) {
+            $code .= 'void ' . $cpp . '::__typephp_finalize_destructor() {' . PHP_EOL;
+            $code .= '    if (!__typephp_destructor_state.beginFinalize()) {' . PHP_EOL;
+            $code .= '        return;' . PHP_EOL;
+            $code .= '    }' . PHP_EOL;
+            $code .= '    ' . $this->getNativeObjectMethodCppName('__destruct') . '();' . PHP_EOL;
+            $code .= '}' . PHP_EOL . PHP_EOL;
+            $code .= 'void ' . $cpp . '::__typephp_suppress_destructor() noexcept {' . PHP_EOL;
+            $code .= '    __typephp_destructor_state.suppress();' . PHP_EOL;
+            $code .= '}' . PHP_EOL . PHP_EOL;
+        }
+
         foreach ($class->methods as $method) {
-            $nativeFunction = self::PREFIX . $this->getNativeName(
-                $method->name,
-                $class->namespace,
-                $class->name,
-            );
             foreach ($this->getNativeVirtualMethodSlots($class, $method) as [$slotClass, $slotMethod]) {
                 $slotFunction = $slotMethod->functionDef;
                 $returnType = $this->getNativeMethodReturnCppType($slotFunction);
@@ -1862,10 +2198,20 @@ trait NativeClassSupportTrait
                         static fn (ArgInfo $arg): string => $arg->name,
                         array_slice($slotFunction->argInfoList, 0, $arity),
                     );
+                    $methodFunction = $method->functionDef;
+                    $methodNativeName = $this->getNativeName(
+                        $method->name,
+                        $class->namespace,
+                        $class->name,
+                    );
+                    for ($i = $arity; $i < count($methodFunction->argInfoList); $i++) {
+                        $args[] = $this->genDefaultArgumentExpr($methodNativeName, $i);
+                    }
                     $code .= $returnType . ' ' . $cpp . '::'
                         . $this->getNativeVirtualMethodName($slotClass, $method->name)
                         . '(' . $this->getNativeMethodParameterDeclarations($slotFunction, $arity) . ') {' . PHP_EOL;
-                    $call = $nativeFunction . '(*this' . ($args === [] ? '' : ', ' . implode(', ', $args)) . ')';
+                    $call = 'this->' . $this->getNativeObjectMethodCppName($method->name)
+                        . '(' . implode(', ', $args) . ')';
                     $code .= '    ' . ($returnType === Type::VOID ? '' : 'return ') . $call . ';' . PHP_EOL;
                     $code .= '}' . PHP_EOL . PHP_EOL;
                 }
@@ -1877,12 +2223,7 @@ trait NativeClassSupportTrait
             $cloneMethod = $this->findNativeObjectMethod($class->getNamespacedName(false), '__clone');
             if ($cloneMethod !== null) {
                 $declaringClass = $this->getClass($cloneMethod->functionDef->declaringClass);
-                $clone = self::PREFIX . $this->getNativeName(
-                    '__clone',
-                    $declaringClass->namespace,
-                    $declaringClass->name,
-                );
-                $initializer = $clone . '(this_); ';
+                $initializer = 'this_.' . $this->getNativeObjectMethodCppName('__clone') . '(); ';
             }
             $code .= $cpp . ' *' . $cpp . '::' . self::NATIVE_VIRTUAL_CLONE_METHOD . '() const {' . PHP_EOL;
             $code .= '    return php::nativeClone<' . $cpp . '>('
@@ -1920,11 +2261,7 @@ trait NativeClassSupportTrait
         while (true) {
             if ($destructorClass->hasMethod('__destruct')) {
                 $destructors[] = [
-                    self::PREFIX . $this->getNativeName(
-                        '__destruct',
-                        $destructorClass->namespace,
-                        $destructorClass->name,
-                    ),
+                    '__typephp_finalize_destructor',
                     $this->getNativeObjectCppName($destructorClass),
                 ];
             }
@@ -1937,15 +2274,23 @@ trait NativeClassSupportTrait
             $code .= 'static void ' . $prefix . '_finalize(void *object) {' . PHP_EOL;
             if (count($destructors) === 1) {
                 [$destructor, $destructorCpp] = $destructors[0];
-                $code .= '    ' . $destructor
-                    . '(*static_cast<' . $destructorCpp . ' *>(object));' . PHP_EOL;
+                $code .= '    static_cast<' . $destructorCpp . ' *>(object)->'
+                    . $destructor . '();' . PHP_EOL;
             } else {
                 $code .= '    php::NativeFinalizerChain chain;' . PHP_EOL;
                 foreach ($destructors as [$destructor, $destructorCpp]) {
-                    $code .= '    chain.run([&] { ' . $destructor
-                        . '(*static_cast<' . $destructorCpp . ' *>(object)); });' . PHP_EOL;
+                    $code .= '    chain.run([&] { static_cast<' . $destructorCpp
+                        . ' *>(object)->' . $destructor . '(); });' . PHP_EOL;
                 }
                 $code .= '    chain.rethrow();' . PHP_EOL;
+            }
+            $code .= '}' . PHP_EOL;
+        }
+        if ($destructors !== []) {
+            $code .= 'static void ' . $prefix . '_suppress_finalize(void *object) noexcept {' . PHP_EOL;
+            foreach ($destructors as [, $destructorCpp]) {
+                $code .= '    static_cast<' . $destructorCpp
+                    . ' *>(object)->__typephp_suppress_destructor();' . PHP_EOL;
             }
             $code .= '}' . PHP_EOL;
         }
@@ -1958,6 +2303,7 @@ trait NativeClassSupportTrait
         $code .= '    alignof(' . $cpp . '),' . PHP_EOL;
         $code .= '    ' . $prefix . '_trace,' . PHP_EOL;
         $code .= '    ' . ($destructors !== [] ? $prefix . '_finalize' : 'nullptr') . ',' . PHP_EOL;
+        $code .= '    ' . ($destructors !== [] ? $prefix . '_suppress_finalize' : 'nullptr') . ',' . PHP_EOL;
         $code .= '    ' . $prefix . '_destroy,' . PHP_EOL;
         $code .= '};' . PHP_EOL . PHP_EOL;
         return $code;

@@ -8,7 +8,10 @@
 
 namespace TypePhp;
 
+use TypePhp\Analysis\CompilationStatistics;
+use TypePhp\Build\AstCache;
 use TypePhp\Build\PhpxLocator;
+use TypePhp\Build\StableIdRegistry;
 
 use League\CLImate\CLImate;
 use TypePhp\Backend\CompilerBackend;
@@ -89,7 +92,6 @@ use TypePhp\TypeSystem\NativeTypeCompatibilityTrait;
 use TypePhp\NativeClass\NativeClassSupportTrait;
 use TypePhp\NativeClass\NativeGlobalTypeResolver;
 use TypePhp\Immutable\ImmutableSupportTrait;
-use TypePhp\ArrayDef\ArrayDefSupportTrait;
 use PhpParser\Modifiers;
 use PhpParser\Node;
 use PhpParser\Node\ArrayItem;
@@ -112,7 +114,7 @@ class CompilerBase implements PropertyAccessContext
     use NativeTypeCompatibilityTrait;
     use NativeClassSupportTrait;
     use ImmutableSupportTrait;
-    use ArrayDefSupportTrait;
+    use \TypePhp\Parser\TypedArrayTrait;
     use NativeBuildConfigurationTrait;
     use PythonModuleTrait;
     use DeclarationSymbolTrait;
@@ -176,6 +178,8 @@ class CompilerBase implements PropertyAccessContext
         'toString'     => Type::STR,
         'toBool'       => Type::BOOL,
         'toArray'      => Type::ARRAY,
+        'toStdList'    => Type::ARRAY,
+        'toStdDict'    => Type::ARRAY,
         'toStream'     => Type::STREAM,
         'toBigInt'     => Type::BIGINT,
         'toBigFloat'   => Type::BIGFLOAT,
@@ -188,6 +192,8 @@ class CompilerBase implements PropertyAccessContext
     /** Keyword methods not listed here accept no arguments. */
     public const array KEYWORD_METHOD_WITH_ARGUMENTS = [
         'toObject' => true,
+        'toStdList' => true,
+        'toStdDict' => true,
     ];
 
     private const array STREAM_FUNCTIONS = [
@@ -326,7 +332,6 @@ class CompilerBase implements PropertyAccessContext
         'pcntl_',
         'posix_',
         'socket_',
-        'curl_',
         'ftp_',
         'opcache_',
     ];
@@ -441,6 +446,12 @@ class CompilerBase implements PropertyAccessContext
     protected int $propertyAccessCacheIndex = 0;
     protected int $methodCallCacheIndex = 0;
     protected int $functionCallCacheIndex = 0;
+    protected int $functionResolutionCacheIndex = 0;
+    /** @var array<string, int> Per-function ordinal used to name dynamic cache sites. */
+    protected array $cacheSiteOrdinals = [];
+    /** Separates declaration-expression sites from executable function bodies. */
+    protected string $cacheSitePass = 'body';
+    protected ?StableIdRegistry $stableIdRegistry = null;
     /** @var array<string, array<Node\Stmt>> Prepared declaration ASTs keyed by real path. */
     protected array $preparedFileAsts = [];
     protected bool $traitDeclarationsComposed = false;
@@ -481,11 +492,7 @@ class CompilerBase implements PropertyAccessContext
     protected array $internalFunctions = [];
     protected array $internalConstants = [];
 
-    /**
-     * Stores the declaration of every function and class method. Key is the
-     * symbol name; value is the file in which the function or method is declared.
-     * @var array<string, string>
-     */
+    /** @var array<string, string> Canonical symbol key => declaring PHP file. */
     protected array $symbolDeclInFile = [];
 
     /**
@@ -494,18 +501,26 @@ class CompilerBase implements PropertyAccessContext
      * @var array<string, array<string>>
      */
     protected array $symbolCallInFile = [];
+    /** @var array<string, string> Canonical PHP file => generated declaration header. */
+    protected array $declarationHeaderFiles = [];
+    /** @var array<string, true> C++ translation units emitted by this compiler run. */
+    protected array $generatedProjectSources = [];
     protected array $redoAfterDeclare = [];
     protected array $constData = [];
     protected int $optimizeLevel = 0;
     protected int $maxJob = 4;
     protected string $buildMode = self::BUILD_MODE_BIN;
     protected string $cxxFlags = '';
+    protected string $cFlags = '';
+    protected string $asmFlags = '';
     protected string $cxxStd = 'c++17';
     protected string $march = '';            // --march: target CPU instruction set (e.g. native, x86-64-v3)
     protected string $targetPlatform = '';   // --target-platform: cross-compilation target triple (e.g. aarch64-linux-gnu)
     protected string $ldflags = '';
     protected array $linkLibs = [];    // --link-lib / -l: user-specified libraries to link
     protected array $linkPaths = [];   // --link-path / -L: user-specified library search paths
+    /** @var list<string> Precompiled project object files linked into the target. */
+    protected array $projectObjectFiles = [];
     /** @var list<string> Required PHP modules recorded in zend_module_entry.deps. */
     protected array $extensionDependencies = [];
     protected bool $debug = false;
@@ -525,6 +540,8 @@ class CompilerBase implements PropertyAccessContext
     protected bool $nanoPolicyMode = false;
     /** @var list<string> Include directories published by Nano Composer packages. */
     protected array $nanoRuntimeIncludePaths = [];
+    /** @var list<string> */
+    protected array $nanoRuntimeDefines = [];
     /** @var array<string, true> Package source files compiled into a Nano executable. */
     protected array $nanoRuntimeSources = [];
     /** Latest header timestamp used by the shared object-cache path. */
@@ -589,6 +606,10 @@ class CompilerBase implements PropertyAccessContext
         'GLOBALS'  => Type::ARRAY,
     ];
     protected array $globalVars = [];
+    /** @var array<string, array<string, string>> PHP source => global slot => inferred type. */
+    protected array $globalVarsInFile = [];
+    /** @var array<string, string> Global/static storage name => owning PHP file. */
+    protected array $globalVarDeclInFile = [];
     /** @var array<string, string> Global/static Native pointer slot => class name. */
     protected array $nativeGlobalObjects = [];
     /** Immutable metadata shared by Native global pre-discovery and lowering. */
@@ -597,12 +618,17 @@ class CompilerBase implements PropertyAccessContext
     protected array $nativeClassDeclarations = [];
     /** @var array<string, true> Request-reset initialization flags for Native static locals. */
     protected array $nativeStaticInitializers = [];
+    /** @var array<string, array<string, true>> PHP source => Native static initialization flags. */
+    protected array $nativeStaticInitializersInFile = [];
+    /** @var array<string, string> Native static initialization flag => owning PHP file. */
+    protected array $nativeStaticInitializerDeclInFile = [];
     /** Box inferred integer locals in php::Var to retain Zend integer widening semantics. */
     protected bool $varIntTypes = false;
     protected bool $decimalTypes = false;
     protected bool $bigintTypes = false;
     protected string $rootPath;
     protected string $buildDir;
+    protected string $targetName = 'app';
     protected string $outputDir = '';    // Output directory specified by the -o option
     protected int $debugLine = 0;
     protected CLImate $climate;
@@ -615,6 +641,7 @@ class CompilerBase implements PropertyAccessContext
     protected bool $noProgress = false;
     protected bool $forTest = false;
     protected Parser $parser;
+    protected ?AstCache $astCache = null;
     protected string $phpVersion = self::DEFAULT_PHP_VERSION;
     protected PrettyPrinter $printer;
     protected bool $isPhpZts = false;  // Whether the PHP build is thread-safe (ZTS)
@@ -649,6 +676,9 @@ class CompilerBase implements PropertyAccessContext
      */
     protected array $classSubClasses = [];
 
+    /** Whole-program usage collected during the convert phase. */
+    protected CompilationStatistics $compilationStatistics;
+
     public function __construct(string $rootPath)
     {
         $this->osType = PHP_OS_FAMILY;
@@ -659,6 +689,7 @@ class CompilerBase implements PropertyAccessContext
             $this->error('PHP 8.6.0 or later is not supported');
         }
         $this->rootPath = $rootPath;
+        $this->compilationStatistics = new CompilationStatistics();
         $this->symbols = new SymbolRepository();
         $this->setPhpVersion(self::DEFAULT_PHP_VERSION);
         $this->printer = new PrettyPrinter\Standard();
@@ -698,6 +729,7 @@ class CompilerBase implements PropertyAccessContext
         // php-parser's emulative lexer permits the compiler runtime to be
         // older than the selected PHP language version.
         $this->parser = (new ParserFactory())->createForVersion(PhpVersion::fromString($this->phpVersion));
+        $this->astCache = null;
     }
 
     public function getPhpVersion(): string
@@ -923,7 +955,38 @@ class CompilerBase implements PropertyAccessContext
 
     public function getTypeFromZendType(string $type): string
     {
-        return $this->zendTypeMap[$type] ?? self::PHP_RUNTIME_TYPE_MAP[$type] ?? Type::VAR;
+        $resolved = $this->zendTypeMap[$type] ?? self::PHP_RUNTIME_TYPE_MAP[$type] ?? Type::VAR;
+        $this->compilationStatistics->record(CompilationStatistics::TYPES, $resolved);
+        return $resolved;
+    }
+
+    public function getCompilationStatistics(): CompilationStatistics
+    {
+        return $this->compilationStatistics;
+    }
+
+    /** Record value types that survived into an emitted translation unit. */
+    protected function recordEmittedTypes(string $code): void
+    {
+        foreach ([
+            Type::VAR,
+            Type::BOOL,
+            Type::INT,
+            Type::FLOAT,
+            Type::STR,
+            Type::ARRAY,
+            Type::OBJECT,
+            Type::RESOURCE,
+            Type::STREAM,
+            Type::BIGINT,
+            Type::BIGFLOAT,
+            Type::DECIMAL,
+            Type::BOX,
+        ] as $type) {
+            if (str_contains($code, $type)) {
+                $this->compilationStatistics->record(CompilationStatistics::TYPES, $type);
+            }
+        }
     }
 
     public function getObjectType(string $object): string
@@ -1087,11 +1150,17 @@ class CompilerBase implements PropertyAccessContext
         return $this->getIndent() . 'php::appendCallExtraNamedArgs(' . $var . ');' . PHP_EOL;
     }
 
-    public function writeFile(string $file, string $content): void
+    public function writeFile(string $file, string $content, bool $force = false): void
     {
         $dir = dirname($file);
         if (!is_dir($dir)) {
             mkdir($dir, 0777, true);
+        }
+        if (!$force && is_file($file)) {
+            $existing = file_get_contents($file);
+            if ($existing === $content) {
+                return;
+            }
         }
         if (!file_put_contents($file, $content)) {
             throw new \RuntimeException('Can not write file: ' . $file);
@@ -1246,6 +1315,7 @@ class CompilerBase implements PropertyAccessContext
         $this->interfacesDefineInFile = [];
         $this->functionDefineInFile = [];
         $this->stubImportLibrary = '';
+        $this->cacheSiteOrdinals = [];
     }
 
     protected function resetNamespace(): void
@@ -1268,6 +1338,31 @@ class CompilerBase implements PropertyAccessContext
             );
         }
         return $this->getNativeName($this->parseIdentifier($v->name), $this->namespace, $this->class);
+    }
+
+    protected function getClassDependencySymbol(string $name): string
+    {
+        return 'class:' . strtolower(ltrim($name, '\\'));
+    }
+
+    protected function getFunctionDependencySymbol(string $name): string
+    {
+        return 'function:' . strtolower(ltrim($name, '\\'));
+    }
+
+    protected function getConstantDependencySymbol(string $name): string
+    {
+        return 'constant:' . ltrim($name, '\\');
+    }
+
+    protected function getGlobalDependencySymbol(string $name): string
+    {
+        return 'global:' . $name;
+    }
+
+    protected function getNativeFunctionDependencySymbol(string $name): string
+    {
+        return 'native-function:' . strtolower($name);
     }
 
     protected function getFullClassName(): string
@@ -1444,10 +1539,18 @@ class CompilerBase implements PropertyAccessContext
             return $this->persistentClassMap[$className];
         }
         if ($this->isProcessStableClass($className)) {
-            $id = $this->persistentClassIndex++;
+            $id = $this->getStableIdRegistry()->allocate(
+                'persistent-class',
+                strtolower(ltrim($className, '\\')),
+            );
+            $this->persistentClassIndex = max($this->persistentClassIndex, $id + 1);
             $this->persistentClassMap[$className] = $id;
         } else {
-            $id = $this->classIndex++;
+            $id = $this->getStableIdRegistry()->allocate(
+                'request-class',
+                strtolower(ltrim($className, '\\')),
+            );
+            $this->classIndex = max($this->classIndex, $id + 1);
             $this->classMap[$className] = $id;
         }
         return $id;
@@ -1463,10 +1566,18 @@ class CompilerBase implements PropertyAccessContext
             return $this->persistentFuncMap[$funcName];
         }
         if ($this->isProcessStableFunction($funcName)) {
-            $id = $this->persistentFuncIndex++;
+            $id = $this->getStableIdRegistry()->allocate(
+                'persistent-function',
+                strtolower(ltrim($funcName, '\\')),
+            );
+            $this->persistentFuncIndex = max($this->persistentFuncIndex, $id + 1);
             $this->persistentFuncMap[$funcName] = $id;
         } else {
-            $id = $this->funcIndex++;
+            $id = $this->getStableIdRegistry()->allocate(
+                'request-function',
+                strtolower(ltrim($funcName, '\\')),
+            );
+            $this->funcIndex = max($this->funcIndex, $id + 1);
             $this->funcMap[$funcName] = $id;
         }
         return $id;
@@ -1490,7 +1601,9 @@ class CompilerBase implements PropertyAccessContext
         if (isset($this->persistentPropMap[$key])) {
             return $this->persistentPropMap[$key];
         }
-        $id = $this->persistentPropIndex++;
+        $stableKey = strtolower(ltrim($className, '\\')) . "\0" . $propName;
+        $id = $this->getStableIdRegistry()->allocate('persistent-property', $stableKey);
+        $this->persistentPropIndex = max($this->persistentPropIndex, $id + 1);
         $this->persistentPropMap[$key] = $id;
         return $id;
     }
@@ -1498,22 +1611,50 @@ class CompilerBase implements PropertyAccessContext
     protected function getPropertyAccessCache(): string
     {
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'property access cache ID allocation');
-        $id = $this->propertyAccessCacheIndex++;
+        $id = $this->getStableCallSiteId('property-access');
+        $this->propertyAccessCacheIndex = max($this->propertyAccessCacheIndex, $id + 1);
         return 'get_property_cache(PropertyCacheId{' . $id . '})';
     }
 
     protected function getMethodCallCache(): string
     {
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'method call cache ID allocation');
-        $id = $this->methodCallCacheIndex++;
+        $id = $this->getStableCallSiteId('method-call');
+        $this->methodCallCacheIndex = max($this->methodCallCacheIndex, $id + 1);
         return 'typephp_get_method_call_cache(MethodCallCacheId{' . $id . '})';
     }
 
     protected function getFunctionCallCache(): string
     {
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'function call cache ID allocation');
-        $id = $this->functionCallCacheIndex++;
+        $id = $this->getStableCallSiteId('function-call');
+        $this->functionCallCacheIndex = max($this->functionCallCacheIndex, $id + 1);
         return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
+    }
+
+    /** Reserve a request-local namespace-function resolution slot per call site. */
+    protected function getFunctionResolutionCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'function resolution cache ID allocation');
+        $id = $this->getStableCallSiteId('function-resolution');
+        $this->functionResolutionCacheIndex = max($this->functionResolutionCacheIndex, $id + 1);
+        return 'typephp_get_function_resolution_cache(FunctionResolutionCacheId{' . $id . '})';
+    }
+
+    protected function getStableCallSiteId(string $domain): int
+    {
+        $scope = implode("\0", [
+            $this->cacheSitePass,
+            isset($this->file) ? str_replace('\\', '/', $this->file) : '',
+            strtolower($this->namespace),
+            strtolower($this->class),
+            strtolower($this->function),
+            strtolower($this->method),
+        ]);
+        $ordinalKey = $domain . "\0" . $scope;
+        $ordinal = $this->cacheSiteOrdinals[$ordinalKey] ?? 0;
+        $this->cacheSiteOrdinals[$ordinalKey] = $ordinal + 1;
+        return $this->getStableIdRegistry()->allocate($domain, $scope . "\0" . $ordinal);
     }
 
     /** Return the function-local late-static-bound class entry. */
@@ -1533,6 +1674,10 @@ class CompilerBase implements PropertyAccessContext
 
     protected function getClassEntryPtr(string $className): string
     {
+        $this->compilationStatistics->record(
+            CompilationStatistics::CLASSES,
+            ltrim($className, '\\'),
+        );
         $id = $this->getClassId($className);
         $persistent = isset($this->persistentClassMap[$className]);
         $helper = $persistent ? 'get_persistent_class' : 'get_class';
@@ -1744,7 +1889,7 @@ class CompilerBase implements PropertyAccessContext
             $seen[$interfaceNameLower] = true;
             $list[] = $interfaceName;
             if (!$this->isInternalInterface($interfaceName)) {
-                $this->symbolCallInFile[$this->file][] = $interfaceNameLower;
+                $this->symbolCallInFile[$this->file][] = $this->getClassDependencySymbol($interfaceNameLower);
             }
         }
         return $list;
@@ -1938,7 +2083,13 @@ class CompilerBase implements PropertyAccessContext
         $code = '';
         $code .= $this->formatCapturedStmtLines($beforeStmts);
         if ($afterStmts) {
-            $tmpVar = $this->addTmpVar(Type::VAR);
+            // Boolean results own no zval resources and can survive operand
+            // cleanup in native storage without changing evaluation order.
+            $type = $this->detectTypeOfExpr($cond) === Type::BOOL ? Type::BOOL : Type::VAR;
+            $tmpVar = $this->addTmpVar($type);
+            if ($type === Type::BOOL) {
+                $condExpr = $this->convertBoolExpr($condExpr);
+            }
             $code .= $this->getIndent() . $tmpVar . ' = ' . $condExpr . ';' . PHP_EOL;
             $code .= $this->formatCapturedStmtLines($afterStmts);
             $condExpr = $tmpVar;
@@ -2214,6 +2365,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function detectClassOfExpr(NodeAbstract $expr): string
     {
+        if (($typedArray = $this->getTypedArrayAccessDefinition($expr)) !== null) {
+            return $typedArray['class'] ?? '';
+        }
         // Error suppression changes diagnostics only; it must never erase the
         // static type of the wrapped expression. This is especially important
         // for Native objects because treating their typed pointer as php::Var
@@ -2572,6 +2726,7 @@ class CompilerBase implements PropertyAccessContext
             if ($v->expr === null) {
                 return 'return ' . Type::REF . '{};';
             }
+            $this->assertTypedArrayReferenceForbidden($v->expr);
             if ($v->expr instanceof CallLike) {
                 $returnsByRef = $this->resolveRefReturningCall($v->expr);
                 if ($returnsByRef !== false) {
@@ -3470,6 +3625,9 @@ class CompilerBase implements PropertyAccessContext
                 }
                 break;
             case 'Expr_ArrayDimFetch':
+                if (($typedArray = $this->getTypedArrayAccessDefinition($expr)) !== null) {
+                    return $typedArray['type'];
+                }
                 if ($this->isStdArrayExpr($expr)) {
                     if (!$expr->hasAttribute('stdArrayDimFetch')) {
                         $this->parseStdArrayDimFetch($expr);
@@ -3561,6 +3719,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePreInc(Expr\PreInc $expr): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, '++');
@@ -3602,12 +3763,16 @@ class CompilerBase implements PropertyAccessContext
                 $this->escapeName($this->getNamespacedClassName($funcName)),
             ];
         } else {
-            $possibleFunctionNames = [$this->escapeName($funcName)];
-            if ($this->namespace) {
-                $possibleFunctionNames[] = $this->escapeNamespace($this->namespace) . self::NAMESPACE_SEPARATOR . $this->escapeName($funcName);
-            }
-            if (isset($this->useFunctions[$funcName])) {
-                $possibleFunctionNames[] = $this->escapeNamespace($this->useFunctions[$funcName]);
+            $import = strtolower($funcName);
+            if (isset($this->useFunctions[$import])) {
+                $possibleFunctionNames = [$this->escapeNamespace($this->useFunctions[$import])];
+            } else {
+                $possibleFunctionNames = [];
+                if ($this->namespace) {
+                    $possibleFunctionNames[] = $this->escapeNamespace($this->namespace)
+                        . self::NAMESPACE_SEPARATOR . $this->escapeName($funcName);
+                }
+                $possibleFunctionNames[] = $this->escapeName($funcName);
             }
         }
 
@@ -3968,6 +4133,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePostOp(Expr\PostDec|Expr\PostInc $expr, string $op): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, str_repeat($op, 2));
@@ -4020,6 +4188,9 @@ class CompilerBase implements PropertyAccessContext
 
     protected function parsePreDec(Expr\PreDec $expr): string
     {
+        if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
+            $this->fatalError($expr, 'Typed array increment/decrement requires an explicit checked element assignment');
+        }
         $this->assertImmutableMutationTarget($expr->var);
         $this->assertNativeArrayAccessDirectWrite($expr->var, false);
         $this->assertNativeObjectOperatorOperandSupported($expr->var, $expr, '--');
@@ -4167,13 +4338,14 @@ class CompilerBase implements PropertyAccessContext
                         }
                         $cppClass = $this->getNativeObjectCppName($className);
                         $descriptor = $this->getNativeObjectDescriptorName($className);
+                        $stackSlot = $this->getNativeStackSlotForAllocation($expr);
                         if ($constructor === null) {
                             if ($expr->args !== []) {
                                 $this->fatalError($expr, "Native class `{$className}` does not have a constructor");
                             }
-                            return 'php::nativeConstruct<' . $cppClass . '>(' . $descriptor
-                                . ', [&](auto &this_) { '
-                                . $this->getNativeObjectInitializerName($className) . '(this_); })';
+                            return $stackSlot === null
+                                ? 'php::nativeConstructObject<' . $cppClass . '>(' . $descriptor . ')'
+                                : $stackSlot . '.constructObject()';
                         }
                         $nativeCtor = $this->getNativeMethod($expr, $className, '__construct');
                         if ($nativeCtor === false) {
@@ -4183,13 +4355,16 @@ class CompilerBase implements PropertyAccessContext
                         // the AST argument array used by the ordinary-class
                         // path below. The self-hosted compiler assigns one
                         // fixed C++ type to each PHP local variable.
-                        $nativeArgs = $expr->args === []
-                            ? ''
-                            : ', ' . $this->parseNativeCallArgs($expr->args, $nativeCtor);
-                        return 'php::nativeConstruct<' . $cppClass . '>(' . $descriptor
-                            . ', [&](auto &this_) { '
-                            . $this->getNativeObjectInitializerName($className) . '(this_); '
-                            . self::PREFIX . $nativeCtor . '(this_' . $nativeArgs . '); })';
+                        $nativeArgs = $this->parseNativeCallArgs(
+                            $expr->args,
+                            $nativeCtor,
+                            materializeTrailingDefaults: true,
+                        );
+                        if ($stackSlot !== null) {
+                            return $stackSlot . '.constructObject(' . $nativeArgs . ')';
+                        }
+                        return 'php::nativeConstructObject<' . $cppClass . '>(' . $descriptor
+                            . ($nativeArgs === '' ? '' : ', ' . $nativeArgs) . ')';
                     }
                     $cePtr = $this->getLocalClassEntryPtr($className);
                 }
@@ -4227,12 +4402,7 @@ class CompilerBase implements PropertyAccessContext
                         "Call to {$visibility} {$declaringClassName}::__clone()",
                     );
                 }
-                $clone = self::PREFIX . $this->getNativeName(
-                    '__clone',
-                    $declaringClass->namespace,
-                    $declaringClass->name,
-                );
-                $initializer = $clone . '(this_); ';
+                $initializer = 'this_.' . $this->getNativeObjectMethodCppName('__clone') . '(); ';
             }
             if ($this->nativeObjectUsesVirtualClone($class)) {
                 return $this->getNativeObjectReceiver($source) . '.'
@@ -4431,6 +4601,8 @@ class CompilerBase implements PropertyAccessContext
                 if (isset($this->nativeGlobalObjects[$globalVar])) {
                     $flag = $globalVar . '__initialized';
                     $this->nativeStaticInitializers[$flag] = true;
+                    $this->nativeStaticInitializersInFile[$this->file][$flag] = true;
+                    $this->nativeStaticInitializerDeclInFile[$flag] = $this->file;
                     $initState = $this->escapeGlobalVar($flag);
                     $initCode = '';
                 } else {
@@ -4455,6 +4627,9 @@ class CompilerBase implements PropertyAccessContext
 
         $this->context = new FunctionContext();
         $this->context->arguments = $oriCtx->localVars;
+        // Outer locals are captured arguments. New initializer temporaries
+        // must not reuse their names and inherit an incompatible scalar type.
+        $this->context->tmpVarIndex = $oriCtx->tmpVarIndex;
 
         $code = '([&](){' . PHP_EOL;
         $body = $this->getIndent() . $varName . ' = ' . $this->parseExpr($var->default) . ';';
@@ -4591,9 +4766,14 @@ class CompilerBase implements PropertyAccessContext
     protected function parseChainedExpr(NodeAbstract $node, string $op, bool $getValue = false): string
     {
         if ($op === self::OP_REFVAL) {
+            $this->assertTypedArrayReferenceForbidden($node);
             $this->assertNativeArrayAccessReferenceForbidden($node);
             $this->assertNativeObjectReferenceForbidden($node, $node);
             $this->assertVariableReferenceStorage($node, $node);
+        }
+        if ($node instanceof Expr\ArrayDimFetch && $this->getTypedArrayAccessDefinition($node) !== null
+            && in_array($op, [self::OP_ISSET, self::OP_EMPTY, self::OP_NOT_EMPTY], true)) {
+            return $this->parseTypedArrayPresence($node, $op, $getValue);
         }
         if ($node instanceof Expr\ArrayDimFetch
             && $this->isNativeObjectClass($this->detectClassOfExpr($node->var))
@@ -5134,6 +5314,76 @@ class CompilerBase implements PropertyAccessContext
             throw new \RuntimeException('Failed to resolve build path: ' . $string);
         }
         $this->buildDir = $resolved;
+        $this->astCache = null;
+        $this->stableIdRegistry = null;
+    }
+
+    protected function getAstCache(): AstCache
+    {
+        return $this->astCache ??= new AstCache($this->parser, $this->buildDir, $this->phpVersion);
+    }
+
+    /** Return an independent pristine tree for each consumer's own visitors. */
+    public function loadPristineAst(string $file, string $source, string $phpVersion): array
+    {
+        if ($phpVersion === $this->phpVersion) {
+            return $this->getAstCache()->load($file, $source);
+        }
+        $parser = (new ParserFactory())->createForVersion(PhpVersion::fromString($phpVersion));
+        return (new AstCache($parser, $this->buildDir, $phpVersion))->load($file, $source);
+    }
+
+    protected function getStableIdRegistry(): StableIdRegistry
+    {
+        if ($this->stableIdRegistry === null) {
+            if ($this->forTest) {
+                $this->stableIdRegistry = new StableIdRegistry('');
+                return $this->stableIdRegistry;
+            }
+            $target = $this->targetName !== '' ? $this->targetName : 'default';
+            $directory = $this->buildDir . '/cache/incremental/' . $target;
+            $this->stableIdRegistry = new StableIdRegistry($directory . '/stable-ids.json');
+            foreach ($this->stableIdRegistry->entries('literal') as $value => $id) {
+                $this->literalStrings[$value] = $id;
+            }
+        }
+        return $this->stableIdRegistry;
+    }
+
+    protected function clearIncrementalBuildCache(): void
+    {
+        $targets = [
+            $this->buildDir . '/cache/ast',
+            $this->buildDir . '/cache/prepared',
+            $this->buildDir . '/cache/incremental/' . ($this->targetName !== '' ? $this->targetName : 'default'),
+        ];
+        foreach ($targets as $directory) {
+            if (!is_dir($directory)) {
+                continue;
+            }
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::CHILD_FIRST,
+            );
+            foreach ($iterator as $entry) {
+                if ($entry->isDir()) {
+                    if (!rmdir($entry->getPathname())) {
+                        throw new \RuntimeException('Cannot clear incremental cache directory: ' . $entry->getPathname());
+                    }
+                } else {
+                    if (!unlink($entry->getPathname())) {
+                        throw new \RuntimeException('Cannot clear incremental cache file: ' . $entry->getPathname());
+                    }
+                }
+            }
+            if (!rmdir($directory)) {
+                throw new \RuntimeException('Cannot clear incremental cache directory: ' . $directory);
+            }
+        }
+        $this->astCache = null;
+        $this->stableIdRegistry = null;
+        $this->literalStrings = [];
+        $this->literalStringIndex = 0;
     }
 
     protected function isStubFile(string $file): bool
@@ -5473,6 +5723,13 @@ class CompilerBase implements PropertyAccessContext
                 . PHP_EOL;
         }
         $code .= $this->genLocalVarDecl($this->context->localVars);
+        foreach ($this->context->nativeStackPromotions as $promotion) {
+            $code .= $this->getIndent() . 'php::NativeStackSlot<'
+                . $this->getNativeObjectCppName($promotion['class']) . '> '
+                . $promotion['slot'] . '('
+                . $this->getNativeObjectDescriptorName($promotion['class']) . ');'
+                . PHP_EOL;
+        }
         foreach ($this->context->classEntryPtrs as $className => $entry) {
             $code .= $this->getIndent() . 'zend_class_entry *' . $entry . ' = '
                 . $this->getClassEntryPtr($className) . ';' . PHP_EOL;
@@ -5485,6 +5742,9 @@ class CompilerBase implements PropertyAccessContext
                 // nativeClone do the same for lifecycle callbacks). Only
                 // function-owned pointer slots must be registered here.
                 if ($name !== 'this_' && !$this->hasArgument($name) && $this->hasLocalVar($name)) {
+                    if (isset($this->context->nativeStackPromotions[$name])) {
+                        continue;
+                    }
                     $rootSlots[] = '&' . $name;
                 }
             }

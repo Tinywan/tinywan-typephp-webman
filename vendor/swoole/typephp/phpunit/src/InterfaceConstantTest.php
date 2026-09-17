@@ -1,5 +1,6 @@
 <?php
 
+use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
 
 /**
@@ -86,5 +87,21 @@ class InterfaceConstantTest extends BaseTest
             'Declaration of `TraitConstantImplementation::VALUE` must be compatible with `TraitConstantContract::VALUE`',
             'interface_const_trait_mismatch.php',
         );
+    }
+
+    public function testTraitImportedInterfaceConstantUsesLexicalNameInArginfo(): void
+    {
+        global $translator;
+        $compiler = CompilerTest::create(TYPEPHP_ROOT_PATH);
+        $translator = $compiler;
+        $file = TYPEPHP_ROOT_PATH . '/phpunit/code/interface_const_trait_import.php';
+        $compiler->addFiles([$file]);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        $arginfo = file_get_contents($compiler->getArgInfoHeaderFile($file));
+        self::assertIsString($arginfo);
+        self::assertStringContainsString('ZVAL_LONG(&property_verbosity_default_value, 32);', $arginfo);
+        self::assertStringNotContainsString('ZVAL_LONG(&property_verbosity_default_value, 999);', $arginfo);
     }
 }

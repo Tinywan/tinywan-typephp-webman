@@ -162,12 +162,22 @@ abstract class CompilerBackend
      * Write the object file list to a Response File to avoid exceeding the OS command-line length limit (8191 characters on Windows).
      *
      * @param array  $objectFiles List of object file paths.
-     * @param string $targetFile  Final output file path (the Response File is written to the same directory).
+     * @param string $targetFile  Final output file path.
+     * @param string|null $responseFile Explicit intermediate response-file path.
      * @return string Linker argument, e.g. @build/project.rsp
      */
-    protected function createResponseFile(array $objectFiles, string $targetFile): string
+    protected function createResponseFile(
+        array $objectFiles,
+        string $targetFile,
+        ?string $responseFile = null,
+    ): string
     {
-        $rspFile = dirname($targetFile) . DIRECTORY_SEPARATOR . basename($targetFile) . '.rsp';
+        $rspFile = $responseFile
+            ?? dirname($targetFile) . DIRECTORY_SEPARATOR . basename($targetFile) . '.rsp';
+        $directory = dirname($rspFile);
+        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+            throw new \RuntimeException('Cannot create response-file directory: ' . $directory);
+        }
         $this->lastResponseFile = $rspFile;
         $lines = [];
         foreach ($objectFiles as $file) {

@@ -30,7 +30,9 @@ trait AnonClassGenerator
 {
     public function genAnonClassName(): string
     {
-        return self::ANON_CLASS . $this->anonClassIndex++;
+        $id = $this->getStableCallSiteId('anonymous-class');
+        $this->anonClassIndex = max($this->anonClassIndex, $id + 1);
+        return self::ANON_CLASS . $id;
     }
 
     /** Flatten trait templates before an anonymous class is evaluated by ZendVM. */

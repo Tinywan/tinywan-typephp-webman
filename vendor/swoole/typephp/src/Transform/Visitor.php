@@ -92,6 +92,9 @@ class Visitor extends NodeVisitorAbstract
 
     public function leaveNode(Node $node): null
     {
+        if ($node instanceof Node\FunctionLike) {
+            $this->guard($node, static fn () => CompileTimeAttribute::validateStdContainerParameterTarget($node));
+        }
         $nodeId = spl_object_id($node);
         if (isset($this->propertyMagicBoundaries[$nodeId])) {
             unset($this->propertyMagicBoundaries[$nodeId]);

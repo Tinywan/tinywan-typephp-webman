@@ -178,6 +178,10 @@ trait NativeTypeCompatibilityTrait
         int $argIndex = 0
     ): string
     {
+        $arg = $this->normalizeBareFunctionCallableArgument(
+            $arg,
+            $this->argInfoAcceptsCallable($argInfo),
+        );
         $type = $this->detectTypeOfExpr($arg->value);
         $this->assertExprCanBeUsedAsValue($arg->value, 'function argument');
         if ($this->isVarExpr($arg->value)) {

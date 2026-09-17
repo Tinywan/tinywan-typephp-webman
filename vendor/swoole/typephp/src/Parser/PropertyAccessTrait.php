@@ -1019,8 +1019,12 @@ trait PropertyAccessTrait
                         'offsetUnset',
                         [new Node\Arg($var->dim)],
                     ) . ';';
+                } elseif ($this->getTypedArrayAccessDefinition($var) !== null) {
+                    $lines[] = $this->parseTypedArrayUnset($var) . ';';
                 } elseif ($this->isStdContainerExpr($var)) {
                     $lines[] = $this->parseStdContainerOffsetUnset($var) . ';';
+                } elseif ($var->var instanceof Expr\ArrayDimFetch) {
+                    $lines[] = $this->parseNestedArrayUnset($var) . ';';
                 } else {
                     $array = $this->parseIdentifier($var->var);
                     $dim = $this->parseIdentifier($var->dim);
@@ -1077,6 +1081,9 @@ trait PropertyAccessTrait
                 $this->fatalError($var, 'Attempt to unset static property ' . $this->parseIdentifier($var->class) . '::$' . $this->parseIdentifier($var->name));
             } elseif ($this->isVarExpr($var)) {
                 $name = $this->parseIdentifier($var);
+                if ($this->isStdContainerParameter($name)) {
+                    $this->fatalError($var, 'Std container parameter bindings cannot be unset');
+                }
                 if (!$this->hasVar($name)) {
                     $this->errorUndefinedVariable($var);
                 }
@@ -1115,6 +1122,44 @@ trait PropertyAccessTrait
         }
 
         return implode(PHP_EOL . $this->getIndent(), $lines);
+    }
+
+    /**
+     * Lower nested unset as one operation chain. Unlike an assignment, unset
+     * must neither copy an intermediate array nor create a missing offset.
+     * Materialize the root and every key in PHP evaluation order, even when
+     * a missing intermediate slot later makes the mutation a no-op.
+     */
+    private function parseNestedArrayUnset(Expr\ArrayDimFetch $expr): string
+    {
+        $dimensions = [];
+        $root = $expr;
+        while ($root instanceof Expr\ArrayDimFetch) {
+            if ($root->dim === null) {
+                $this->fatalError($root, 'Cannot use [] for array unset');
+            }
+            array_unshift($dimensions, $root->dim);
+            $root = $root->var;
+        }
+
+        [$rootCode, $rootBefore, $rootAfter] = $this->parseExprWithCapturedStmts($root);
+        $rootName = $this->genTmpVarName();
+        $body = $rootBefore;
+        $body[] = 'auto &&' . $rootName . ' = ' . $rootCode . ';';
+        $operations = [];
+        $cleanup = [];
+        foreach ($dimensions as $dimension) {
+            [$keyCode, $keyBefore, $keyAfter] = $this->parseExprWithCapturedStmts($dimension);
+            array_push($body, ...$keyBefore);
+            $keyName = $this->genTmpVarName();
+            $body[] = 'php::Var ' . $keyName . ' = ' . $keyCode . ';';
+            $operations[] = '{php::ArrayDimFetch, ' . $keyName . '}';
+            array_push($cleanup, ...$keyAfter);
+        }
+        $body[] = 'php::unset(' . $rootName . ', {' . implode(', ', $operations) . '});';
+        array_push($body, ...$cleanup, ...$rootAfter);
+
+        return '[&]() {' . PHP_EOL . implode(PHP_EOL, $body) . PHP_EOL . '}()';
     }
 
     protected function getPropertyIdentifier(Expr\PropertyFetch $expr, NodeAbstract $object, NodeAbstract $property): ?string

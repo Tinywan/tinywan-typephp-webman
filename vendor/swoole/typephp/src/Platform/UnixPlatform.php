@@ -8,6 +8,22 @@ namespace TypePhp\Platform;
  */
 abstract class UnixPlatform extends PlatformBase
 {
+    /** @var array<string, string> */
+    private array $phpDirectoryCache = [];
+    /** @var array<string, string> */
+    private array $phpConfigCache = [];
+    /** @var array<string, list<string>> */
+    private array $phpIncludeCache = [];
+    /** @var array<string, string> */
+    private array $phpConfigValueCache = [];
+
+    private function getPhpSdkCacheKey(string $directory = ''): string
+    {
+        // Scope discovery to this platform instance and the selected environment.
+        // Constructing every compile/cache-key command must not rerun php-config.
+        return serialize([$directory, getenv('PHP_HOME'), getenv('PATH')]);
+    }
+
     public function getSharedLinkFlag(): string
     {
         return '-shared';
@@ -98,6 +114,12 @@ abstract class UnixPlatform extends PlatformBase
 
     public function getPhpDir(): string
     {
+        $key = $this->getPhpSdkCacheKey();
+        return $this->phpDirectoryCache[$key] ??= $this->resolvePhpDir();
+    }
+
+    private function resolvePhpDir(): string
+    {
         $phpDir = getenv('PHP_HOME');
         if (is_string($phpDir) && $phpDir !== '') {
             $phpDir = rtrim($phpDir, '\/');
@@ -174,6 +196,12 @@ abstract class UnixPlatform extends PlatformBase
      */
     public function buildPhpIncludePaths(string $phpDir): array
     {
+        $key = $this->getPhpSdkCacheKey($phpDir);
+        return $this->phpIncludeCache[$key] ??= $this->resolvePhpIncludePaths($phpDir);
+    }
+
+    private function resolvePhpIncludePaths(string $phpDir): array
+    {
         $phpConfigPath = $this->findPhpConfig($phpDir);
         if ($phpConfigPath) {
             $includes = shell_exec(escapeshellarg($phpConfigPath) . ' --includes 2>/dev/null');
@@ -213,6 +241,13 @@ abstract class UnixPlatform extends PlatformBase
      * Locate the php-config executable.
      */
     protected function findPhpConfig(string $phpDir): ?string
+    {
+        $key = $this->getPhpSdkCacheKey($phpDir);
+        // Do not cache failed discovery: an SDK may be installed afterwards.
+        return $this->phpConfigCache[$key] ??= $this->resolvePhpConfig($phpDir);
+    }
+
+    private function resolvePhpConfig(string $phpDir): ?string
     {
         $candidates = [];
         $phpDir = rtrim($phpDir, '/');
@@ -261,6 +296,13 @@ abstract class UnixPlatform extends PlatformBase
         $versioned = $this->findVersionedPhpConfig(dirname(realpath(PHP_BINARY) ?: PHP_BINARY));
         if ($versioned !== null) {
             $candidates[] = $versioned;
+        }
+
+        // Validate preferred installations before invoking the PATH fallback.
+        foreach (array_unique($candidates) as $config) {
+            if ($this->phpConfigMatchesCurrentPhp($config)) {
+                return $config;
+            }
         }
 
         // PATH is only a fallback, and its prefix must match the selected PHP.
@@ -325,11 +367,15 @@ abstract class UnixPlatform extends PlatformBase
 
     protected function getPhpConfigValue(string $phpConfig, string $option): ?string
     {
+        $key = $this->getPhpSdkCacheKey($phpConfig) . "\0" . $option;
+        if (isset($this->phpConfigValueCache[$key])) {
+            return $this->phpConfigValueCache[$key];
+        }
         $value = shell_exec(escapeshellarg($phpConfig) . ' ' . escapeshellarg($option) . ' 2>/dev/null');
         if (!is_string($value) || trim($value) === '') {
             return null;
         }
-        return trim($value);
+        return $this->phpConfigValueCache[$key] = trim($value);
     }
 
     protected function resolvePhpLibDir(string $phpDir): ?string

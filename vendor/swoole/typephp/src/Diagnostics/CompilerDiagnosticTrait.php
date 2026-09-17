@@ -13,6 +13,7 @@ use PhpParser\Node\Expr\Variable;
 
 trait CompilerDiagnosticTrait
 {
+    protected int $preprocessingWarningCount = 0;
     /**
      * Report a compiler fatal error.
      */
@@ -28,6 +29,7 @@ trait CompilerDiagnosticTrait
 
     protected function warning(Node $node, string $msg): void
     {
+        $this->preprocessingWarningCount++;
         $this->getDiagnosticReporter()->warning($node, $this->file, $msg);
     }
 

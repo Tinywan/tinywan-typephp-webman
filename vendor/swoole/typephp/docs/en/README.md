@@ -15,11 +15,13 @@ This directory contains compiler implementation, compatibility, build-mode, and 
 - [Three Object Storage and Passing Models](OBJECT_STORAGE_AND_PASSING_MODELS.md): the responsibilities, ABI, and non-substitutable boundaries of Zend Object, PHPX Box, and Native Class Object.
 - [Universal and Extension Methods](UNIVERSAL_METHODS.md), [Generator](YIELD_GENERATOR.md).
 - [`#[Immutable]` compile-time read-only contract](IMMUTABLE.md): methods, parameters, aliases, call boundaries, and dynamic escape rules.
-- [`#[ArrayDef]` array property contract](ARRAY_DEF.md): List/Map metadata, direct-write checks, and dynamic escape boundaries.
+- [Typed PHP arrays and type annotations](TYPED_ARRAYS.md): StdList/StdDict metadata, direct-write checks, and dynamic escape boundaries.
 - [Class Inheritance](CLASS_INHERITANCE.md), [Mixed C++/PHP](MIXED_CPP_PHP.md).
 
 ## Architecture and maintenance
 
+- [Unified Type Annotation Design](TYPE_ANNOTATIONS.md): StdArray/StdVector/StdMap/StdOrderedMap/StdList/StdDict contracts, storage, indices, and dynamic boundaries, distinguishing implementation from target design.
+- [StdFunc / StdArgInfo Type Annotation Design](STD_FUNC_DESIGN.md): proposed signatures, Nullable, references, Optional, Variadic, and caller-side default completion; not implemented.
 - [Backend-Neutral IR](BACKEND_NEUTRAL_IR.md)
 - [TypePHP WASM Technical Plan and Implementation Plan](TYPEPHP_WASM_IMPLEMENTATION_PLAN.md)
 - [Building TypePHP WASI Programs](WASI_BUILD.md)

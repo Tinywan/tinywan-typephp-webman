@@ -1,5 +1,7 @@
 # Swoole AOT 强类型高性能容器，数组访问性能提升 10 倍
 
+本文侧重 C++ 容器。`StdArray` / `StdVector` / `StdMap` / `StdOrderedMap` / `StdList` / `StdDict` 统一称为“类型注解”，完整设计与不同存储边界见 [类型注解统一设计](TYPE_ANNOTATIONS.md)。普通 PHP 数组模型的 list/dict 见 [强类型 PHP 数组](TYPED_ARRAYS.md)。
+
 > Std Container 使用 PHPX Box 保存具体 C++ 模板实例。它与普通 Zend Object、Native
 > Class Object 的存储和传递边界见
 > [OBJECT_STORAGE_AND_PASSING_MODELS.md](OBJECT_STORAGE_AND_PASSING_MODELS.md)。

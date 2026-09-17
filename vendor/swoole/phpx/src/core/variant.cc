@@ -488,11 +488,11 @@ Variant Variant::getProperty(const Variant &name) const {
     auto zk = NO_CONST_V(name);
     auto prop_name = zval_get_string(zk);
     Variant prop_value;
-    try {
+    PHPX_TRY {
         prop_value = getProperty(prop_name);
-    } catch (...) {
+    } PHPX_CATCH_ALL {
         zend_string_release(prop_name);
-        throw;
+        PHPX_RETHROW();
     }
     zend_string_release(prop_name);
     return prop_value;
@@ -502,11 +502,11 @@ void Variant::setProperty(const Variant &name, const Variant &value) const {
     checkedObject("Attempt to write property");
     auto zk = NO_CONST_V(name);
     auto prop_name = zval_get_string(zk);
-    try {
+    PHPX_TRY {
         setProperty(prop_name, value);
-    } catch (...) {
+    } PHPX_CATCH_ALL {
         zend_string_release(prop_name);
-        throw;
+        PHPX_RETHROW();
     }
     zend_string_release(prop_name);
 }
@@ -524,11 +524,11 @@ void Variant::unsetProperty(const Variant &name) {
     checkedObject("Attempt to unset property");
     auto zk = NO_CONST_V(name);
     auto prop_name = zval_get_string(zk);
-    try {
+    PHPX_TRY {
         unsetProperty(prop_name);
-    } catch (...) {
+    } PHPX_CATCH_ALL {
         zend_string_release(prop_name);
-        throw;
+        PHPX_RETHROW();
     }
     zend_string_release(prop_name);
 }
@@ -1138,7 +1138,7 @@ Variant Variant::item(const Variant &key, bool update) {
                 retval = zend_hash_next_index_insert(Z_ARRVAL_P(zvar), undef());
             } else {
                 auto skey = key.toString();
-                retval = zend_hash_update(Z_ARRVAL_P(zvar), skey.str(), undef());
+                retval = zend_symtable_update(Z_ARRVAL_P(zvar), skey.str(), undef());
             }
         } else {
             throwError("Only array/object/string support the item() method, type `%s` given", typeStr());

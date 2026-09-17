@@ -776,6 +776,37 @@ YAML, 'myproject.yml', 'nested/config');
         $this->assertSame([$projectDir . '/libs'], $this->compiler->getLinkPaths());
         $this->assertSame($projectDir . '/bin', $this->getPropertyValue('outputDir'));
         $this->assertSame('my_app', $this->getPropertyValue('targetName'));
+        $this->assertSame($projectDir . '/bin/my-app', $this->invokeMethod('getTargetFileName'));
+    }
+
+    public function testParseProjectYamlAddsPrecompiledObjectsAsGenericLinkInputs(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+objects:
+  - build/startup.o
+  - path: build/platform.obj
+    if: PHP_OS_FAMILY == "Linux"
+  - path: build/windows.obj
+    if: PHP_OS_FAMILY == "Windows"
+cxx-flags: [-fno-exceptions, -fno-rtti]
+c-flags: -ffreestanding -fno-builtin
+asm-flags:
+  - -m64
+  - -mno-red-zone
+YAML, 'objects.yml', 'native-objects');
+
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+
+        $projectDir = dirname($projectFile);
+        $this->assertSame([
+            $projectDir . '/build/startup.o',
+            $projectDir . '/build/platform.obj',
+        ], $this->compiler->getProjectObjectFiles());
+        $this->assertSame('-fno-exceptions -fno-rtti', $this->getPropertyValue('cxxFlags'));
+        $this->assertSame('-ffreestanding -fno-builtin', $this->getPropertyValue('cFlags'));
+        $this->assertSame('-m64 -mno-red-zone', $this->getPropertyValue('asmFlags'));
     }
 
     public function testCliOutputOverridesYamlOutputOnlyWhenCommandLineArgumentsAreApplied(): void
@@ -832,6 +863,25 @@ YAML);
         $this->assertTrue($this->compiler->isLtoEnabled());
         $this->assertSame(['yamlssl'], $this->compiler->getLinkLibs());
         $this->assertSame(['/yaml/lib'], $this->compiler->getLinkPaths());
+    }
+
+    public function testNanoModePermitsTargetStaticLibraries(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+link-libs:
+  - typephp-os
+link-paths:
+  - build
+YAML);
+
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->setPropertyValue('nanoMode', true);
+        $this->invokeMethod('applyCommandLineArguments');
+
+        $this->assertSame(['typephp-os'], $this->compiler->getLinkLibs());
+        $this->assertSame([dirname($projectFile) . '/build'], $this->compiler->getLinkPaths());
     }
 
     public function testParseProjectYamlFiltersIgnoredFilesFromReturnedSources(): void
@@ -1449,7 +1499,7 @@ YAML);
         $this->assertStringContainsString('extern php::Var _const_var_EXPORTED_ABI_STRING;', $dataHeader);
         $this->assertStringContainsString('extern php::Var _const_var_EXPORTED_ABI_ARRAY;', $dataHeader);
         $this->assertStringContainsString(
-            'ZEND_ATTRIBUTE_CONST php::Str &get_str(uint32_t index);',
+            'ZEND_ATTRIBUTE_CONST php::Str &get_str(uint32_t index) noexcept;',
             $dataHeader,
         );
         $this->assertStringNotContainsString('_literal_strings', $dataHeader);
@@ -1460,6 +1510,7 @@ YAML);
         $extension = file_get_contents($extensionFile);
         $this->assertStringContainsString('php::Str php_exported_defaults_arg_0_default_value() {', $extension);
         $this->assertStringContainsString('static php::Str _literal_strings[]', $extension);
+        $this->assertStringContainsString('php::Str &get_str(uint32_t index) noexcept {', $extension);
         $this->assertStringContainsString('return get_str(', $extension);
         $this->assertStringContainsString('php::Array php_exported_variadic_arg_0_default_value() {', $extension);
     }
@@ -1782,7 +1833,7 @@ YAML);
         $options = $this->invokeMethod('getCompileCommandOptions');
 
         $this->assertContains('TYPEPHP_ABI_DEFAULTS_EXPORTS=1', $options['user_defines']);
-        $this->assertStringEndsWith('/php_abi_defaults_func_decl.h', $options['forced_include']);
+        $this->assertStringEndsWith('/php_abi_defaults_all_decl.h', $options['forced_include']);
         if (!$this->compiler->isWindows()) {
             $flags = $this->getPropertyValue('compilerBackend')->buildCompileOptions($options->toArray());
             $this->assertStringContainsString('-fvisibility=hidden', $flags);

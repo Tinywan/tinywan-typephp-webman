@@ -19,6 +19,7 @@ use TypePhp\Platform\Windows;
 
 trait SourcePipelineTrait
 {
+    use PreparedProjectCacheTrait;
     /**
      * Prepare PHP inputs for the Composer php-nano source-composition build.
      *
@@ -48,6 +49,9 @@ trait SourcePipelineTrait
         $this->targetPlatform = $wasi ? 'wasm32-wasip2' : '';
         $this->setTargetName($targetName);
         $this->setBuildDir($buildDir);
+        if ($this->climate->arguments->defined('force')) {
+            $this->clearIncrementalBuildCache();
+        }
 
         $resolvedFiles = [];
         foreach ($files as $file) {
@@ -86,7 +90,9 @@ trait SourcePipelineTrait
         $resolvedFiles = array_values($resolvedFiles);
         $this->composeTraitDeclarations($resolvedFiles);
         $this->discoverNativeGlobalObjects($resolvedFiles);
-        return $this->getSortedFiles($resolvedFiles);
+        $resolvedFiles = $this->getSortedFiles($resolvedFiles);
+        $this->initializeIncrementalCompilation($resolvedFiles);
+        return $resolvedFiles;
     }
 
     public function addFiles(array $files): void
@@ -128,6 +134,10 @@ trait SourcePipelineTrait
         // Apply command-line arguments after all configuration is loaded (so they
         // take the highest precedence)
         $this->applyCommandLineArguments();
+        if ($this->climate->arguments->defined('force')) {
+            $this->clearIncrementalBuildCache();
+        }
+        $this->validateProjectObjectFiles();
 
         // The generated public import stub is an output artifact, not an input
         // of the library that produced it. Exclude a previous build's copy when
@@ -215,6 +225,14 @@ trait SourcePipelineTrait
         }
 
         $files = $this->filterIgnoredFiles($files);
+        $preparedKey = $this->preparedProjectKey($files);
+        if ($this->restorePreparedProject($preparedKey)) {
+            $files = $this->getSortedFiles($files);
+            $this->initializeIncrementalCompilation($files);
+            return $files;
+        }
+        $warningsBefore = $this->preprocessingWarningCount;
+        $inputCount = count($files);
         $this->discoverNativeClassDeclarations($files);
         // Analyze and preprocess the PHP files
         foreach ($files as $k => $file) {
@@ -238,7 +256,11 @@ trait SourcePipelineTrait
         // pointer ABI now, after declarations are known and before the first
         // per-file C++ body is generated.
         $this->discoverNativeGlobalObjects(array_values($files));
+        if (count($files) === $inputCount && $this->preprocessingWarningCount === $warningsBefore) {
+            $this->storePreparedProject($preparedKey);
+        }
         $files = $this->getSortedFiles($files);
+        $this->initializeIncrementalCompilation($files);
         return $files;
     }
 
@@ -333,13 +355,35 @@ trait SourcePipelineTrait
 
     public function convert(array $files): array
     {
-        $this->composeTraitDeclarations($files);
-        $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
+        $this->compilationStatistics->begin();
+        $previousSplitSetting = $this->splitTranslationUnitsEnabled;
+        $this->splitTranslationUnitsEnabled = true;
+        $previousPhase = null;
         try {
+            $this->composeTraitDeclarations($files);
+            $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
+            // Hydrate persistent literal/resource IDs before any unchanged
+            // translation unit or declaration header is reused.
+            $this->getStableIdRegistry();
             // All declarations are now known. Lower declaration constant
             // expressions before translating any function body so cache IDs
             // are assigned exclusively in the convert phase.
-            $this->finalizeDeclarationExpressions($files);
+            $this->finalizeDeclarationExpressions($this->getDeclarationInputFiles($files));
+            // Whole-program extension generation must not depend on conversion
+            // side effects from dirty files. Clean incremental files are not
+            // converted, but their non-empty property defaults still require a
+            // custom allocation path in the regenerated module entry.
+            $this->finalizeRequestArrayDefaultMetadata();
+            $this->initializeDeclarationHeaderFiles($files);
+            $this->restoreCleanIncrementalMetadata($files);
+
+            // Native/import stubs are declaration inputs, not ordinary PHP
+            // bodies. Their Zend metadata still belongs to the module entry.
+            foreach ($this->getDeclarationInputFiles($files) as $file) {
+                if ($this->isStubFile($file) && $this->shouldRegeneratePhpFile($file)) {
+                    $this->genStubFile($file);
+                }
+            }
 
             $sourceFiles = [];
             $validSourceCount = 0;
@@ -347,7 +391,35 @@ trait SourcePipelineTrait
             foreach ($files as $k => $file) {
                 try {
                     if (FileScanner::isPhpFile($file)) {
-                        $cppFile = $this->convertFile($file);
+                        $path = realpath($file) ?: $file;
+                        if (!$this->shouldRegeneratePhpFile($path)) {
+                            $validSourceCount++;
+                            if ($this->incrementalTranslationUnitWasEmitted($path)) {
+                                $cppFile = $this->getCppFile($path);
+                                $this->registerGeneratedProjectSource($cppFile);
+                                $sourceFiles[] = $cppFile;
+                                foreach ($this->getSplitTranslationUnits($path) as $part) {
+                                    $this->registerGeneratedProjectSource($part);
+                                    $sourceFiles[] = $part;
+                                }
+                            }
+                            $this->climate->darkGray(
+                                '[cached] ' . $this->getRelativePath($path),
+                            );
+                            continue;
+                        }
+                        $statisticsBefore = $this->compilationStatistics->all();
+                        // A dirty dependency means code generation must run;
+                        // it does not mean the generated bytes changed. Keep
+                        // an existing translation unit's timestamp when the
+                        // output is identical, matching CMake/Ninja's restat
+                        // model and preventing needless native recompilation.
+                        $cppFile = $this->convertFile($path);
+                        $this->recordIncrementalConversion(
+                            $path,
+                            $cppFile !== null,
+                            $this->compilationStatistics->delta($statisticsBefore),
+                        );
                     } elseif (FileScanner::isNativeSourceFile($file)) {
                         $cppFile = $file;
                     } else {
@@ -356,6 +428,12 @@ trait SourcePipelineTrait
                     $validSourceCount++;
                     if ($cppFile !== null) {
                         $sourceFiles[] = $cppFile;
+                        if (FileScanner::isPhpFile($file)) {
+                            foreach ($this->getSplitTranslationUnits($file) as $part) {
+                                $this->registerGeneratedProjectSource($part);
+                                $sourceFiles[] = $part;
+                            }
+                        }
                     }
                 } catch (Unsupported $e) {
                     echo ' unsupported syntax: ' . $e->getMessage() . "\n";
@@ -363,6 +441,7 @@ trait SourcePipelineTrait
                     unset($files[$k]);
                 }
             }
+            $this->finalizeIncrementalConversionMetadata($files);
 
             // A valid PHP input may intentionally emit no standalone translation
             // unit (for example a compile-time trait or an interface). The shared
@@ -378,20 +457,32 @@ trait SourcePipelineTrait
                 $this->genLibraryImportStub($files);
             }
 
-            // Generate the build-time internal headers: function declarations and
-            // runtime data declarations
-            $this->genFunctionDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_func_decl.h");
-            $this->genDataDeclarations($this->getIncludeDir() . "/php_{$this->targetName}_data_decl.h");
+            // Function and data declarations are emitted together, one header
+            // per PHP source, plus a small project-runtime ABI header.
+            $this->genDeclarationHeaders($files);
+            // Large array-valued class constants used to make module_init() one
+            // enormous GCC optimization unit. Emit their request-lifecycle
+            // helpers as independent, cacheable translation units while the
+            // arginfo-backed class registration remains in extension-*.cc.
+            foreach ($this->genClassArrayConstantLifecycleSources() as $lifecycleSource) {
+                $sourceFiles[] = $lifecycleSource;
+            }
             // Nano keeps the ordinary statically registered Zend class/module
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
             if ($this->isNanoMode()) {
                 $sourceFiles[] = $this->genNanoEntrypoint();
             }
+            $this->getStableIdRegistry()->flush();
+            $this->saveIncrementalCompilationState($files);
 
             return $sourceFiles;
         } finally {
-            $this->restoreCompilerPhase($previousPhase);
+            $this->splitTranslationUnitsEnabled = $previousSplitSetting;
+            if ($previousPhase !== null) {
+                $this->restoreCompilerPhase($previousPhase);
+            }
+            $this->compilationStatistics->finish();
         }
     }
 }

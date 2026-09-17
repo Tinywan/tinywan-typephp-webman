@@ -300,14 +300,17 @@ class TunnelWindowBox final : public Box {
         auto *remove = new QPushButton(tr("删除"));
         startButton_ = new QPushButton(tr("启动"));
         stopButton_ = new QPushButton(tr("停止"));
+        startAllButton_ = new QPushButton(tr("全部启动"));
         startButton_->setEnabled(false);
         stopButton_->setEnabled(false);
+        startAllButton_->setEnabled(false);
         auto *buttons = new QHBoxLayout();
         buttons->addWidget(add);
         buttons->addWidget(edit);
         buttons->addWidget(remove);
         buttons->addWidget(clearLogButton_);
         buttons->addStretch();
+        buttons->addWidget(startAllButton_);
         buttons->addWidget(startButton_);
         buttons->addWidget(stopButton_);
         layout->addLayout(buttons);
@@ -326,6 +329,10 @@ class TunnelWindowBox final : public Box {
             if (QMessageBox::question(window_, tr("删除规则"), tr("确认删除选中的隧道规则？")) == QMessageBox::Yes) {
                 enqueue("delete", id);
             }
+        });
+        QObject::connect(startAllButton_, &QPushButton::clicked, window_, [this]() {
+            startAllButton_->setEnabled(false);
+            enqueue("start_all");
         });
         QObject::connect(startButton_, &QPushButton::clicked, window_, [this]() {
             const QString id = selectedId();
@@ -602,6 +609,18 @@ class TunnelWindowBox final : public Box {
     }
 
     void updateActionButtons() {
+        // "Start all" is independent of the table selection: it only needs at
+        // least one rule that is neither running nor transitioning.
+        bool anyStartable = false;
+        for (auto it = statuses_.constBegin(); it != statuses_.constEnd(); ++it) {
+            const QString &status = it.value();
+            if (status != "running" && status != "starting" && status != "stopping") {
+                anyStartable = true;
+                break;
+            }
+        }
+        startAllButton_->setEnabled(anyStartable);
+
         const QString id = selectedId();
         if (id.isEmpty()) {
             startButton_->setEnabled(false);
@@ -690,6 +709,7 @@ class TunnelWindowBox final : public Box {
     QPlainTextEdit *log_ = nullptr;
     QPushButton *startButton_ = nullptr;
     QPushButton *stopButton_ = nullptr;
+    QPushButton *startAllButton_ = nullptr;
     QPushButton *clearLogButton_ = nullptr;
     QHash<QString, RuleForm> rules_;
     QHash<QString, QString> statuses_;

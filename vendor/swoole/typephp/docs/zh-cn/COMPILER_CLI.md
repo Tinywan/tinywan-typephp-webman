@@ -117,6 +117,25 @@ TypePHP 和 PHPX 的最低运行时版本均为 PHP 8.4。`--php-version` 与实
 
 传入 `project.yml` 时，命令行参数优先于 YAML 中的同名配置。项目文件格式参见用户文档及代码中的项目配置解析器。
 
+### 预编译对象文件
+
+项目可以把外部工具链生成的对象文件作为通用链接输入：
+
+```yaml
+objects:
+  - build/startup.o
+  - path: build/platform.obj
+    if: PHP_OS_FAMILY == "Windows"
+```
+
+路径相对于 `project.yml` 解析，并支持与 `sources` 相同的条件表达式。
+`tpc` 只负责装载并链接 `.o`/`.obj`，不会重新编译其对应的 C、C++ 或汇编源码。
+使用项目通用编译参数的原生源码应继续放在 `sources`；`objects` 主要用于单独编译
+且与最终目标 ABI 兼容的编译单元。`-m32` 对象不能直接链接到 64 位目标，需要在
+tpc 产出 ELF 后由项目自己的构建流程另行封装。
+使用 `cxx-flags`、`c-flags`、`asm-flags` 和 `ld-flags` 分别设置项目级
+C++、C、汇编和链接参数。
+
 ### PHP 扩展依赖
 
 程序依赖其他 PHP 扩展时，可以将必需模块写入 Zend 模块依赖表：

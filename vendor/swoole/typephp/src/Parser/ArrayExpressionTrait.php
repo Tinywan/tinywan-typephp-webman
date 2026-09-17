@@ -192,6 +192,12 @@ trait ArrayExpressionTrait
 
     protected function parseArrayDimFetch(Expr\ArrayDimFetch $node): string
     {
+        if ($this->getTypedArrayAccessDefinition($node) !== null) {
+            if ($this->isArrayDimFetchUpdate($node)) {
+                $this->fatalError($node, 'Typed array writes must use checked element assignment');
+            }
+            return $this->parseTypedArrayRead($node);
+        }
         if ($this->isNativeObjectClass($this->detectClassOfExpr($node->var))) {
             if ($node->dim === null) {
                 $this->fatalError($node, 'Cannot use [] for reading');

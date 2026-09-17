@@ -140,14 +140,6 @@ abstract class PlatformBase
         return $warnings;
     }
 
-    /**
-     * Whether this platform is suitable for parallel compilation using pcntl_fork.
-     */
-    public function supportsPcntlParallelCompile(): bool
-    {
-        return true;
-    }
-
     public function getIntegerLiteralSuffix(): string
     {
         return 'LL';

@@ -398,8 +398,9 @@ class PlatformTest extends TestCase
         mkdir($wrongInclude, 0755, true);
 
         $versionedConfig = $phpHome . '/bin/php-config' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        $queryLog = $root . '/queries.log';
         $wrongMinor = PHP_MINOR_VERSION === 4 ? 5 : 4;
-        $this->writePhpConfig($versionedConfig, PHP_VERSION, $phpHome, $rightInclude);
+        $this->writePhpConfig($versionedConfig, PHP_VERSION, $phpHome, $rightInclude, $queryLog);
         $this->writePhpConfig(
             $phpHome . '/bin/php-config',
             PHP_MAJOR_VERSION . '.' . $wrongMinor . '.0',
@@ -414,11 +415,26 @@ class PlatformTest extends TestCase
 
             $this->assertSame($phpHome, $platform->getPhpDir());
             $this->assertSame([$rightInclude], $platform->buildPhpIncludePaths($phpHome));
+            for ($i = 0; $i < 10; ++$i) {
+                $this->assertSame($phpHome, $platform->getPhpDir());
+                $this->assertSame([$rightInclude], $platform->buildPhpIncludePaths($phpHome));
+            }
+            $this->assertSame("--version\n--includes\n", file_get_contents($queryLog));
+
+            // A changed authoritative environment must not reuse the old SDK.
+            putenv('PHP_HOME=' . $root . '/missing');
+            try {
+                $platform->getPhpDir();
+                $this->fail('Expected changed PHP_HOME to be validated');
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('PHP_HOME is not a directory', $e->getMessage());
+            }
         } finally {
             $previousPhpHome === false
                 ? putenv('PHP_HOME')
                 : putenv('PHP_HOME=' . $previousPhpHome);
             unlink($versionedConfig);
+            unlink($queryLog);
             unlink($phpHome . '/bin/php-config');
             rmdir($rightInclude);
             rmdir($wrongInclude);
@@ -455,7 +471,7 @@ class PlatformTest extends TestCase
         }
     }
 
-    private function writePhpConfig(string $path, string $version, string $prefix, string $include): void
+    private function writePhpConfig(string $path, string $version, string $prefix, string $include, ?string $queryLog = null): void
     {
         $script = sprintf(
             "#!/bin/sh\ncase \"\$1\" in\n  --version) printf '%%s\\n' %s ;;\n  --prefix) printf '%%s\\n' %s ;;\n  --includes) printf '%%s\\n' %s ;;\nesac\n",
@@ -463,6 +479,9 @@ class PlatformTest extends TestCase
             escapeshellarg($prefix),
             escapeshellarg('-I' . $include),
         );
+        if ($queryLog !== null) {
+            $script = str_replace("#!/bin/sh\n", "#!/bin/sh\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($queryLog) . "\n", $script);
+        }
         file_put_contents($path, $script);
         chmod($path, 0755);
     }

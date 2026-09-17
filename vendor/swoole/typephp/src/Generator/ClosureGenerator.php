@@ -182,6 +182,9 @@ trait ClosureGenerator
 
             foreach ($capturePlan['bindings'] as $binding) {
                 $this->addArgument($binding['name'], $binding['type']);
+                if ($binding['typedArray'] !== null) {
+                    $this->context->typedArrays[$binding['name']] = $binding['typedArray'];
+                }
                 if ($binding['class'] !== '') {
                     $this->addObject($binding['name'], $binding['class']);
                 }
@@ -217,7 +220,7 @@ trait ClosureGenerator
      * @param list<Node\ClosureUse> $uses
      * @return array{
      *     cpp: list<string>,
-     *     bindings: list<array{name: string, type: string, class: string, immutable: bool, immutableObject: bool}>
+     *     bindings: list<array{name: string, type: string, class: string, immutable: bool, immutableObject: bool, typedArray: ?array}>
      * }|null
      */
     private function buildNativeLocalClosureCapturePlan(array $uses): ?array
@@ -271,6 +274,7 @@ trait ClosureGenerator
                 'class' => $valueType === Type::OBJECT ? $this->getDeclaredObjectType($name) : '',
                 'immutable' => isset($this->context->immutableVars[$name]),
                 'immutableObject' => isset($this->context->immutableObjectVars[$name]),
+                'typedArray' => $this->context->typedArrays[$name] ?? null,
             ];
         }
         return ['cpp' => $cpp, 'bindings' => $bindings];
@@ -532,8 +536,17 @@ trait ClosureGenerator
 
         foreach ($uses as $i => $useItem) {
             $var = $this->parseIdentifier($useItem->var);
-            $code .= 'auto ' . $var . ' = vars_.get(' . $i . ');' . PHP_EOL;
-            $this->addArgument($var, Type::VAR);
+            if (isset($oriContext->typedArrays[$var])) {
+                if ($useItem->byRef) {
+                    $this->fatalError($useItem, 'Typed arrays cannot be captured by reference');
+                }
+                $code .= 'php::Array ' . $var . ' = php::toArray(vars_.get(' . $i . '));' . PHP_EOL;
+                $this->addArgument($var, Type::ARRAY);
+                $this->context->typedArrays[$var] = $oriContext->typedArrays[$var];
+            } else {
+                $code .= 'auto ' . $var . ' = vars_.get(' . $i . ');' . PHP_EOL;
+                $this->addArgument($var, Type::VAR);
+            }
             if (isset($oriContext->immutableVars[$var])) {
                 $this->context->immutableVars[$var] = true;
                 if (isset($oriContext->immutableObjectVars[$var])) {

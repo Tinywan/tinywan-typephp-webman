@@ -166,6 +166,71 @@ trait MethodCallTrait
         return $this->hasClass($class) && ($this->getClass($class)->flags & Modifiers::FINAL) !== 0;
     }
 
+    /**
+     * A typed property declaration can describe call arguments without proving
+     * the receiver's concrete runtime class. Private methods are the one
+     * exception: a child may declare an unrelated public method with the same
+     * name and a different signature, so an inaccessible private declaration
+     * cannot be used as the runtime call's signature contract.
+     */
+    protected function getTypedPropertyMethodSignatureClass(string $class, string $method): string
+    {
+        if ($class === '' || $method === '') {
+            return '';
+        }
+
+        if ($this->hasInterface($class)) {
+            return $this->findAotMethodFunctionDef($class, $method) !== null ? $class : '';
+        }
+        if (!$this->hasClass($class)) {
+            return '';
+        }
+
+        $classDef = $this->getClass($class);
+        while (true) {
+            if ($classDef->hasMethod($method) || $classDef->hasAbstractMethod($method)) {
+                $flags = $classDef->getMethodFlags($method);
+                // Protected overrides must keep the parent's by-reference
+                // contract even when they widen visibility to public. Private
+                // methods are unrelated declarations and cannot describe a
+                // runtime child method or __call() arguments.
+                return ($flags & Modifiers::PRIVATE) && !$this->checkAccessible($classDef, $flags)
+                    ? ''
+                    : $class;
+            }
+            if (!$classDef->extends || !$this->hasClass($classDef->extends)) {
+                break;
+            }
+            $classDef = $this->getClass($classDef->extends);
+        }
+
+        // A class may inherit its declaration from an implemented interface.
+        return $this->findAotMethodFunctionDef($class, $method) !== null ? $class : '';
+    }
+
+    /**
+     * A final property class is exact enough for a native call only when its
+     * resolved method is accessible from the current lexical scope. An
+     * inaccessible method may instead dispatch to __call() at runtime.
+     */
+    protected function hasInaccessibleTypedPropertyMethod(string $class, string $method): bool
+    {
+        if ($class === '' || $method === '' || !$this->hasClass($class)) {
+            return false;
+        }
+
+        $classDef = $this->getClass($class);
+        while (true) {
+            if ($classDef->hasMethod($method) || $classDef->hasAbstractMethod($method)) {
+                return !$this->checkAccessible($classDef, $classDef->getMethodFlags($method));
+            }
+            if (!$classDef->extends || !$this->hasClass($classDef->extends)) {
+                return false;
+            }
+            $classDef = $this->getClass($classDef->extends);
+        }
+    }
+
     protected function getMethodFlags(string $class, string $method): int
     {
         if (!$this->hasClass($class)) {
@@ -477,11 +542,13 @@ trait MethodCallTrait
             if ($nativeFunc === false) {
                 $this->fatalError($expr, "Native parent class `{$parentClass}` has no method `{$method}()`");
             }
-            if ($expr->args === []) {
-                return self::PREFIX . $nativeFunc . '(this_)';
-            }
-            return self::PREFIX . $nativeFunc . '(this_, '
-                . $this->parseNativeCallArgs($expr->args, $nativeFunc) . ')';
+            return 'this_.' . $this->getNativeObjectCppName($parentClass) . '::'
+                . $this->getNativeObjectMethodCppName($method) . '('
+                . $this->parseNativeCallArgs(
+                    $expr->args,
+                    $nativeFunc,
+                    materializeTrailingDefaults: true,
+                ) . ')';
         }
         $staticCall = false;
         if ($this->isIdExpr($expr->name)) {
@@ -543,9 +610,16 @@ trait MethodCallTrait
         if ($this->containsNullsafeChain($expr->var)) {
             return $this->parseNullsafeExpr($expr);
         }
+        if ($this->isNamedMethod($expr->name)
+            && in_array($expr->name->toString(), ['toStdList', 'toStdDict'], true)) {
+            return $this->parseTypedArrayConversionCall($expr);
+        }
 
         $class = '';
         $materializedNativeReceiver = false;
+        $materializedTypedPropertyReceiver = false;
+        $typedPropertyReceiver = false;
+        $typedPropertyFinalClass = '';
         // C++17 sequences a member-call receiver before its arguments, but
         // lowering an argument may hoist captured beforeStmtLines ahead of the
         // whole call. Materialize an effectful receiver before parsing args.
@@ -554,6 +628,42 @@ trait MethodCallTrait
             $object = $this->materializeNativeObjectReceiver($expr->var, $receiverClass);
             $class = $receiverClass;
             $materializedNativeReceiver = true;
+        } elseif (($expr->var instanceof Expr\PropertyFetch || $expr->var instanceof Expr\StaticPropertyFetch)
+            && $this->isIdExpr($expr->var->name)) {
+            // A declared object property supplies a method signature, but only
+            // a non-nullable final class proves the concrete receiver needed
+            // for a direct native call. Materialize either kind of property
+            // once before arguments (including hook getters).
+            $resolvedStaticProperty = false;
+            if ($expr->var instanceof Expr\PropertyFetch) {
+                $this->getPropertyIdentifier($expr->var, $expr->var->var, $expr->var->name);
+            } else {
+                $resolution = $this->resolveNativeStaticPropertyFetch($expr->var);
+                $resolvedStaticProperty = $resolution !== null && $resolution->class !== null;
+            }
+            $property = $this->getNativePropertyDef($expr->var);
+            if ($property !== null
+                && ($property->type === Type::OBJECT
+                    || ($property->nullable && $property->type === Type::VAR))
+                && $property->class !== ''
+                && ($this->hasClass($property->class) || $this->hasInterface($property->class))
+                && !$this->isNativeObjectClass($property->class)
+                && ($expr->var instanceof Expr\PropertyFetch || $resolvedStaticProperty)
+            ) {
+                $object = $this->parseOrderedOperand($expr->var, false, true);
+                $class = $property->class;
+                $typedPropertyReceiver = true;
+                if (!$property->nullable && $this->isFinalClass($property->class)) {
+                    $typedPropertyFinalClass = $property->class;
+                }
+            } else {
+                $object = empty($expr->args)
+                    ? $this->parseIdentifier($expr->var)
+                    : $this->parseOrderedOperand($expr->var, false);
+                if (empty($expr->args)) {
+                    $object = '(' . $object . ')';
+                }
+            }
         } else {
             $object = empty($expr->args)
                 ? $this->parseIdentifier($expr->var)
@@ -627,6 +737,38 @@ trait MethodCallTrait
         // Re-checking isNamedMethod() does not prove the earlier assignment to
         // static analyzers and previously left the object path uninitialized.
         $methodName = $this->isNamedMethod($expr->name) ? $expr->name->toString() : '';
+        $typedPropertyLexicalPrivateClass = '';
+        if ($typedPropertyReceiver
+            && $methodName !== ''
+            && $this->classDef !== null
+            && $this->methodDef !== null
+        ) {
+            $scopeClass = $this->classDef->getNamespacedName(false);
+            // Private methods are lexically scoped. Check only this class's
+            // own declaration: an inherited private method has a different
+            // lexical scope and must not affect this call.
+            if ($this->classDef->hasMethod($methodName)
+                && ($this->classDef->getMethodFlags($methodName) & Modifiers::PRIVATE)
+                && $this->isSameOrSubclassOf($class, $scopeClass)
+            ) {
+                $typedPropertyLexicalPrivateClass = $scopeClass;
+            }
+        }
+        $typedPropertyHasInaccessibleMethod = $typedPropertyReceiver
+            && $typedPropertyLexicalPrivateClass === ''
+            && $this->hasInaccessibleTypedPropertyMethod($class, $methodName);
+        $typedPropertySignatureClass = $typedPropertyReceiver
+            ? ($typedPropertyLexicalPrivateClass !== ''
+                ? $typedPropertyLexicalPrivateClass
+                : $this->getTypedPropertyMethodSignatureClass($class, $methodName))
+            : $class;
+        if ($typedPropertyFinalClass !== ''
+            && $typedPropertyLexicalPrivateClass === ''
+            && !$typedPropertyHasInaccessibleMethod
+        ) {
+            $this->addObject($object, $typedPropertyFinalClass);
+            $materializedTypedPropertyReceiver = true;
+        }
 
         $pythonFacadeCall = $this->parsePythonNativeFacadeMethodCall($expr, $object);
         if ($pythonFacadeCall !== null) {
@@ -700,7 +842,8 @@ trait MethodCallTrait
         }
 
         // Method calls that can be lowered to a native call
-        if (($this->isVarExpr($expr->var) || $materializedNativeReceiver) and $this->isNamedMethod($expr->name)) {
+        if (($this->isVarExpr($expr->var) || $materializedNativeReceiver || $materializedTypedPropertyReceiver)
+            and $this->isNamedMethod($expr->name)) {
             $type = $this->getVarType($object);
             if ($class !== '' && $this->isNativeObjectClass($class)) {
                 // Native objects have their own C++ virtual thunk for an
@@ -748,12 +891,14 @@ trait MethodCallTrait
                         deferTrailingDefaults: true,
                     ) . ')';
                 }
-                $receiver = $this->getNativeObjectReceiver($object);
-                if ($expr->args === []) {
-                    return self::PREFIX . $nativeFunc . '(' . $receiver . ')';
-                }
-                return self::PREFIX . $nativeFunc . '(' . $receiver . ', '
-                    . $this->parseNativeCallArgs($expr->args, $nativeFunc) . ')';
+                $call = $this->getNativeObjectMemberReceiver($object)
+                    . $this->getNativeObjectMethodCppName($methodName);
+                return $call . '('
+                    . $this->parseNativeCallArgs(
+                        $expr->args,
+                        $nativeFunc,
+                        materializeTrailingDefaults: true,
+                    ) . ')';
             }
             // Method calls are allowed on references: use a native call when class info is available, otherwise a dynamic call
             if (!$this->checkArgType($type, Type::OBJECT) and $type !== Type::REF) {
@@ -870,7 +1015,7 @@ trait MethodCallTrait
             $funcName,
             $magicMethod,
             $this->isVarExpr($expr->var) && $this->parseIdentifier($expr->var) === 'this_',
-        );
+        ) || $typedPropertyLexicalPrivateClass !== '';
         $resolvedMethodPtr = false;
         if ($class && $funcName && !$magicMethod) {
             if ($this->isInternalClass($class)) {
@@ -910,7 +1055,16 @@ trait MethodCallTrait
         try {
             $class = empty($class) ? self::DYNAMIC_CALLED_CLASS : $class;
             if (!$resolvedMethodPtr) {
-                $callArgs = $this->parseCallArgs($expr->args, $funcName, $class);
+                $callArgClass = $typedPropertyReceiver
+                    ? ($typedPropertySignatureClass === ''
+                        ? self::DYNAMIC_CALLED_CLASS
+                        : $typedPropertySignatureClass)
+                    : $class;
+                $callArgs = $this->parseCallArgs(
+                    $expr->args,
+                    $funcName,
+                    $callArgClass,
+                );
                 if ($requiresDynamicScope && $this->methodDef) {
                     if (!$cacheMethod) {
                         return 'php::callScoped(' . $object . ', ' . $methodPtr . ', '
@@ -1050,7 +1204,12 @@ trait MethodCallTrait
 
         $calledCe = $this->getCalledCeExpr();
         $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(this_))';
-        $fallback = 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))';
+        // Keep the receiver and qualify the runtime class: a child private
+        // method must not resolve as the parent's lexical private method.
+        $fallback = ($this->methodDef->flags & Modifiers::STATIC)
+            ? 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))'
+            : 'php::callScoped(this_, php::concat({typephp_get_called_class(' . $calledCe . ')'
+                . ', "::", ' . $methodPtr . '}), ' . $this->getCallableScopeExpr() . ')';
         return '(EXPECTED(' . $calledCe . ' == ' . $this->getClassEntryPtr($class) . ')'
             . ' ? ' . $direct . ' : ' . $fallback . ')';
     }
@@ -1076,6 +1235,8 @@ trait MethodCallTrait
         $rtClass = '';
         $cacheCallable = false;
         $directStaticCall = false;
+        $scopedStaticCall = false;
+        $scopedInstanceCall = false;
         $staticCallTarget = '';
         $staticCallMethod = '';
         $canUseDirectCallScope = $this->isNameExpr($expr->class) && $this->isIdExpr($expr->name);
@@ -1103,10 +1264,10 @@ trait MethodCallTrait
 
         if (!$this->isNameExpr($expr->class)) {
             if ($this->isVarExpr($expr->class)
-                && $this->isStableObject($class)
+                && isset($this->context->exactObjects[$class])
                 && $this->isIdExpr($expr->name)
             ) {
-                $class = $this->getObjectType($class);
+                $class = $this->context->exactObjects[$class];
                 goto _do_call;
             }
             $classTarget = $this->materializeDynamicStaticCallTarget($expr->class);
@@ -1125,7 +1286,11 @@ trait MethodCallTrait
                 }
             }
             $placeHolder = $fn;
-            $directStaticCall = true;
+            if ($this->methodDef !== null) {
+                $scopedStaticCall = true;
+            } else {
+                $directStaticCall = true;
+            }
         } elseif ($this->isVarExpr($expr->name)) {
             $staticCallMethod = $this->methodNameToStr($expr->name, literal: true);
             if ($class === 'static') {
@@ -1136,7 +1301,11 @@ trait MethodCallTrait
             }
             $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $staticCallMethod . '})';
             $placeHolder = $fn;
-            if ($staticCallTarget !== '') {
+            if ($class === 'static' && $this->methodDef !== null
+                && !($this->methodDef->flags & Modifiers::STATIC)) {
+                $scopedInstanceCall = true;
+                $fn = 'php::concat({' . $this->getCalledClassExpr() . ', "::", ' . $staticCallMethod . '})';
+            } elseif ($staticCallTarget !== '') {
                 $directStaticCall = true;
             } else {
                 // `self::$method()` carries a lexical lookup class and a
@@ -1170,6 +1339,10 @@ trait MethodCallTrait
             // Used to resolve the method signature when detecting by-reference arguments (late static binding is resolved within the current class hierarchy)
             $rtFunc = $method;
             $rtClass = $this->getFullClassName();
+            if ($this->methodDef !== null && !($this->methodDef->flags & Modifiers::STATIC)) {
+                $scopedInstanceCall = true;
+                $fn = 'php::concat({' . $this->getCalledClassExpr() . ', "::", ' . $methodPtr . '})';
+            }
         } else {
             if ($class === 'self') {
                 $class = $this->getFullClassName();
@@ -1236,6 +1409,12 @@ trait MethodCallTrait
         }
 
         if (empty($expr->args)) {
+            if ($scopedInstanceCall) {
+                return 'php::callScoped(this_, ' . $fn . ', ' . $this->getCallableScopeExpr() . ')';
+            }
+            if ($scopedStaticCall) {
+                return 'php::callScoped(' . $fn . ', ' . $this->getCallableScopeExpr() . ')';
+            }
             if ($directStaticCall) {
                 return 'php::callStaticMethod(' . $staticCallTarget . ', ' . $staticCallMethod . ')';
             }
@@ -1245,6 +1424,14 @@ trait MethodCallTrait
             return 'php::call(' . $fn . ')';
         }
         try {
+            if ($scopedInstanceCall) {
+                return 'php::callScoped(this_, ' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
+                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
+            }
+            if ($scopedStaticCall) {
+                return 'php::callScoped(' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
+                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
+            }
             if ($directStaticCall) {
                 return 'php::callStaticMethod(' . $staticCallTarget . ', ' . $staticCallMethod . ', '
                     . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';

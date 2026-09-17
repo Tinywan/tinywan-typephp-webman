@@ -25,6 +25,30 @@ use PhpParser\NodeAbstract;
  */
 trait CompoundTypeDeclarationValidationTrait
 {
+    /** Return whether a declared type AST accepts callable values. */
+    protected function typeNodeContainsCallable(?NodeAbstract $type): bool
+    {
+        if ($type === null) {
+            return false;
+        }
+        if ($type instanceof NullableType) {
+            return $this->typeNodeContainsCallable($type->type);
+        }
+        if ($type instanceof UnionType) {
+            foreach ($type->types as $member) {
+                if ($this->typeNodeContainsCallable($member)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if ($type instanceof IntersectionType) {
+            return false;
+        }
+        return ($type instanceof Node\Name || $type instanceof Node\Identifier)
+            && strcasecmp($type->toString(), 'callable') === 0;
+    }
+
     /** @var array<string, true> */
     private const array PHP_INTERSECTION_FORBIDDEN_TYPES = [
         'array' => true,

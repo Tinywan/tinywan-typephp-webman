@@ -10,7 +10,6 @@ namespace TypePhp\Entity;
 
 use PhpParser\NodeAbstract;
 use PhpParser\Modifiers;
-use TypePhp\ArrayDef\ArrayDefinition;
 
 class PropertyDef
 {
@@ -21,7 +20,8 @@ class PropertyDef
     public ?ArrayInitPlan $arrayInitPlan = null;
     /** Original declaration AST; lowered to $default only in the convert phase. */
     public ?NodeAbstract $defaultExpr = null;
-    public ?ArrayDefinition $arrayDef = null;
+    public ?array $typedArray = null;
+    public ?array $stdContainer = null;
     public bool $nullable = false;
     /** The declared type is TypePHP's unconstrained, reference-capable `any` type. */
     public bool $explicitAny = false;

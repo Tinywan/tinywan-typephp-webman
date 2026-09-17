@@ -408,6 +408,50 @@ jobs:
               throw "Expected one Windows release package, found $($packages.Count)"
           }
 
+      - name: Verify portable Windows PHP configuration
+        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Get-ChildItem 'tpc_v*_windows_*.zip' -File | Select-Object -First 1
+          $destination = Join-Path $env:RUNNER_TEMP ('typephp-release-check-' + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $package.FullName -DestinationPath $destination
+          $roots = @(Get-ChildItem $destination -Directory)
+          if ($roots.Count -ne 1) {
+              throw "Expected one release package directory, found $($roots.Count)"
+          }
+          $root = $roots[0].FullName
+          $phpExe = Join-Path $root 'php.exe'
+          $phpIni = Join-Path $root 'php.ini'
+          $checkFile = Join-Path $destination 'check-php-ini.php'
+          $check = @'
+          <?php
+          if (ini_get('extension_dir') !== './ext/' || !extension_loaded('zip')) {
+              fwrite(STDERR, "Invalid packaged extension configuration\n");
+              exit(1);
+          }
+          echo 'portable-php-ini-ok';
+          '@
+          [IO.File]::WriteAllText($checkFile, $check, [Text.UTF8Encoding]::new($false))
+          $previousScanDir = $env:PHP_INI_SCAN_DIR
+          try {
+              # Ignore the runner's extra ini files; test the relocated package.
+              $env:PHP_INI_SCAN_DIR = ''
+              foreach ($workingDirectory in @($root, $destination)) {
+                  Push-Location $workingDirectory
+                  try {
+                      $output = (& $phpExe -c $phpIni $checkFile 2>&1 | Out-String).Trim()
+                      if ($LASTEXITCODE -ne 0 -or $output -ne 'portable-php-ini-ok') {
+                          throw "Relocated PHP runtime validation failed in ${workingDirectory}: $output"
+                      }
+                  } finally {
+                      Pop-Location
+                  }
+              }
+          } finally {
+              $env:PHP_INI_SCAN_DIR = $previousScanDir
+          }
+
       - name: Upload Windows release package
         if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
         uses: actions/upload-artifact@v4

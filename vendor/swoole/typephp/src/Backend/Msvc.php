@@ -36,7 +36,8 @@ class Msvc extends CompilerBackend
 
     private function buildCommonCompileFlags(array $config, bool $includeCppOptions = true): string
     {
-        $cmd = '';
+        // Generated code/templates can exceed ordinary COFF section limits.
+        $cmd = ' /bigobj';
 
         $cmd .= ' /utf-8 /DZEND_WIN32 /DPHP_WIN32 /DZEND_DEBUG=0 /DENABLE_INTSAFE_SIGNED_FUNCTIONS';
 
@@ -106,6 +107,8 @@ class Msvc extends CompilerBackend
             if (!empty($config['forced_include'])) {
                 $cmd .= ' /FI' . escapeshellarg($config['forced_include']);
             }
+        } elseif (!empty($config['cflags'])) {
+            $cmd .= ' ' . $config['cflags'];
         }
 
         $cmd .= ' /nologo';
@@ -174,7 +177,11 @@ class Msvc extends CompilerBackend
     public function buildLinkCommand(array $objectFiles, string $outputFile, array $options = []): string
     {
         $cmd = $this->getLinkerCommand();
-        $cmd .= ' ' . $this->createResponseFile($objectFiles, $outputFile);
+        $cmd .= ' ' . $this->createResponseFile(
+            $objectFiles,
+            $outputFile,
+            $options['response_file'] ?? null,
+        );
         $cmd .= ' /OUT:' . escapeshellarg($outputFile);
 
         if (!empty($options['debug'])) {

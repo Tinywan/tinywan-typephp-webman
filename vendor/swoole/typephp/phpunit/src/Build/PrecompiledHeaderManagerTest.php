@@ -95,6 +95,30 @@ final class PrecompiledHeaderManagerTest extends TestCase
         $this->assertNotSame($first['artifact'], $refreshed['artifact']);
     }
 
+    public function testSameSizeRewritePreservingMtimeInvalidatesDigest(): void
+    {
+        $dependencyDirectory = $this->cacheDirectory . '/dependencies';
+        mkdir($dependencyDirectory);
+        $dependency = $dependencyDirectory . '/runtime.h';
+        file_put_contents($dependency, '#define VALUE 1');
+        $mtime = time() - 60;
+        touch($dependency, $mtime);
+        $backend = $this->createMock(CompilerBackend::class);
+        $backend->method('supportsPrecompiledHeaders')->willReturn(true);
+        $backend->method('getCompilerCommand')->willReturn('true');
+        $backend->method('getPrecompiledHeaderArtifact')
+            ->willReturnCallback(static fn(string $header): string => $header . '.gch');
+        $backend->method('buildNativeCompileCommand')
+            ->willReturnCallback(static fn(string $source, string $object): string => 'touch ' . escapeshellarg($object));
+        $manager = new PrecompiledHeaderManager($backend, new NativeBuilder($backend));
+        $first = $manager->prepare(['runtime.h'], [$dependencyDirectory], $this->cacheDirectory, new CompileOptions([]));
+        file_put_contents($dependency, '#define VALUE 2');
+        touch($dependency, $mtime);
+        $second = $manager->prepare(['runtime.h'], [$dependencyDirectory], $this->cacheDirectory, new CompileOptions([]));
+        self::assertNotSame($first['artifact'], $second['artifact']);
+        self::assertFalse($second['cached']);
+    }
+
     private function createCacheEntry(int $number, int $mtime): string
     {
         $directory = $this->cacheDirectory . '/' . sprintf('%024x', $number);

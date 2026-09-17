@@ -1,0 +1,17 @@
+{
+  "name": "swoole/typephp-os",
+  "description": "TypePHP-OS experimental system image",
+  "type": "project",
+  "license": "BSD-3-Clause",
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "repositories": [
+    {"type": "path", "url": "../..", "options": {"symlink": true}},
+    {"type": "path", "url": "../../../phpx", "options": {"symlink": true}},
+    {"type": "path", "url": "../../../php-nano", "options": {"symlink": true}}
+  ],
+  "require": {
+    "swoole/typephp": "dev-master",
+    "swoole/php-nano": "dev-master"
+  }
+}

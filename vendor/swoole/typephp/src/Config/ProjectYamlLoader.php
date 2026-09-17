@@ -32,19 +32,31 @@ final class ProjectYamlLoader
     /** @return array{0: string, 1: string|null} */
     public function parseSourceEntry(mixed $entry): array
     {
+        return $this->parsePathEntry($entry, 'sources');
+    }
+
+    /** @return array{0: string, 1: string|null} */
+    public function parseObjectEntry(mixed $entry): array
+    {
+        return $this->parsePathEntry($entry, 'objects');
+    }
+
+    /** @return array{0: string, 1: string|null} */
+    private function parsePathEntry(mixed $entry, string $key): array
+    {
         if (is_string($entry)) {
             return [$entry, null];
         }
         if (!is_array($entry)) {
-            ($this->error)('Each `sources` entry must be a string or map');
+            ($this->error)("Each `{$key}` entry must be a string or map");
         }
         $path = $entry['path'] ?? $entry['source'] ?? $entry['file'] ?? null;
         if (!is_string($path) || trim($path) === '') {
-            ($this->error)('Conditional `sources` entries must include a non-empty `path`');
+            ($this->error)("Conditional `{$key}` entries must include a non-empty `path`");
         }
         $condition = $entry['if'] ?? $entry['when'] ?? null;
         if ($condition !== null && !is_string($condition)) {
-            ($this->error)('Source condition must be a string');
+            ($this->error)(ucfirst(rtrim($key, 's')) . ' condition must be a string');
         }
         return [$path, $condition];
     }

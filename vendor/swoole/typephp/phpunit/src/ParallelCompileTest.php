@@ -5,137 +5,166 @@ namespace TypePhp\Tests;
 use PHPUnit\Framework\TestCase;
 use TypePhp\Backend\CompilerBackend;
 use TypePhp\Build\NativeBuilder;
-use TypePhp\CompilerTest;
 
-class ParallelCompileTest extends TestCase
+final class ParallelCompileTest extends TestCase
 {
-    public function testWaitRetriesWhenInterrupted(): void
-    {
-        $compiler = new ScriptedWaitCompiler([
-            [-1, 0, PCNTL_EINTR],
-            [123, 0, 0],
-        ]);
+    private string $directory;
 
-        $this->assertSame([123, 0], $compiler->waitForTest());
-        $this->assertSame(2, $compiler->getWaitCallCount());
+    protected function setUp(): void
+    {
+        $this->directory = sys_get_temp_dir() . '/typephp_process_pool_' . bin2hex(random_bytes(6));
+        mkdir($this->directory, 0777, true);
     }
 
-    public function testWaitFailureOtherThanInterruptionThrows(): void
+    protected function tearDown(): void
     {
-        $compiler = new ScriptedWaitCompiler([
-            [-1, 0, PCNTL_ECHILD],
-        ]);
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Failed to wait for compiler process');
-        $compiler->waitForTest();
-    }
-
-    public function testSignaledChildIsNotSuccessful(): void
-    {
-        $compiler = new ScriptedWaitCompiler([]);
-
-        $this->assertTrue($compiler->statusSucceeded(0));
-        $this->assertFalse($compiler->statusSucceeded(1 << 8));
-        $this->assertFalse($compiler->statusSucceeded(SIGTERM));
-    }
-
-    public function testForkFailureStillReapsRunningCompilerProcesses(): void
-    {
-        $compiler = new ScriptedWaitCompiler(
-            [[101, 0, 0]],
-            [101, -1]
-        );
-
-        try {
-            $compiler->compileInParallelForTest(['first.cc', 'second.cc', 'third.cc'], 2);
-            $this->fail('The fork failure should fail the parallel compilation');
-        } catch (\Exception $e) {
-            $this->assertStringContainsString('second.cc', $e->getMessage());
-            $this->assertStringContainsString('third.cc', $e->getMessage());
+        foreach (glob($this->directory . '/*') ?: [] as $file) {
+            @unlink($file);
         }
-
-        $this->assertSame(1, $compiler->getWaitCallCount());
+        @rmdir($this->directory);
     }
 
-    public function testParallelDispatcherReportsEachCompletedTask(): void
+    public function testProcessPoolRunsCompilerTasksConcurrently(): void
     {
-        $builder = new NativeBuilder($this->createMock(CompilerBackend::class));
-        $forkResults = [101, 102];
-        $waitResults = [[102, 0], [101, 1 << 8]];
+        $firstMarker = $this->directory . '/first.ready';
+        $secondMarker = $this->directory . '/second.ready';
+        $firstObject = $this->directory . '/first.o';
+        $secondObject = $this->directory . '/second.o';
         $completed = [];
 
-        $result = $builder->dispatchParallel(
-            ['first.cc', 'second.cc'],
+        $builder = new NativeBuilder($this->createMock(CompilerBackend::class));
+        $result = $builder->dispatchProcessParallel(
+            [
+                $this->task('first.cc', $firstObject, $this->barrierCommand($firstMarker, $secondMarker, $firstObject)),
+                $this->task('second.cc', $secondObject, $this->barrierCommand($secondMarker, $firstMarker, $secondObject)),
+            ],
             2,
-            static fn(string $source): string => $source . '.o',
-            static function (): void {},
-            static function () use (&$forkResults): int {
-                return array_shift($forkResults);
-            },
-            static function () use (&$waitResults): array {
-                return array_shift($waitResults);
-            },
-            static fn(int $status): bool => $status === 0,
-            static function (string $source, string $object, int $status, bool $success, int $count) use (&$completed): void {
-                $completed[] = [$source, $object, $status, $success, $count];
+            static function (
+                string $source,
+                string $object,
+                string $command,
+                array $output,
+                int $status,
+                bool $success,
+                int $count,
+            ) use (&$completed): void {
+                $completed[$source] = [$object, $command, $output, $status, $success, $count];
             },
         );
 
-        $this->assertSame(['second.cc.o'], $result['objects']);
-        $this->assertSame(['first.cc'], $result['failures']);
-        $this->assertSame([
-            ['second.cc', 'second.cc.o', 0, true, 1],
-            ['first.cc', 'first.cc.o', 1 << 8, false, 2],
-        ], $completed);
-    }
-}
-
-class ScriptedWaitCompiler extends CompilerTest
-{
-    private int $waitCallCount = 0;
-    private int $lastWaitError = 0;
-
-    public function __construct(private array $waitResults, private array $forkResults = [])
-    {
-        parent::__construct(TYPEPHP_ROOT_PATH);
-        $this->noProgress = true;
+        self::assertSame([], $result['failures'], var_export($completed, true));
+        self::assertEqualsCanonicalizing([$firstObject, $secondObject], $result['objects']);
+        self::assertCount(2, $completed);
+        self::assertTrue($completed['first.cc'][4]);
+        self::assertTrue($completed['second.cc'][4]);
     }
 
-    protected function pcntlFork(): int
+    public function testProcessPoolCapturesCompilerFailureOutputAndStatus(): void
     {
-        return array_shift($this->forkResults);
+        $object = $this->directory . '/failed.o';
+        $completion = null;
+        $command = $this->phpCommand("fwrite(STDERR, 'compiler-error'); exit(7);");
+
+        $builder = new NativeBuilder($this->createMock(CompilerBackend::class));
+        $result = $builder->dispatchProcessParallel(
+            [$this->task('failed.cc', $object, $command)],
+            4,
+            static function (
+                string $source,
+                string $object,
+                string $command,
+                array $output,
+                int $status,
+                bool $success,
+                int $count,
+            ) use (&$completion): void {
+                $completion = compact('source', 'object', 'command', 'output', 'status', 'success', 'count');
+            },
+        );
+
+        self::assertSame([], $result['objects']);
+        self::assertSame(['failed.cc'], $result['failures']);
+        self::assertSame(7, $completion['status']);
+        self::assertFalse($completion['success']);
+        self::assertStringContainsString('compiler-error', implode("\n", $completion['output']));
     }
 
-    protected function pcntlWait(?int &$status): int
+    public function testProcessPoolCanReserveOneLaneForSmallTasks(): void
     {
-        $this->waitCallCount++;
-        [$pid, $status, $this->lastWaitError] = array_shift($this->waitResults);
-        return $pid;
+        $smallMarker = $this->directory . '/small.ready';
+        $largeObject = $this->directory . '/large.o';
+        $middleObject = $this->directory . '/middle.o';
+        $smallObject = $this->directory . '/small.o';
+
+        $builder = new NativeBuilder($this->createMock(CompilerBackend::class));
+        $result = $builder->dispatchProcessParallel(
+            [
+                $this->task(
+                    'large.cc',
+                    $largeObject,
+                    $this->waitForFileCommand($smallMarker, $largeObject),
+                ),
+                $this->task(
+                    'middle.cc',
+                    $middleObject,
+                    $this->waitForFileCommand($largeObject, $middleObject),
+                ),
+                $this->task(
+                    'small.cc',
+                    $smallObject,
+                    $this->createFilesCommand([$smallMarker, $smallObject]),
+                ),
+            ],
+            2,
+            reserveSmallTaskLane: true,
+        );
+
+        self::assertSame([], $result['failures']);
+        self::assertEqualsCanonicalizing(
+            [$largeObject, $middleObject, $smallObject],
+            $result['objects'],
+        );
     }
 
-    protected function pcntlLastError(): int
+    /** @return array{source: string, object: string, command: string} */
+    private function task(string $source, string $object, string $command): array
     {
-        return $this->lastWaitError;
+        return compact('source', 'object', 'command');
     }
 
-    public function waitForTest(): array
+    private function barrierCommand(string $ownMarker, string $otherMarker, string $object): string
     {
-        return $this->waitForCompileChild();
+        $code = 'file_put_contents(' . var_export($ownMarker, true) . ", 'ready');"
+            . '$deadline = microtime(true) + 5;'
+            . 'while (file_exists(' . var_export($otherMarker, true) . ') === false && microtime(true) < $deadline) {'
+            . ' usleep(10000); }'
+            . 'if (file_exists(' . var_export($otherMarker, true) . ') === false) { exit(9); }'
+            . 'file_put_contents(' . var_export($object, true) . ", 'object');";
+        return $this->phpCommand($code);
     }
 
-    public function statusSucceeded(int $status): bool
+    /** @param list<string> $files */
+    private function createFilesCommand(array $files): string
     {
-        return $this->compileChildSucceeded($status);
+        $code = '';
+        foreach ($files as $file) {
+            $code .= 'file_put_contents(' . var_export($file, true) . ", 'ready');";
+        }
+        return $this->phpCommand($code);
     }
 
-    public function getWaitCallCount(): int
+    private function waitForFileCommand(string $dependency, string $object): string
     {
-        return $this->waitCallCount;
+        $code = '$deadline = microtime(true) + 2;'
+            . 'while (file_exists(' . var_export($dependency, true) . ') === false && microtime(true) < $deadline) {'
+            . ' usleep(10000); }'
+            . 'if (file_exists(' . var_export($dependency, true) . ') === false) { exit(9); }'
+            . 'file_put_contents(' . var_export($object, true) . ", 'object');";
+        return $this->phpCommand($code);
     }
 
-    public function compileInParallelForTest(array $sourceFiles, int $jobs): array
+    private function phpCommand(string $code): string
     {
-        return $this->compileWithPcntl($sourceFiles, $jobs);
+        return escapeshellarg(PHP_BINARY) . ' -n -r ' . escapeshellarg($code);
     }
 }

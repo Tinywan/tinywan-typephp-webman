@@ -12,10 +12,12 @@ use Ajaxray\AnsiKit\AnsiTerminal;
 use Ajaxray\AnsiKit\Components\Progressbar;
 use MJS\TopSort\Implementations\StringSort;
 use TypePhp\Analysis\LocalClosureAnalyzer;
+use TypePhp\Analysis\NativeObjectStackPromotionAnalyzer;
 use TypePhp\Analysis\SsaBuilder;
 use TypePhp\Backend\CompilerFactory;
 use TypePhp\Build\CompileOptions;
 use TypePhp\Build\FileScanner;
+use TypePhp\Build\IncrementalCompilationTrait;
 use TypePhp\Build\NativeCommandOptionsTrait;
 use TypePhp\Build\NativeBuilder;
 use TypePhp\Build\NanoBuildBackend;
@@ -23,6 +25,8 @@ use TypePhp\Build\NativeDependencyAuditor;
 use TypePhp\Build\NanoSourceComposer;
 use TypePhp\Build\PrecompiledHeaderManager;
 use TypePhp\Build\SourcePipelineTrait;
+use TypePhp\Build\TranslationUnitSplitTrait;
+use TypePhp\Build\SourceCompileQueue;
 use TypePhp\Build\WasmInterfaceGenerator;
 use TypePhp\Config\ProjectYamlLoader;
 use TypePhp\Diagnostics\CompileTimeAttributeDiagnostic;
@@ -61,6 +65,7 @@ use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\VoidCastValidationVisitor;
 use PhpParser\Modifiers;
 use PhpParser\Node;
+use PhpParser\Node\Expr;
 use PhpParser\NodeAbstract;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
@@ -75,15 +80,19 @@ class Translator extends Preprocessor
     private const string TRAIT_ORIGIN_ATTRIBUTE = 'typephp_trait_origin';
     private const string TRAIT_METHOD_ATTRIBUTE = 'typephp_trait_method';
     use DefaultArgumentGenerator;
+    use IncrementalCompilationTrait;
     use NativeCommandOptionsTrait;
     use SourcePipelineTrait;
+    use TranslationUnitSplitTrait;
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
-    public const string VERSION = '0.8.1';
+    public const string VERSION = '0.9.0';
     public const string APP_NAME = 'TypePHP Compiler (AOT)';
 
     protected bool $hasExplicitOutput = false;
+    /** Exact output stem; generated C/C++ identifiers still use targetName. */
+    protected ?string $explicitOutputBasename = null;
     protected ?string $explicitOutputExtension = null;
     protected array $sourceDirs = [];
     private ?ProjectYamlLoader $projectYamlLoader = null;
@@ -94,6 +103,17 @@ class Translator extends Preprocessor
 
     /** Generated per-file teardown functions for persistent AST class constants. */
     protected array $releaseAstConstantFns = [];
+
+    /** @var list<string> Cross-TU helpers called by module_init(). */
+    private array $classArrayConstantInitCalls = [];
+
+    /** @var list<string> Cross-TU helpers called by module_clean(). */
+    private array $classArrayConstantCleanCalls = [];
+
+    /** @var list<string> Forward declarations for split request-lifecycle helpers. */
+    private array $classArrayConstantLifecycleDeclarations = [];
+
+    private bool $classArrayConstantLifecycleSplit = false;
 
     // Windows resource file configuration (icon, version info, etc.)
     protected array $resourceConfig = [];
@@ -400,7 +420,7 @@ class Translator extends Preprocessor
             ['--profile', 'Enable performance profiling (adds -lprofiler, forces recompile)'],
             ['-d, --debug', 'Enable debug mode (disables optimizations and adds debug symbols)'],
             ['-o, --output <file>', 'Output name or path (default: input basename)'],
-            ['-f, --force', 'Force recompilation and ignore the object cache'],
+            ['-f, --force', 'Clear incremental caches and force a full rebuild'],
             ['-m, --mode <mode>', 'Build mode: bin, lib, or ext (default: bin)'],
             ['-r, --run', 'Run the compiled binary after a successful build'],
             ['-j, --job <num>', 'Number of parallel compilation jobs (default: 4)'],
@@ -595,9 +615,9 @@ class Translator extends Preprocessor
             if ($this->fullStatic) {
                 $this->error('--nano already composes its runtime sources; --full-static is not applicable');
             }
-            if ($this->linkLibs !== [] || $this->linkPaths !== []) {
-                $this->error('--nano does not permit external link libraries or library search paths');
-            }
+            // Nano applications may consume target-owned static libraries.
+            // The final executable dependency audit remains the authority on
+            // whether those archives introduced an unsupported host import.
         }
     }
 
@@ -711,20 +731,26 @@ class Translator extends Preprocessor
         shell_exec($cmd);
     }
 
-    public function save(string $code, string $file): void
+    public function save(string $code, string $file, bool $force = false): void
     {
-        $this->writeFile($file, $code);
+        $this->writeFile($file, $code, $force);
         $this->formatCppCode($file);
     }
 
-    public function convertFile(string $file): ?string
+    public function convertFile(string $file, bool $forceWrite = false): ?string
     {
+        $ownsStatisticsSession = !$this->compilationStatistics->isCollecting();
+        if ($ownsStatisticsSession) {
+            $this->compilationStatistics->begin();
+        }
         // Public embedding/test callers may prepare files directly instead of
         // using SourcePipelineTrait::prepare(). Preserve the same explicit
         // prepare -> Trait composition -> convert ordering for that API.
-        $this->composeTraitDeclarations(array_keys($this->preparedFileAsts));
-        $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
+        $previousPhase = null;
         try {
+            $this->composeTraitDeclarations(array_keys($this->preparedFileAsts));
+            $this->validateNativeObjectMemberNames();
+            $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
             if (!$this->declarationExpressionsFinalized) {
                 $this->finalizeDeclarationExpressions(array_keys($this->preparedFileAsts));
             }
@@ -736,10 +762,13 @@ class Translator extends Preprocessor
                 try {
                     $cppCode = $this->doConvert($phpCode);
                     $cppFile = $this->getCppFile($file);
+                    $this->recordEmittedTypes($cppCode);
+                    $cppCode = $this->splitLargeTranslationUnit($cppCode, $cppFile, $forceWrite);
                     if ($cppCode === '') {
                         $this->removeEmptyTranslationUnitArtifacts($cppFile);
                     } else {
-                        $this->save($cppCode, $cppFile);
+                        $this->generatedProjectSources[$cppFile] = true;
+                        $this->save($cppCode, $cppFile, $forceWrite);
                     }
                     // Generate the stub file, which depends on the use statements
                     // and other info collected during the convert phase.
@@ -750,7 +779,12 @@ class Translator extends Preprocessor
                 }
             }
         } finally {
-            $this->restoreCompilerPhase($previousPhase);
+            if ($previousPhase !== null) {
+                $this->restoreCompilerPhase($previousPhase);
+            }
+            if ($ownsStatisticsSession) {
+                $this->compilationStatistics->finish();
+            }
         }
     }
 
@@ -760,6 +794,7 @@ class Translator extends Preprocessor
      */
     private function removeEmptyTranslationUnitArtifacts(string $cppFile): void
     {
+        unset($this->generatedProjectSources[$cppFile]);
         $objectFile = $this->getObjectFile($cppFile);
         foreach ([$cppFile, $objectFile, $this->getMiscObjectCacheMetadataFile($objectFile)] as $artifact) {
             if (is_file($artifact) && !unlink($artifact)) {
@@ -849,6 +884,7 @@ class Translator extends Preprocessor
             exit(1);
         }
         $this->targetName = $name;
+        $this->stableIdRegistry = null;
     }
 
     /**
@@ -870,12 +906,13 @@ class Translator extends Preprocessor
         }
 
         $this->hasExplicitOutput = true;
+        $this->explicitOutputBasename = $path;
         $this->setTargetName($path);
     }
 
     protected function getTargetFileName(): string
     {
-        $targetFile = $this->targetName;
+        $targetFile = $this->explicitOutputBasename ?? $this->targetName;
         if ($this->isBuildModeLib() && !$this->isWindows() && !$this->hasExplicitOutput) {
             $targetFile = 'lib' . $targetFile;
         }
@@ -934,6 +971,12 @@ class Translator extends Preprocessor
 
     public function genDataDeclarations(string $file): void
     {
+        $this->writeFile($file, $this->renderDataDeclarations());
+    }
+
+    protected function renderDataDeclarations(?string $sourceFile = null, bool $commonOnly = false): string
+    {
+        $includeCommon = $sourceFile === null;
         $projectNamespace = $this->getProjectNamespace();
         $lines[] = '#include <phpx.h>';
         $lines[] = '#include <typephp_helper.h>';
@@ -943,61 +986,91 @@ class Translator extends Preprocessor
 
         // Embedded binaries populate the CLI script fields in $_SERVER at
         // request startup, even when the source does not reference $_SERVER.
-        if (!$this->isNanoMode()
+        if ($includeCommon
+            && !$this->isNanoMode()
             && $this->isBuildModeBin()
             && !$this->hasGlobalVar('_SERVER')) {
-            $this->addGlobalVar('_SERVER', Type::ARRAY);
+            // Runtime-provided storage has no declaring PHP source.
+            $this->globalVars['_SERVER'] = Type::ARRAY;
         }
 
         foreach ($this->globalVars as $name => $type) {
+            if ($sourceFile !== null
+                && ($this->globalVarDeclInFile[$name] ?? null) !== $sourceFile) {
+                continue;
+            }
+            if ($commonOnly && isset($this->globalVarDeclInFile[$name])) {
+                continue;
+            }
             $cppType = isset($this->nativeGlobalObjects[$name])
                 ? $this->getNativeObjectPointerType($this->nativeGlobalObjects[$name])
                 : Type::VAR;
             $lines[] = 'extern THREAD_LOCAL ' . $cppType . ' ' . $this->escapeGlobalVar($name) . ';';
         }
         foreach ($this->nativeStaticInitializers as $name => $_) {
+            if ($sourceFile !== null
+                && ($this->nativeStaticInitializerDeclInFile[$name] ?? null) !== $sourceFile) {
+                continue;
+            }
+            if ($commonOnly && isset($this->nativeStaticInitializerDeclInFile[$name])) {
+                continue;
+            }
             $lines[] = 'extern THREAD_LOCAL bool ' . $this->escapeGlobalVar($name) . ';';
         }
 
-        if ($this->literalStrings) {
+        if ($includeCommon && $this->literalStrings) {
             $lines[] = 'ZEND_ATTRIBUTE_CONST ' . Type::STR . ' &'
-                . self::LITERAL_STRING_GETTER . '(uint32_t index);' . PHP_EOL;
+                . self::LITERAL_STRING_GETTER . '(uint32_t index) noexcept;' . PHP_EOL;
         }
 
-        foreach ($this->constants as $name => $constant) {
-            $lines[] = 'extern ' . $constant->type . ' ' . $name . ';';
+        if (!$commonOnly) {
+            foreach ($this->constants as $name => $constant) {
+                if ($sourceFile !== null && ($constant->sourceFile ?? '') !== $sourceFile) {
+                    continue;
+                }
+                $lines[] = 'extern ' . $constant->type . ' ' . $name . ';';
+            }
         }
 
-        $pythonModuleDeclarations = $this->genPythonModuleDataDeclarations();
-        if ($pythonModuleDeclarations !== '') {
-            $lines[] = $pythonModuleDeclarations;
+        if ($includeCommon) {
+            $pythonModuleDeclarations = $this->genPythonModuleDataDeclarations();
+            if ($pythonModuleDeclarations !== '') {
+                $lines[] = $pythonModuleDeclarations;
+            }
+
+            $lines[] = 'enum class RequestClassId : uint32_t {};';
+            $lines[] = 'enum class PersistentClassId : uint32_t {};';
+            $lines[] = 'enum class RequestFuncId : uint32_t {};';
+            $lines[] = 'enum class PersistentFuncId : uint32_t {};';
+            $lines[] = 'enum class PersistentPropertyId : uint32_t {};';
+            $lines[] = 'enum class PropertyCacheId : uint32_t {};' . PHP_EOL;
+            $lines[] = 'enum class MethodCallCacheId : uint32_t {};' . PHP_EOL;
+            $lines[] = 'enum class FunctionCallCacheId : uint32_t {};' . PHP_EOL;
+            $lines[] = 'enum class FunctionResolutionCacheId : uint32_t {};' . PHP_EOL;
+
+            $lines[] = 'zend_class_entry *get_class(RequestClassId class_id, const php::Str &class_name);';
+            $lines[] = 'zend_function *get_func(RequestFuncId func_id, const php::Str &func_name);';
+            $lines[] = 'zend_function *get_method(RequestFuncId func_id, const php::Str &method_name, RequestClassId class_id, const php::Str &class_name);';
+            $lines[] = 'zend_class_entry *get_persistent_class(PersistentClassId class_id, const php::Str &class_name);';
+            $lines[] = 'zend_function *get_persistent_func(PersistentFuncId func_id, const php::Str &func_name);';
+            $lines[] = 'zend_function *get_persistent_method(PersistentFuncId func_id, const php::Str &method_name, PersistentClassId class_id, const php::Str &class_name);';
+            $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);' . PHP_EOL;
+            $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) noexcept;' . PHP_EOL;
+            $lines[] = 'uint8_t &typephp_get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept;' . PHP_EOL;
         }
 
-        $lines[] = 'enum class RequestClassId : uint32_t {};';
-        $lines[] = 'enum class PersistentClassId : uint32_t {};';
-        $lines[] = 'enum class RequestFuncId : uint32_t {};';
-        $lines[] = 'enum class PersistentFuncId : uint32_t {};';
-        $lines[] = 'enum class PersistentPropertyId : uint32_t {};';
-        $lines[] = 'enum class PropertyCacheId : uint32_t {};' . PHP_EOL;
-        $lines[] = 'enum class MethodCallCacheId : uint32_t {};' . PHP_EOL;
-        $lines[] = 'enum class FunctionCallCacheId : uint32_t {};' . PHP_EOL;
-
-        $lines[] = 'zend_class_entry *get_class(RequestClassId class_id, const php::Str &class_name);';
-        $lines[] = 'zend_function *get_func(RequestFuncId func_id, const php::Str &func_name);';
-        $lines[] = 'zend_function *get_method(RequestFuncId func_id, const php::Str &method_name, RequestClassId class_id, const php::Str &class_name);';
-        $lines[] = 'zend_class_entry *get_persistent_class(PersistentClassId class_id, const php::Str &class_name);';
-        $lines[] = 'zend_function *get_persistent_func(PersistentFuncId func_id, const php::Str &func_name);';
-        $lines[] = 'zend_function *get_persistent_method(PersistentFuncId func_id, const php::Str &method_name, PersistentClassId class_id, const php::Str &class_name);';
-        $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);' . PHP_EOL;
-        $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id);' . PHP_EOL;
-        $lines[] = 'php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id);' . PHP_EOL;
-        $lines[] = 'php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id);' . PHP_EOL;
-
-        foreach ($this->getClassLikesWithConstants() as $classDef) {
-            foreach ($classDef->constants as $constant) {
-                if ($constant->type === Type::ARRAY) {
-                    $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
-                    $lines[] = 'extern ' . Type::VAR . ' ' . $constName . ';' . PHP_EOL;
+        if (!$commonOnly) {
+            foreach ($this->getClassLikesWithConstants() as $classDef) {
+                if ($sourceFile !== null && $classDef->sourceFile !== $sourceFile) {
+                    continue;
+                }
+                foreach ($classDef->constants as $constant) {
+                    if ($constant->type === Type::ARRAY) {
+                        $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
+                        $lines[] = 'extern ' . Type::VAR . ' ' . $constName . ';' . PHP_EOL;
+                    }
                 }
             }
         }
@@ -1005,8 +1078,7 @@ class Translator extends Preprocessor
         $lines[] = '}  // namespace ' . $projectNamespace;
         $lines[] = 'using namespace ' . $projectNamespace . ';';
 
-        $code = implode(PHP_EOL, $lines) . PHP_EOL . PHP_EOL;
-        $this->writeFile($file, $code);
+        return implode(PHP_EOL, $lines) . PHP_EOL . PHP_EOL;
     }
 
     public function genExtension(): string
@@ -1045,12 +1117,15 @@ class Translator extends Preprocessor
         $entryCall = $entry->returnType === Type::VOID
             ? $call . ';' . PHP_EOL . '    return 0;'
             : 'return static_cast<int>(' . $call . ');';
-        $code = '#include <php_' . $this->targetName . '_func_decl.h>' . PHP_EOL . PHP_EOL;
+        $entryHeader = $this->declarationHeaderFiles[$entry->sourceFile]
+            ?? 'php_' . $this->targetName . '_func_decl.h';
+        $code = '#include <' . $entryHeader . '>' . PHP_EOL . PHP_EOL;
         $code .= 'extern "C" int typephp_nano_project_main() {' . PHP_EOL;
         $code .= '    ' . $entryCall . PHP_EOL;
         $code .= '}' . PHP_EOL;
 
         $this->writeFile($file, $code);
+        $this->generatedProjectSources[$file] = true;
         return $file;
     }
 
@@ -1114,11 +1189,28 @@ class Translator extends Preprocessor
             }
         }
         $file = $this->getBuildDir() . '/extension-' . $this->targetName . '.cc';
+        sort($this->argInfoHeaderFiles, SORT_STRING);
+        sort($this->registerSymbols, SORT_STRING);
+        sort($this->releaseAstConstantFns, SORT_STRING);
         $this->localHeaders = $this->argInfoHeaderFiles;
+        // Stubs have native implementations, but still need local Zend
+        // callbacks. Generate these before sizing caches/rendering literals:
+        // parameter validation may allocate additional stable cache IDs.
+        $stubWrapperCode = $this->genStubWrappers();
+        // genExtension() is also a public code-generation entry used directly
+        // by tooling and tests, outside SourcePipelineTrait::convert(). Keep the
+        // whole-program property-default invariant local to the consumer too.
+        $this->finalizeRequestArrayDefaultMetadata();
         $this->genClassCeList();
+        // Clean incremental metadata is restored in source-path order, while a
+        // full conversion discovers globals in dependency order. Definitions,
+        // request registration and cleanup have no ordering dependency, so use
+        // one canonical order and keep extension-*.cc byte-stable across both.
+        $extensionGlobalVars = $this->globalVars;
+        ksort($extensionGlobalVars, SORT_STRING);
         $this->indentLevel++;
 
-        $code = $this->genIncludeHeaderFiles();
+        $code = $this->genExtensionIncludeHeaderFiles();
         // Only the generated module entry allocates request-cache storage.
         // Keep <new> out of the shared PCH dependency set used by every source.
         $code .= '#include <new>' . PHP_EOL;
@@ -1149,7 +1241,7 @@ class Translator extends Preprocessor
         $code .= 'namespace ' . $projectNamespace . ' {' . PHP_EOL . PHP_EOL;
 
         $code .= "// global vars \n";
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             $cppType = isset($this->nativeGlobalObjects[$name])
                 ? $this->getNativeObjectPointerType($this->nativeGlobalObjects[$name])
                 : Type::VAR;
@@ -1162,7 +1254,11 @@ class Translator extends Preprocessor
 
         $code .= "// class register functions \n";
         foreach ($this->classCeList as $ce) {
-            $code .= 'zend_class_entry *' . $ce . ';' . PHP_EOL;
+            // These slots are consumed only by the module-entry translation
+            // unit. Generated project sources resolve classes through the
+            // request/persistent cache accessors instead, so exposing one
+            // linkable data symbol per class is unnecessary.
+            $code .= 'static zend_class_entry *' . $ce . ' = nullptr;' . PHP_EOL;
         }
 
         $code .= "// request-local caches \n";
@@ -1173,15 +1269,17 @@ class Translator extends Preprocessor
         // a project does not use that cache kind.
         $code .= 'struct php_request_cache_storage final {' . PHP_EOL;
         $code .= $this->getIndent() . 'zend_class_entry *' . self::CLASS_MAP . '['
-            . max(1, count($this->classMap)) . ']{};' . PHP_EOL;
+            . max(1, $this->getStableIdRegistry()->capacity('request-class')) . ']{};' . PHP_EOL;
         $code .= $this->getIndent() . 'zend_function *' . self::FUNC_MAP . '['
-            . max(1, count($this->funcMap)) . ']{};' . PHP_EOL;
+            . max(1, $this->getStableIdRegistry()->capacity('request-function')) . ']{};' . PHP_EOL;
         $code .= $this->getIndent() . 'php::PropertyCacheSlot property_cache_map['
-            . max(1, $this->propertyAccessCacheIndex) . ']{};' . PHP_EOL;
+            . max(1, $this->getStableIdRegistry()->capacity('property-access')) . ']{};' . PHP_EOL;
         $code .= $this->getIndent() . 'php::MethodCallCacheSlot method_call_cache_map['
-            . max(1, $this->methodCallCacheIndex) . ']{};' . PHP_EOL;
+            . max(1, $this->getStableIdRegistry()->capacity('method-call')) . ']{};' . PHP_EOL;
         $code .= $this->getIndent() . 'php::FunctionCallCacheSlot function_call_cache_map['
-            . max(1, $this->functionCallCacheIndex) . ']{};' . PHP_EOL;
+            . max(1, $this->getStableIdRegistry()->capacity('function-call')) . ']{};' . PHP_EOL;
+        $code .= $this->getIndent() . 'uint8_t function_resolution_cache_map['
+            . max(1, $this->getStableIdRegistry()->capacity('function-resolution')) . ']{};' . PHP_EOL;
         $code .= '};' . PHP_EOL;
         $code .= 'static THREAD_LOCAL php_request_cache_storage *php_request_cache = nullptr;' . PHP_EOL;
 
@@ -1189,17 +1287,17 @@ class Translator extends Preprocessor
         // Internal/compiled symbols have module lifetime. They are initialized
         // lazily after PHP startup, so disable_functions/disable_classes have
         // already finalized the runtime tables. ZTS publishes them atomically.
-        $code .= 'static php::PersistentCacheSlot<zend_class_entry *> ' . self::PREFIX . self::PERSISTENT_CLASS_MAP . '[' . max(1, count($this->persistentClassMap)) . ']{};' . PHP_EOL;
+        $code .= 'static php::PersistentCacheSlot<zend_class_entry *> ' . self::PREFIX . self::PERSISTENT_CLASS_MAP . '[' . max(1, $this->getStableIdRegistry()->capacity('persistent-class')) . ']{};' . PHP_EOL;
 
         $code .= "// func \n";
-        $code .= 'static php::PersistentCacheSlot<zend_function *> ' . self::PREFIX . self::PERSISTENT_FUNC_MAP . '[' . max(1, count($this->persistentFuncMap)) . ']{};' . PHP_EOL;
+        $code .= 'static php::PersistentCacheSlot<zend_function *> ' . self::PREFIX . self::PERSISTENT_FUNC_MAP . '[' . max(1, $this->getStableIdRegistry()->capacity('persistent-function')) . ']{};' . PHP_EOL;
 
         $code .= $this->genPythonModuleStorage();
 
         $code .= "// property \n";
         // No dynamic propMap: the property offset cache only covers declared
         // properties of compiled/built-in classes (see getPropertyId).
-        $code .= 'static php::PersistentCacheSlot<uint32_t> ' . self::PREFIX . self::PERSISTENT_PROP_MAP . '[' . max(1, count($this->persistentPropMap)) . ']{};' . PHP_EOL;
+        $code .= 'static php::PersistentCacheSlot<uint32_t> ' . self::PREFIX . self::PERSISTENT_PROP_MAP . '[' . max(1, $this->getStableIdRegistry()->capacity('persistent-property')) . ']{};' . PHP_EOL;
         $code .= "// functions \n";
 
         $code .= <<<'CODE'
@@ -1261,16 +1359,20 @@ uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_
     return value - 1024;
 }
 
-php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) {
+php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) noexcept {
     return php_request_cache->property_cache_map[static_cast<uint32_t>(cache_id)];
 }
 
-php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) {
+php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) noexcept {
     return php_request_cache->method_call_cache_map[static_cast<uint32_t>(cache_id)];
 }
 
-php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) {
+php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) noexcept {
     return php_request_cache->function_call_cache_map[static_cast<uint32_t>(cache_id)];
+}
+
+uint8_t &typephp_get_function_resolution_cache(FunctionResolutionCacheId cache_id) noexcept {
+    return php_request_cache->function_resolution_cache_map[static_cast<uint32_t>(cache_id)];
 }
 CODE;
         $code .= "\n\n";
@@ -1288,7 +1390,7 @@ CODE;
             }
             $code .= '};' . PHP_EOL . PHP_EOL;
             $code .= 'ZEND_ATTRIBUTE_CONST ' . Type::STR . ' &'
-                . self::LITERAL_STRING_GETTER . '(uint32_t index) {' . PHP_EOL;
+                . self::LITERAL_STRING_GETTER . '(uint32_t index) noexcept {' . PHP_EOL;
             $code .= $this->getIndent() . 'return ' . self::LITERAL_STRINGS . '[index];' . PHP_EOL;
             $code .= '}' . PHP_EOL . PHP_EOL;
         } else {
@@ -1296,6 +1398,9 @@ CODE;
         }
 
         $code .= '}  // namespace ' . $projectNamespace . PHP_EOL . PHP_EOL;
+
+        $code .= "// native/import stub callbacks \n";
+        $code .= $stubWrapperCode;
 
         $code .= "// default argument values \n";
         $code .= $this->genDefaultArgumentHelperDefinitions();
@@ -1329,6 +1434,12 @@ CODE;
         }
         $code .= $this->genRequestArrayDefaultInitializers();
 
+        if ($this->classArrayConstantLifecycleDeclarations !== []) {
+            $code .= "// split request-lifecycle helpers\n";
+            $code .= implode(PHP_EOL, $this->classArrayConstantLifecycleDeclarations)
+                . PHP_EOL . PHP_EOL;
+        }
+
         $traitMetadata = $this->genTraitMetadataCode();
         $code .= $traitMetadata['declarations'];
 
@@ -1352,7 +1463,7 @@ CODE;
             if ($functionDef->method) {
                 continue;
             }
-            if ($this->functionUsesNativeObject($functionDef)) {
+            if ($this->functionRequiresNativeAbi($functionDef)) {
                 continue;
             }
             $fullName = $functionDef->getNamespacedName();
@@ -1457,13 +1568,26 @@ CODE;
 
         // request-level module state initialization
         $code .= 'static void module_init() {' . PHP_EOL;
+        $code .= $this->genCompiledGeneratorFingerprintRegistration();
         $code .= '// register constants' . PHP_EOL;
         foreach ($this->constants as $name => $const) {
+            $initializationCode = $const->initializationCode ?? '';
+            $afterInitializationCode = $const->afterInitializationCode ?? '';
+            $scopedInitialization = $initializationCode !== '' || $afterInitializationCode !== '';
+            if ($scopedInitialization) {
+                // Each constant has its own temporary namespace. Declaration
+                // lowering resets temporary IDs between independent values.
+                $code .= "do {\n" . $initializationCode;
+            }
             $code .= "{$name} = {$const->value};\n";
+            $code .= $afterInitializationCode;
             $code .= 'php::fn::define(' . $this->genCharPtr($const->name, true) . ', ' . $name . ');' . PHP_EOL;
+            if ($scopedInitialization) {
+                $code .= "} while (0);\n";
+            }
         }
         $code .= '// global vars ' . PHP_EOL;
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             if ($name == 'GLOBALS') {
                 continue;
             }
@@ -1517,7 +1641,7 @@ CODE;
 
         // request-level module state cleanup
         $code .= 'static void module_clean() {' . PHP_EOL;
-        foreach ($this->globalVars as $name => $type) {
+        foreach ($extensionGlobalVars as $name => $type) {
             if ($name != 'GLOBALS') {
                 if (isset($this->nativeGlobalObjects[$name])) {
                     $code .= $this->escapeGlobalVar($name) . ' = nullptr;' . PHP_EOL;
@@ -1541,62 +1665,7 @@ CODE;
         $code .= $this->genPythonModuleCleanup();
 
         $code .= '// class array constants' . PHP_EOL;
-        foreach ($this->getClassLikesWithConstants() as $classDef) {
-            foreach ($classDef->constants as $constant) {
-                if ($constant->type === Type::ARRAY) {
-                    $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
-                    $code .= $constName . ".unset();\n";
-
-                    if (!$classDef instanceof ClassDef || !$classDef->nativeObject) {
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-            }
-        }
-
-        // Clean up inherited array constants from child classes
-        foreach ($this->symbols->classes() as $className => $classDef) {
-            if ($classDef->nativeObject) {
-                continue;
-            }
-            $ownConstNames = [];
-            foreach ($classDef->constants as $constant) {
-                if ($constant->type === Type::ARRAY) {
-                    $ownConstNames[$constant->name] = true;
-                }
-            }
-
-            $parentName = $this->escapeClass($classDef->extends);
-            while ($parentName && $this->symbols->hasClass($parentName)) {
-                $parentDef = $this->symbols->class($parentName);
-                foreach ($parentDef->constants as $constant) {
-                    if ($constant->type === Type::ARRAY && !isset($ownConstNames[$constant->name])) {
-                        $ownConstNames[$constant->name] = true;
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-                $parentName = $this->escapeClass($parentDef->extends);
-            }
-
-            foreach ($this->getClassImplementedInterfaces($classDef) as $interfaceName) {
-                if (!$this->hasInterface($interfaceName)) {
-                    continue;
-                }
-                $interfaceDef = $this->getInterface($interfaceName);
-                foreach ($interfaceDef->constants as $constant) {
-                    if ($constant->type === Type::ARRAY && !isset($ownConstNames[$constant->name])) {
-                        $ownConstNames[$constant->name] = true;
-                        $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
-                        $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
-                    }
-                }
-            }
-        }
+        $code .= $this->genClassArrayConstantCleanup();
 
         $code .= '}' . PHP_EOL . PHP_EOL;
         // module_clean end
@@ -1728,6 +1797,7 @@ CODE;
 
         $this->writeFile($file, $code);
         $this->formatCppCode($file);
+        $this->generatedProjectSources[$file] = true;
         $this->localHeaders = [];
         return $file;
     }
@@ -1775,7 +1845,7 @@ CODE;
         }
 
         $objectMtime = filemtime($objectFile);
-        if ($objectMtime <= filemtime($cppFile)) {
+        if ($objectMtime < filemtime($cppFile)) {
             return false;
         }
 
@@ -1816,6 +1886,103 @@ CODE;
         ];
 
         return hash('sha256', $this->buildCompileFileCommand($sourceFile, $objectFile) . "\0" . serialize($abi));
+    }
+
+    protected function getGeneratedObjectCacheKey(string $sourceFile, string $objectFile): string
+    {
+        $context = hash_init('sha256');
+        hash_update($context, $this->getMiscObjectCacheKey($sourceFile, $objectFile));
+        $visited = [];
+        $this->hashGeneratedCompileInput($context, $sourceFile, $visited);
+        if ($this->isProjectRuntimeEntryFile($sourceFile)) {
+            $this->hashGeneratedCompileInput(
+                $context,
+                $this->getIncludeDir() . '/' . $this->getAllDeclarationHeaderName(),
+                $visited,
+            );
+        }
+        return hash_final($context);
+    }
+
+    private bool $memoizeGeneratedCompileInputs = false;
+    /** @var array<string, array{digest: string, headers: array}> */
+    private array $generatedCompileInputCache = [];
+
+    /** @param array<string, true> $visited */
+    private function hashGeneratedCompileInput(\HashContext $context, string $file, array &$visited): void
+    {
+        $real = realpath($file);
+        // Generated files can be replaced atomically while a parallel build is
+        // finishing. realpath() may therefore succeed immediately before the
+        // old directory entry disappears. Treat that race like a cache miss:
+        // an incomplete content graph cannot match metadata written from the
+        // complete graph.
+        if ($real === false || !is_file($real) || isset($visited[$real])) {
+            return;
+        }
+        $visited[$real] = true;
+        $input = $this->memoizeGeneratedCompileInputs ? ($this->generatedCompileInputCache[$real] ?? null) : null;
+        if ($input === null) {
+            $contents = @file_get_contents($real);
+            if (!is_string($contents)) {
+                return;
+            }
+            preg_match_all('/^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]/m', $contents, $matches);
+            $input = ['digest' => hash('sha256', $contents), 'headers' => $matches[1] ?? []];
+            if ($this->memoizeGeneratedCompileInputs) {
+                $this->generatedCompileInputCache[$real] = $input;
+            }
+        }
+        hash_update($context, 'digest-v2' . "\0" . str_replace('\\', '/', $real) . "\0" . $input['digest'] . "\0");
+        $includeRoot = realpath($this->getIncludeDir());
+        if ($includeRoot === false) {
+            return;
+        }
+        foreach ($input['headers'] as $header) {
+            $candidate = $includeRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $header);
+            $resolved = realpath($candidate);
+            if ($resolved === false
+                || ($resolved !== $includeRoot
+                    && !str_starts_with($resolved, $includeRoot . DIRECTORY_SEPARATOR))) {
+                continue;
+            }
+            $this->hashGeneratedCompileInput($context, $resolved, $visited);
+        }
+    }
+
+    private function isGeneratedProjectSource(string $sourceFile): bool
+    {
+        return isset($this->generatedProjectSources[$sourceFile]);
+    }
+
+    private function hasGeneratedObjectFileCache(string $sourceFile, string $objectFile): bool
+    {
+        if ($this->climate->arguments->defined('force')
+            || $this->enableProfiler
+            || !is_file($sourceFile)
+            || !is_file($objectFile)) {
+            return false;
+        }
+        $metadata = $this->getMiscObjectCacheMetadataFile($objectFile);
+        $key = is_file($metadata) ? file_get_contents($metadata) : false;
+        if (!is_string($key)
+            || trim($key) !== $this->getGeneratedObjectCacheKey($sourceFile, $objectFile)) {
+            return false;
+        }
+        // The key covers the compile command, source contents, and all generated
+        // project headers recursively. A regenerated file may have a newer
+        // timestamp while retaining byte-identical contents; rejecting that
+        // object would turn a generator-fingerprint change into a full native
+        // rebuild and defeat the content-addressed cache.
+        return true;
+    }
+
+    private function writeGeneratedObjectCacheMetadata(string $sourceFile, string $objectFile): void
+    {
+        $metadata = $this->getMiscObjectCacheMetadataFile($objectFile);
+        if (file_put_contents($metadata, $this->getGeneratedObjectCacheKey($sourceFile, $objectFile) . PHP_EOL) === false) {
+            throw new \RuntimeException('Cannot write generated object cache metadata: ' . $metadata);
+        }
     }
 
     protected function writeMiscObjectCacheMetadata(string $sourceFile, string $objectFile): void
@@ -1878,26 +2045,18 @@ CODE;
 
     public function compileFile(string $cppFile, string $objectFile, bool $parallel = false): void
     {
-        $isCacheableMiscFile = $this->isPhpxMiscFile($cppFile)
-            && !$this->isProjectRuntimeEntryFile($cppFile);
-        $isNanoRuntimeSource = isset($this->nanoRuntimeSources[$cppFile]);
-        if ($isCacheableMiscFile && $this->hasMiscObjectFileCache($cppFile)) {
-            if (!$parallel) {
-                $this->climate->darkGray('[cache] skip: ' . $cppFile);
-            }
-            return;
-        }
-        if ($isNanoRuntimeSource && $this->hasNanoObjectFileCache($cppFile, $objectFile)) {
+        $task = $this->prepareCompileFileTask($cppFile, $objectFile, $parallel);
+        if ($task === null) {
             return;
         }
 
-        if ($isCacheableMiscFile) {
-            $this->invalidateMiscObjectCache($objectFile);
-        }
-
-        $language = $this->getLanguageFromExtension($cppFile);
-        $options = $this->getSourceCompileCommandOptions($cppFile, $language);
-        $result = $this->getNativeBuilder()->compile($cppFile, $objectFile, $options, $language, $parallel);
+        $result = $this->getNativeBuilder()->compile(
+            $cppFile,
+            $objectFile,
+            $task['options'],
+            $task['language'],
+            $parallel,
+        );
         if (!$parallel) {
             $this->climate->comment($result['command']);
         }
@@ -1910,11 +2069,66 @@ CODE;
             $this->error('compile failed: ' . $cppFile);
         }
 
-        if ($isCacheableMiscFile) {
+        $this->finalizeCompileFileTask($cppFile, $objectFile, $task);
+    }
+
+    /**
+     * @return null|array{
+     *     language: ?string,
+     *     options: CompileOptions,
+     *     cacheable_misc: bool,
+     *     nano_runtime: bool,
+     *     generated_project: bool
+     * }
+     */
+    private function prepareCompileFileTask(
+        string $cppFile,
+        string $objectFile,
+        bool $parallel,
+    ): ?array {
+        $isCacheableMiscFile = $this->isPhpxMiscFile($cppFile)
+            && !$this->isProjectRuntimeEntryFile($cppFile);
+        $isNanoRuntimeSource = isset($this->nanoRuntimeSources[$cppFile]);
+        $isGeneratedProjectSource = $this->isGeneratedProjectSource($cppFile)
+            || $this->isProjectRuntimeEntryFile($cppFile);
+        if ($isCacheableMiscFile && $this->hasMiscObjectFileCache($cppFile)) {
+            if (!$parallel) {
+                $this->climate->darkGray('[cache] skip: ' . $cppFile);
+            }
+            return null;
+        }
+        if ($isNanoRuntimeSource && $this->hasNanoObjectFileCache($cppFile, $objectFile)) {
+            return null;
+        }
+        if ($isGeneratedProjectSource && $this->hasGeneratedObjectFileCache($cppFile, $objectFile)) {
+            return null;
+        }
+
+        if ($isCacheableMiscFile || $isGeneratedProjectSource) {
+            $this->invalidateMiscObjectCache($objectFile);
+        }
+
+        $language = $this->getLanguageFromExtension($cppFile);
+        return [
+            'language' => $language,
+            'options' => $this->getSourceCompileCommandOptions($cppFile, $language),
+            'cacheable_misc' => $isCacheableMiscFile,
+            'nano_runtime' => $isNanoRuntimeSource,
+            'generated_project' => $isGeneratedProjectSource,
+        ];
+    }
+
+    /** @param array{cacheable_misc: bool, nano_runtime: bool, generated_project: bool} $task */
+    private function finalizeCompileFileTask(string $cppFile, string $objectFile, array $task): void
+    {
+        if ($task['cacheable_misc']) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
         }
-        if ($isNanoRuntimeSource) {
+        if ($task['nano_runtime']) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
+        }
+        if ($task['generated_project']) {
+            $this->writeGeneratedObjectCacheMetadata($cppFile, $objectFile);
         }
     }
 
@@ -1933,7 +2147,7 @@ CODE;
         $sourceMtime = filemtime($sourceFile);
         return $objectMtime !== false
             && $sourceMtime !== false
-            && $objectMtime > $sourceMtime
+            && $objectMtime >= $sourceMtime
             && $objectMtime >= $this->nanoRuntimeHeaderMtime;
     }
 
@@ -1943,11 +2157,17 @@ CODE;
             return $this->getProjectRuntimeEntryCompileCommandOptions();
         }
 
-        return match ($language) {
+        $options = match ($language) {
             null => $this->getCompileCommandOptions(),
             'c' => $this->getCCompileCommandOptions(),
             default => $this->getNativeCompileCommandOptions($language),
         };
+        if ($this->isGeneratedProjectSource($sourceFile) && isset($options['forced_include'])) {
+            $values = $options->toArray();
+            unset($values['forced_include']);
+            return new CompileOptions($values);
+        }
+        return $options;
     }
 
     protected function buildCompileFileCommand(string $sourceFile, string $objectFile): string
@@ -1990,12 +2210,18 @@ CODE;
         // Windows: compile the resource file (icon, version info, etc.)
         $this->compileResourceFile();
 
-        if (!$this->getPlatform()->supportsPcntlParallelCompile() or $job <= 1) {
+        if ($job <= 1) {
             return $this->compileSourceFile($sourceFiles);
         }
 
-        // Unix/Linux/macOS compile in parallel using pcntl
-        return $this->compileWithPcntl($sourceFiles, $job);
+        if (function_exists('proc_open') && function_exists('proc_get_status')) {
+            return $this->compileWithProcessPool($sourceFiles, $job);
+        }
+
+        $this->climate->warning(
+            'proc_open/proc_get_status unavailable, using sequential compilation',
+        );
+        return $this->compileSourceFile($sourceFiles);
     }
 
     /** @param list<string> $generatedSources @return list<string> */
@@ -2005,8 +2231,10 @@ CODE;
             $this->getBuildDir(),
             $this->targetName,
             true,
+            $this->getCompilationStatistics(),
         );
         $this->nanoRuntimeIncludePaths = $composition['includeDirs'];
+        $this->nanoRuntimeDefines = $composition['defines'];
         $this->nanoRuntimeSources = array_fill_keys($composition['packageSources'], true);
         $this->nanoRuntimeHeaderMtime = $this->latestNanoHeaderMtime(
             $this->nanoRuntimeIncludePaths,
@@ -2081,6 +2309,18 @@ CODE;
 
     protected function compileSourceFile(array $sourceFiles): array
     {
+        $this->memoizeGeneratedCompileInputs = true;
+        $this->generatedCompileInputCache = [];
+        try {
+            return $this->compileSourceFileUncached($sourceFiles);
+        } finally {
+            $this->memoizeGeneratedCompileInputs = false;
+            $this->generatedCompileInputCache = [];
+        }
+    }
+
+    private function compileSourceFileUncached(array $sourceFiles): array
+    {
         $objectFiles = [];
         $totalFiles = count($sourceFiles);
         $failedFiles = [];
@@ -2124,63 +2364,22 @@ CODE;
         return $objectFiles;
     }
 
-    /**
-     * Parallel compilation on Unix/Linux/macOS (using pcntl).
-     */
-    protected function pcntlWait(?int &$status): int
+    protected function compileWithProcessPool(array $sourceFiles, int $job): array
     {
-        return pcntl_wait($status);
-    }
-
-    protected function pcntlFork(): int
-    {
-        return pcntl_fork();
-    }
-
-    protected function pcntlLastError(): int
-    {
-        return pcntl_get_last_error();
-    }
-
-    protected function waitForCompileChild(): array
-    {
-        do {
-            $status = null;
-            $pid = $this->pcntlWait($status);
-            $error = $pid === -1 ? $this->pcntlLastError() : 0;
-        } while ($pid === -1 && defined('PCNTL_EINTR') && $error === PCNTL_EINTR);
-
-        if ($pid === -1) {
-            $message = function_exists('pcntl_strerror') ? pcntl_strerror($error) : 'error ' . $error;
-            throw new \RuntimeException('Failed to wait for compiler process: ' . $message);
+        // Generation/formatting is finished. Share immutable file digests only
+        // for this native build, including completion callbacks, then discard.
+        $this->memoizeGeneratedCompileInputs = true;
+        $this->generatedCompileInputCache = [];
+        try {
+            return $this->compileWithProcessPoolUncached($sourceFiles, $job);
+        } finally {
+            $this->memoizeGeneratedCompileInputs = false;
+            $this->generatedCompileInputCache = [];
         }
-
-        return [$pid, (int) $status];
     }
 
-    protected function compileChildSucceeded(int $status): bool
+    private function compileWithProcessPoolUncached(array $sourceFiles, int $job): array
     {
-        return pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0;
-    }
-
-    protected function getCompileChildFailureReason(int $status): string
-    {
-        if (pcntl_wifsignaled($status)) {
-            return 'terminated by signal ' . pcntl_wtermsig($status);
-        }
-        if (pcntl_wifexited($status)) {
-            return 'exited with status ' . pcntl_wexitstatus($status);
-        }
-        return 'terminated abnormally';
-    }
-
-    protected function compileWithPcntl(array $sourceFiles, int $job): array
-    {
-        if (!function_exists('pcntl_fork')) {
-            $this->climate->warning('pcntl extension not available, using sequential compilation');
-            return $this->compileSourceFile($sourceFiles);
-        }
-
         $totalFiles = count($sourceFiles);
         $this->climate->lightBlue("Starting parallel compilation with {$job} jobs for {$totalFiles} files");
         $progress = null;
@@ -2191,31 +2390,81 @@ CODE;
                 ->labelStyle([AnsiTerminal::FG_CYAN]);
             $progress->renderInPlace(0, $totalFiles, 'Compiling');
         }
-        $result = $this->getNativeBuilder()->dispatchParallel(
-            $sourceFiles,
+
+        $tasks = [];
+        $cachedObjects = [];
+        $taskMetadata = [];
+        $completedBeforeDispatch = 0;
+        foreach (SourceCompileQueue::largestFirst($sourceFiles) as $source) {
+            $object = $this->getObjectFile($source);
+            $task = $this->prepareCompileFileTask($source, $object, true);
+            if ($task === null) {
+                $cachedObjects[] = $object;
+                $completedBeforeDispatch++;
+                if ($this->noProgress) {
+                    $percent = $completedBeforeDispatch >= $totalFiles
+                        ? 100
+                        : min(99, (int) ceil($completedBeforeDispatch / $totalFiles * 100));
+                    $shortSource = $this->removeCommonPrefix($this->buildDir, $source);
+                    $this->climate->white(
+                        "[{$completedBeforeDispatch}/{$totalFiles}] {$percent}% {$shortSource} [cache]",
+                    );
+                }
+                continue;
+            }
+            $tasks[] = [
+                'source' => $source,
+                'object' => $object,
+                'command' => $this->getNativeBuilder()->compileCommand(
+                    $source,
+                    $object,
+                    $task['options'],
+                    $task['language'],
+                ),
+            ];
+            $taskMetadata[$object] = $task;
+        }
+
+        if ($completedBeforeDispatch > 0 && !$this->noProgress) {
+            $progress->renderInPlace($completedBeforeDispatch, $totalFiles, 'Compiling');
+        }
+
+        $result = $this->getNativeBuilder()->dispatchProcessParallel(
+            $tasks,
             $job,
-            fn(string $source): string => $this->getObjectFile($source),
-            function (string $source, string $object): void {
-                $this->compileFile($source, $object, true);
-            },
-            fn(): int => $this->pcntlFork(),
-            fn(): array => $this->waitForCompileChild(),
-            fn(int $status): bool => $this->compileChildSucceeded($status),
-            function (string $source, string $object, int $status, bool $success, int $completed) use ($progress, $totalFiles): void {
-                if (!$success) {
-                    echo PHP_EOL;
-                    $this->climate->red("Compilation failed: {$source} ({$this->getCompileChildFailureReason($status)})");
+            function (
+                string $source,
+                string $object,
+                string $command,
+                array $output,
+                int $status,
+                bool $success,
+                int $completed,
+            ) use ($progress, $totalFiles, $completedBeforeDispatch, $taskMetadata): void {
+                $absoluteCompleted = $completedBeforeDispatch + $completed;
+                if ($success) {
+                    $this->finalizeCompileFileTask($source, $object, $taskMetadata[$object]);
+                } else {
+                    if (!$this->noProgress) {
+                        echo PHP_EOL;
+                    }
+                    foreach ($output as $line) {
+                        $this->climate->red($line);
+                    }
+                    $this->climate->red("Compilation failed: {$source} (exit status {$status})");
+                    $this->climate->comment($command);
                 }
                 if ($this->noProgress) {
-                    $percent = $completed >= $totalFiles
+                    $percent = $absoluteCompleted >= $totalFiles
                         ? 100
-                        : min(99, (int) ceil($completed / $totalFiles * 100));
+                        : min(99, (int) ceil($absoluteCompleted / $totalFiles * 100));
                     $shortSource = $this->removeCommonPrefix($this->buildDir, $source);
-                    $this->climate->white("[{$completed}/{$totalFiles}] {$percent}% {$shortSource}");
+                    $this->climate->white("[{$absoluteCompleted}/{$totalFiles}] {$percent}% {$shortSource}");
                 } else {
-                    $progress->renderInPlace($completed, $totalFiles, 'Compiling');
+                    $progress->renderInPlace($absoluteCompleted, $totalFiles, 'Compiling');
                 }
             },
+            true,
         );
 
         if (!$this->noProgress) {
@@ -2226,7 +2475,10 @@ CODE;
             throw new \Exception('Compilation failed for: ' . implode(', ', $result['failures']));
         }
         $this->climate->green("Successfully compiled {$totalFiles} files");
-        return $result['objects'];
+        // Parallel completion and cache-hit order are intentionally unrelated
+        // to dependency order. Return objects in the stable source-list order
+        // so the link command (and therefore its cache key) is reproducible.
+        return array_map($this->getObjectFile(...), $sourceFiles);
     }
 
     public function output(string $message, string $style = 'out'): void
@@ -2239,6 +2491,50 @@ CODE;
         return $this->getNativeBuilder()->linkCommand($objectFiles, $targetFile, $this->getLinkCommandOptions());
     }
 
+    /** @param list<string> $objectFiles */
+    private function getLinkCacheKey(array $objectFiles, string $targetFile): string
+    {
+        return hash('sha256', $this->buildLinkCommand($objectFiles, $targetFile));
+    }
+
+    /** @param list<string> $objectFiles */
+    private function hasLinkCache(array $objectFiles, string $targetFile): bool
+    {
+        if ($this->climate->arguments->defined('force')
+            || $this->enableProfiler
+            || !is_file($targetFile)) {
+            return false;
+        }
+        $targetMtime = filemtime($targetFile);
+        if ($targetMtime === false) {
+            return false;
+        }
+        foreach ($objectFiles as $objectFile) {
+            $objectMtime = is_file($objectFile) ? filemtime($objectFile) : false;
+            if ($objectMtime === false || $targetMtime < $objectMtime) {
+                return false;
+            }
+        }
+        $metadata = $this->getLinkCacheMetadataFile($targetFile);
+        $key = is_file($metadata) ? file_get_contents($metadata) : false;
+        return is_string($key) && trim($key) === $this->getLinkCacheKey($objectFiles, $targetFile);
+    }
+
+    private function getLinkCacheMetadataFile(string $targetFile): string
+    {
+        return $this->getBuildDir() . DIRECTORY_SEPARATOR
+            . basename($targetFile) . '.typephp-link-cache';
+    }
+
+    /** @param list<string> $objectFiles */
+    private function writeLinkCache(array $objectFiles, string $targetFile): void
+    {
+        $metadata = $this->getLinkCacheMetadataFile($targetFile);
+        if (file_put_contents($metadata, $this->getLinkCacheKey($objectFiles, $targetFile) . PHP_EOL) === false) {
+            throw new \RuntimeException('Cannot write link cache metadata: ' . $metadata);
+        }
+    }
+
     public function build(array $objectFiles): string
     {
         $targetFile = $this->getTargetFileName();
@@ -2249,6 +2545,12 @@ CODE;
             if (file_exists($resFile)) {
                 $objectFiles[] = $resFile;
             }
+        }
+
+        if ($this->hasLinkCache($objectFiles, $targetFile)) {
+            $this->climate->darkGray('[incremental] link cache: ' . $targetFile);
+            $this->climate->green('Build successful: ' . $targetFile);
+            return $targetFile;
         }
 
         $buildError = null;
@@ -2270,6 +2572,7 @@ CODE;
         if ($this->isNanoMode()) {
             $this->auditNanoArtifact($objectFiles, $targetFile);
         }
+        $this->writeLinkCache($objectFiles, $targetFile);
 
         $this->climate->green('Build successful: ' . $targetFile);
 
@@ -2294,10 +2597,9 @@ CODE;
             );
             return;
         }
-        $auditor->assertUndefinedSymbols(
-            'native',
-            $this->captureNativeCommand(['nm', '-u', ...$objectFiles]),
-        );
+        /* Native objects may deliberately provide an OS ABI to one another
+         * (for example a freestanding syscall shim). Only unresolved imports
+         * in the final ELF cross the host-capability boundary. */
         $auditor->assertUndefinedSymbols(
             'native',
             $this->captureNativeCommand(['nm', '-u', $targetFile]),
@@ -2378,19 +2680,33 @@ CODE;
 
     public function genFunctionDeclarations(string $file): void
     {
+        $this->writeFile($file, $this->renderFunctionDeclarations());
+    }
+
+    protected function renderFunctionDeclarations(?string $sourceFile = null): string
+    {
         $code = '#pragma once' . PHP_EOL . PHP_EOL;
         $code .= '#include <phpx.h>' . PHP_EOL;
         $code .= '#include <typephp_helper.h>' . PHP_EOL;
         $code .= '#include <typephp_fiber_generator.h>' . PHP_EOL;
+        if ($sourceFile !== null && $this->declarationHeaderFiles !== []) {
+            $code .= '#include <' . $this->getRuntimeDeclarationHeaderName() . '>' . PHP_EOL;
+            foreach ($this->getDeclarationHeadersForFile($sourceFile, false) as $header) {
+                $code .= '#include <' . $header . '>' . PHP_EOL;
+            }
+        }
         $code .= PHP_EOL;
 
-        $code .= $this->genNativeObjectDeclarations();
+        $code .= $this->genNativeObjectDeclarations($sourceFile);
 
         if ($this->isBuildModeLib()) {
             $code .= $this->genLibraryApiMacro($this->targetName);
         }
         $importLibraries = [];
         foreach ($this->symbols->functions() as $function) {
+            if ($sourceFile !== null && $function->sourceFile !== $sourceFile) {
+                continue;
+            }
             if ($this->isImportedFunction($function)) {
                 $importLibraries[$function->importLibrary] = true;
             }
@@ -2399,10 +2715,18 @@ CODE;
             $code .= $this->genLibraryImportMacro($library);
         }
 
-        $code .= $this->genDefaultArgumentHelperDeclarations();
+        $code .= $this->genDefaultArgumentHelperDeclarations($sourceFile);
 
         foreach ($this->symbols->functions() as $name => $func) {
+            if ($sourceFile !== null && $func->sourceFile !== $sourceFile) {
+                continue;
+            }
             if ($func->abstractMethod) {
+                continue;
+            }
+            if ($func->method && $this->isNativeObjectClass($func->declaringClass)) {
+                // Native methods are declared directly in their generated C++
+                // class. They deliberately have no php_* free-function ABI.
                 continue;
             }
             $functionDeclarationPrefix = $this->getFunctionDeclarationPrefix($func);
@@ -2438,7 +2762,119 @@ CODE;
             }
         }
 
-        $this->writeFile($file, $code);
+        return $code;
+    }
+
+    public function getDeclarationHeaderFile(string $file, bool $relative = false): string
+    {
+        $realFile = realpath($file) ?: $file;
+        $path = $this->getRelativePath(str_replace(['.stub.php', '.php'], '', $realFile));
+        $name = $this->escapeFileName(str_replace(['/', '\\'], '_', $path));
+        $name .= '_' . substr(hash('sha256', str_replace('\\', '/', $realFile)), 0, 10);
+        $absolute = $this->getIncludeDir() . '/php_' . $this->targetName . '_' . $name . '_decl.h';
+        return $relative ? basename($absolute) : $absolute;
+    }
+
+    private function getRuntimeDeclarationHeaderName(): string
+    {
+        return 'php_' . $this->targetName . '_runtime_decl.h';
+    }
+
+    private function getAllDeclarationHeaderName(): string
+    {
+        return 'php_' . $this->targetName . '_all_decl.h';
+    }
+
+    /** @param list<string> $files */
+    private function initializeDeclarationHeaderFiles(array $files): void
+    {
+        $this->declarationHeaderFiles = [];
+        foreach ($this->getDeclarationInputFiles($files) as $file) {
+            if (FileScanner::isPhpFile($file)) {
+                $this->declarationHeaderFiles[$file] = $this->getDeclarationHeaderFile($file, true);
+            }
+        }
+    }
+
+    /** @return list<string> */
+    private function getDeclarationHeadersForFile(string $file, bool $includeOwn = true): array
+    {
+        $headers = [];
+        if ($includeOwn && isset($this->declarationHeaderFiles[$file])) {
+            $headers[] = $this->declarationHeaderFiles[$file];
+        }
+        foreach ($this->symbolCallInFile[$file] ?? [] as $symbol) {
+            $dependencyFile = $this->symbolDeclInFile[$symbol] ?? null;
+            if ($dependencyFile === null || $dependencyFile === $file) {
+                continue;
+            }
+            if (isset($this->declarationHeaderFiles[$dependencyFile])) {
+                $headers[] = $this->declarationHeaderFiles[$dependencyFile];
+            }
+        }
+        $headers = array_values(array_unique($headers));
+        sort($headers, SORT_STRING);
+        return $headers;
+    }
+
+    /** @param list<string> $files */
+    private function genDeclarationHeaders(array $files): void
+    {
+        foreach ([
+            $this->getIncludeDir() . '/php_' . $this->targetName . '_func_decl.h',
+            $this->getIncludeDir() . '/php_' . $this->targetName . '_data_decl.h',
+        ] as $legacyHeader) {
+            if (is_file($legacyHeader)) {
+                @unlink($legacyHeader);
+            }
+        }
+
+        $manifest = $this->getBuildDir() . '/cache/incremental/' . $this->targetName
+            . '/declaration-headers.json';
+        $previous = [];
+        if (is_file($manifest)) {
+            $decoded = json_decode((string) file_get_contents($manifest), true);
+            if (is_array($decoded)) {
+                $previous = array_values(array_filter($decoded, 'is_string'));
+            }
+        }
+        $current = array_values($this->declarationHeaderFiles);
+        foreach (array_diff($previous, $current) as $staleHeader) {
+            $path = $this->getIncludeDir() . '/' . basename($staleHeader);
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+
+        $runtimeHeader = $this->getIncludeDir() . '/' . $this->getRuntimeDeclarationHeaderName();
+        $this->writeFile($runtimeHeader, '#pragma once' . PHP_EOL . PHP_EOL
+            . $this->renderDataDeclarations(null, true)
+            . $this->genNativeObjectForwardDeclarations());
+        foreach ($this->declarationHeaderFiles as $file => $header) {
+            if (!$this->shouldRegeneratePhpFile($file)) {
+                continue;
+            }
+            $code = $this->renderFunctionDeclarations($file);
+            $code .= $this->renderDataDeclarations($file);
+            $this->writeFile(
+                $this->getIncludeDir() . '/' . $header,
+                $code,
+                $this->shouldRegeneratePhpFile($file),
+            );
+        }
+        $allDeclarations = '#pragma once' . PHP_EOL . PHP_EOL;
+        $allDeclarations .= '#include <' . $this->getRuntimeDeclarationHeaderName() . '>' . PHP_EOL;
+        foreach ($current as $header) {
+            $allDeclarations .= '#include <' . $header . '>' . PHP_EOL;
+        }
+        $this->writeFile(
+            $this->getIncludeDir() . '/' . $this->getAllDeclarationHeaderName(),
+            $allDeclarations,
+        );
+        $this->writeFile(
+            $manifest,
+            json_encode($current, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL,
+        );
     }
 
     protected function getLibraryApiMacroName(): string
@@ -2574,15 +3010,13 @@ CODE;
     public function isNativeFunctionForStub(string $function): bool
     {
         return $this->hasFunction($function)
-            && $this->functionUsesNativeObject($this->getFunction($function));
+            && $this->functionRequiresNativeAbi($this->getFunction($function));
     }
 
     public function isNativeMethodForStub(string $class, string $method): bool
     {
-        $class = ltrim($class, '\\');
-        return $this->hasClass($class)
-            && $this->getClass($class)->hasMethod($method)
-            && $this->functionUsesNativeObject($this->getClass($class)->getMethod($method)->functionDef);
+        $function = $this->findAotMethodFunctionDef(ltrim($class, '\\'), $method);
+        return $function !== null && $this->functionRequiresNativeAbi($function);
     }
 
     public function getArgInfoHeaderFile(string $file, bool $relative = false): string
@@ -2597,9 +3031,82 @@ CODE;
         return $absPath;
     }
 
-    public function genIncludeHeaderFiles(): string
+    public function genIncludeHeaderFiles(bool $allDeclarations = false): string
     {
-        $globalHeaders = $this->isNanoMode()
+        $globalHeaders = $this->getGeneratedSourceGlobalHeaders();
+        if ($this->declarationHeaderFiles === []) {
+            $declarationHeaders = [
+                "php_{$this->targetName}_func_decl.h",
+                "php_{$this->targetName}_data_decl.h",
+            ];
+        } elseif ($allDeclarations) {
+            $declarationHeaders = [
+                $this->getRuntimeDeclarationHeaderName(),
+                ...array_values($this->declarationHeaderFiles),
+            ];
+        } else {
+            $declarationHeaders = [
+                $this->getRuntimeDeclarationHeaderName(),
+                ...$this->getDeclarationHeadersForFile($this->file),
+            ];
+        }
+        return $this->renderIncludeHeaderFiles([
+            ...$globalHeaders,
+            ...$declarationHeaders,
+            ...$this->localHeaders,
+        ]);
+    }
+
+    /**
+     * The module entry aggregates Zend arginfo and registration helpers, but it
+     * does not call every compiled php_* function. Pulling every per-source
+     * declaration into this translation unit made an unrelated declaration
+     * change invalidate the large extension object and greatly increased C++
+     * parsing work. Project-wide runtime storage is declared by runtime_decl;
+     * the generated arginfo headers provide the Zend-facing symbols themselves.
+     */
+    private function genExtensionIncludeHeaderFiles(): string
+    {
+        if ($this->declarationHeaderFiles === []) {
+            $declarationHeaders = [
+                "php_{$this->targetName}_func_decl.h",
+                "php_{$this->targetName}_data_decl.h",
+            ];
+        } else {
+            $declarationHeaders = [$this->getRuntimeDeclarationHeaderName()];
+            // The callbacks emitted here bridge stub declarations to native
+            // C++ implementations. Arginfo remains included only by this TU.
+            foreach ($this->declarationHeaderFiles as $source => $header) {
+                if ($this->isStubFile($source)) {
+                    $declarationHeaders[] = $header;
+                }
+            }
+            // Generated arginfo registration helpers call compile-time
+            // attribute factories directly to materialize lazy values such as
+            // enum cases. Include only the declaration owners of those helper
+            // functions instead of every PHP declaration header.
+            foreach ($this->symbols->functions() as $functionDef) {
+                if (!$functionDef->attributeFactory) {
+                    continue;
+                }
+                $header = $this->declarationHeaderFiles[$functionDef->sourceFile] ?? null;
+                if ($header !== null) {
+                    $declarationHeaders[] = $header;
+                }
+            }
+        }
+
+        return $this->renderIncludeHeaderFiles([
+            ...$this->getGeneratedSourceGlobalHeaders(),
+            ...$declarationHeaders,
+            ...$this->localHeaders,
+        ]);
+    }
+
+    /** @return list<string> */
+    private function getGeneratedSourceGlobalHeaders(): array
+    {
+        return $this->isNanoMode()
             ? [
                 'cstring',
                 'phpx.h',
@@ -2615,15 +3122,18 @@ CODE;
                 'std/math.h',
                 'std/json.h',
                 'std/datetime.h',
+                'std/fs.h',
                 'std/hash.h',
                 'std/misc.h',
                 'std/random.h',
             ]
             : $this->globalHeaders;
-        $headers = array_merge($globalHeaders, [
-            "php_{$this->targetName}_func_decl.h",
-            "php_{$this->targetName}_data_decl.h",
-        ], $this->localHeaders);
+    }
+
+    /** @param list<string> $headers */
+    private function renderIncludeHeaderFiles(array $headers): string
+    {
+        $headers = array_values(array_unique($headers));
         $lines = [];
         foreach ($headers as $header) {
             $lines[] = '#include <' . $header . '>';
@@ -2655,6 +3165,31 @@ CODE;
     private function getRequestArrayDefaultInitializerName(ClassDef $classDef): string
     {
         return 'typephp_ensure_request_array_defaults_' . $classDef->getNamespacedName();
+    }
+
+    /**
+     * Finalize whole-program metadata required to materialize non-empty array
+     * property defaults. This cannot be a side effect of per-file conversion:
+     * an incrementally reused file does not run genClassWrapper(), while the
+     * regenerated extension source still needs the custom object allocator.
+     */
+    protected function finalizeRequestArrayDefaultMetadata(): void
+    {
+        foreach ($this->symbols->classes() as $classDef) {
+            if ($classDef->trait !== null || $classDef->nativeObject) {
+                continue;
+            }
+            foreach ($classDef->properties as $property) {
+                if ($property->isStatic() || !$property->requiresRuntimeDefaultInit) {
+                    continue;
+                }
+                $property->runtimeDefaultOffset = $this->getPropertyOffset(
+                    $classDef->getNamespacedName(false),
+                    $property->name,
+                );
+                $classDef->requireCtor = true;
+            }
+        }
     }
 
     private function getRequestArrayDefaultTemplateName(ClassDef $classDef, PropertyDef $property): string
@@ -2956,20 +3491,173 @@ CODE;
 
     protected function genClassArrayConstants(): string
     {
-        $code = '';
+        if ($this->classArrayConstantLifecycleSplit) {
+            return implode(PHP_EOL, $this->classArrayConstantInitCalls)
+                . ($this->classArrayConstantInitCalls === [] ? '' : PHP_EOL);
+        }
+
+        return implode('', array_column($this->getClassArrayConstantLifecycleOperations(), 'init'));
+    }
+
+    protected function genClassArrayConstantCleanup(): string
+    {
+        if ($this->classArrayConstantLifecycleSplit) {
+            return implode(PHP_EOL, $this->classArrayConstantCleanCalls)
+                . ($this->classArrayConstantCleanCalls === [] ? '' : PHP_EOL);
+        }
+
+        return implode('', array_column($this->getClassArrayConstantLifecycleOperations(), 'clean'));
+    }
+
+    /**
+     * Keep the arginfo-defined php_register_class_* functions in the extension
+     * translation unit, but isolate the much larger request-time array builders.
+     * Each constant gets its own non-inline function so GCC's points-to analysis
+     * cannot reconstruct the former multi-thousand-line module_init() under LTO.
+     *
+     * @return list<string>
+     */
+    public function genClassArrayConstantLifecycleSources(): array
+    {
+        $this->classArrayConstantInitCalls = [];
+        $this->classArrayConstantCleanCalls = [];
+        $this->classArrayConstantLifecycleDeclarations = [];
+        $this->classArrayConstantLifecycleSplit = true;
+
+        /** @var array<string, list<string>> $definitions */
+        $definitions = [];
+        /** @var array<string, array<string, true>> $dependencyFiles */
+        $dependencyFiles = [];
+        foreach ($this->getClassArrayConstantLifecycleOperations() as $operation) {
+            $sourceFile = $operation['sourceFile'];
+            if ($sourceFile === '' || !isset($this->declarationHeaderFiles[$sourceFile])) {
+                // Project class-likes normally always have an owner. Falling
+                // back to the extension keeps the generator correct for direct
+                // embedding APIs that construct symbols without source files.
+                $this->classArrayConstantInitCalls[] = $operation['init'];
+                $this->classArrayConstantCleanCalls[] = $operation['clean'];
+                continue;
+            }
+
+            $suffix = substr(hash('sha256', $sourceFile . "\0" . $operation['key']), 0, 20);
+            $initFunction = 'typephp_request_init_class_constant_' . $suffix;
+            $cleanFunction = 'typephp_request_clean_class_constant_' . $suffix;
+            $this->classArrayConstantLifecycleDeclarations[] =
+                "zend_never_inline void {$initFunction}();";
+            $this->classArrayConstantLifecycleDeclarations[] =
+                "zend_never_inline void {$cleanFunction}();";
+            $this->classArrayConstantInitCalls[] = "{$initFunction}();";
+            $this->classArrayConstantCleanCalls[] = "{$cleanFunction}();";
+            $definitions[$sourceFile][] = "zend_never_inline void {$initFunction}() {\n"
+                . $operation['init'] . "}\n\n";
+            $definitions[$sourceFile][] = "zend_never_inline void {$cleanFunction}() {\n"
+                . $operation['clean'] . "}\n\n";
+            foreach ($operation['dependencies'] as $dependencyFile) {
+                if ($dependencyFile !== '' && $dependencyFile !== $sourceFile) {
+                    $dependencyFiles[$sourceFile][$dependencyFile] = true;
+                }
+            }
+        }
+
+        $sources = [];
+        foreach ($definitions as $sourceFile => $sourceDefinitions) {
+            $headers = [
+                ...$this->getGeneratedSourceGlobalHeaders(),
+                $this->getRuntimeDeclarationHeaderName(),
+                ...$this->getDeclarationHeadersForFile($sourceFile),
+            ];
+            foreach (array_keys($dependencyFiles[$sourceFile] ?? []) as $dependencyFile) {
+                if (isset($this->declarationHeaderFiles[$dependencyFile])) {
+                    $headers[] = $this->declarationHeaderFiles[$dependencyFile];
+                }
+            }
+
+            $lifecycleSource = $this->getClassArrayConstantLifecycleSourceFile($sourceFile);
+            $code = $this->renderIncludeHeaderFiles($headers) . PHP_EOL;
+            $code .= 'namespace ' . $this->getProjectNamespace() . ' {' . PHP_EOL . PHP_EOL;
+            $code .= implode('', $sourceDefinitions);
+            $code .= '}  // namespace ' . $this->getProjectNamespace() . PHP_EOL;
+            $this->writeFile($lifecycleSource, $code);
+            $this->formatCppCode($lifecycleSource);
+            $this->registerGeneratedProjectSource($lifecycleSource);
+            $sources[] = $lifecycleSource;
+        }
+
+        $this->removeStaleClassArrayConstantLifecycleSources($sources);
+        return $sources;
+    }
+
+    private function getClassArrayConstantLifecycleSourceFile(string $sourceFile): string
+    {
+        $header = $this->declarationHeaderFiles[$sourceFile]
+            ?? basename($this->getDeclarationHeaderFile($sourceFile));
+        $stem = preg_replace('/_decl\\.h$/', '', basename($header)) ?: pathinfo($header, PATHINFO_FILENAME);
+        return $this->getBuildDir() . '/init/' . $stem . '_class_constants.cc';
+    }
+
+    /** @param list<string> $currentSources */
+    private function removeStaleClassArrayConstantLifecycleSources(array $currentSources): void
+    {
+        $manifest = $this->getBuildDir() . '/cache/incremental/' . $this->targetName
+            . '/class-constant-sources.json';
+        $previous = [];
+        if (is_file($manifest)) {
+            $decoded = json_decode((string) file_get_contents($manifest), true);
+            if (is_array($decoded)) {
+                $previous = array_values(array_filter($decoded, 'is_string'));
+            }
+        }
+        $current = array_map('basename', $currentSources);
+        foreach (array_diff($previous, $current) as $staleBasename) {
+            $staleSource = $this->getBuildDir() . '/init/' . basename($staleBasename);
+            $staleObject = $this->getObjectFile($staleSource);
+            foreach ([$staleSource, $staleObject, $this->getMiscObjectCacheMetadataFile($staleObject)] as $artifact) {
+                if (is_file($artifact)) {
+                    @unlink($artifact);
+                }
+            }
+        }
+        $this->writeFile(
+            $manifest,
+            json_encode($current, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
+                . PHP_EOL,
+        );
+    }
+
+    /**
+     * @return list<array{
+     *     sourceFile: string,
+     *     key: string,
+     *     dependencies: list<string>,
+     *     init: string,
+     *     clean: string
+     * }>
+     */
+    private function getClassArrayConstantLifecycleOperations(): array
+    {
+        $operations = [];
         foreach ($this->getClassLikesWithConstants() as $classDef) {
             foreach ($classDef->constants as $constant) {
                 if ($constant->type === Type::ARRAY) {
                     $constName = self::PREFIX . $this->getNativeName($constant->name, $classDef->namespace, $classDef->name);
-                    $code .= "do {\n";
-                    $code .= $constant->arrayExpr;
-                    $code .= $constName . ' = ' . $constant->value . ";\n";
+                    $init = "do {\n";
+                    $init .= $constant->arrayExpr;
+                    $init .= $constName . ' = ' . $constant->value . ";\n";
+                    $clean = $constName . ".unset();\n";
                     if (!$classDef instanceof ClassDef || !$classDef->nativeObject) {
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constant->value});\n";
+                        $init .= "php::updateConstant($classNameStr, $classConstStr, {$constant->value});\n";
+                        $clean .= "php::updateConstant($classNameStr, $classConstStr, php::null);\n";
                     }
-                    $code .= "} while(0);\n";
+                    $init .= "} while(0);\n";
+                    $operations[] = [
+                        'sourceFile' => $classDef->sourceFile,
+                        'key' => 'own:' . $classDef->getNamespacedName(false) . ':' . $constant->name,
+                        'dependencies' => [],
+                        'init' => $init,
+                        'clean' => $clean,
+                    ];
                 }
             }
         }
@@ -2995,7 +3683,14 @@ CODE;
                         $constName = self::PREFIX . $this->getNativeName($constant->name, $parentDef->namespace, $parentDef->name);
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constName});\n";
+                        $operations[] = [
+                            'sourceFile' => $classDef->sourceFile,
+                            'key' => 'inherited:' . $classDef->getNamespacedName(false) . ':'
+                                . $constant->name . ':' . $parentDef->getNamespacedName(false),
+                            'dependencies' => [$parentDef->sourceFile],
+                            'init' => "php::updateConstant($classNameStr, $classConstStr, {$constName});\n",
+                            'clean' => "php::updateConstant($classNameStr, $classConstStr, php::null);\n",
+                        ];
                     }
                 }
                 $parentName = $this->escapeClass($parentDef->extends);
@@ -3012,13 +3707,20 @@ CODE;
                         $constName = self::PREFIX . $this->getNativeName($constant->name, $interfaceDef->namespace, $interfaceDef->name);
                         $classNameStr = $this->genCharPtr($classDef->getNamespacedName(false), true);
                         $classConstStr = $this->genCharPtr($constant->name);
-                        $code .= "php::updateConstant($classNameStr, $classConstStr, {$constName});\n";
+                        $operations[] = [
+                            'sourceFile' => $classDef->sourceFile,
+                            'key' => 'interface:' . $classDef->getNamespacedName(false) . ':'
+                                . $constant->name . ':' . $interfaceDef->getNamespacedName(false),
+                            'dependencies' => [$interfaceDef->sourceFile],
+                            'init' => "php::updateConstant($classNameStr, $classConstStr, {$constName});\n",
+                            'clean' => "php::updateConstant($classNameStr, $classConstStr, php::null);\n",
+                        ];
                     }
                 }
             }
         }
 
-        return $code;
+        return $operations;
     }
 
     protected function getAbsolutePath(string $path, string $projectDir): string
@@ -3055,6 +3757,24 @@ CODE;
     {
         $cfg = $this->getProjectYamlLoader()->load($path);
         $projectDir = dirname($path);
+
+        $objects = $cfg['objects'] ?? [];
+        if (!is_array($objects)) {
+            $this->error('`objects` must be an array');
+        }
+        foreach ($objects as $entry) {
+            [$object, $condition] = $this->getProjectYamlLoader()->parseObjectEntry($entry);
+            if ($condition !== null && !$this->evaluateProjectYamlCondition($condition)) {
+                continue;
+            }
+            $object = $this->resolvePath($object, $projectDir, 'Object path');
+            if (!in_array(strtolower(pathinfo($object, PATHINFO_EXTENSION)), ['o', 'obj'], true)) {
+                $this->error("Project object must use the .o or .obj extension: {$object}");
+            }
+            $object = realpath($object) ?: $object;
+            $this->projectObjectFiles[] = $object;
+        }
+        $this->projectObjectFiles = array_values(array_unique($this->projectObjectFiles));
 
         if (array_key_exists('php-version', $cfg) && !$this->climate->arguments->defined('php-version')) {
             $this->setPhpVersion((string) $cfg['php-version']);
@@ -3133,6 +3853,21 @@ CODE;
             } else {
                 $this->cxxFlags = str_replace("\n", ' ', $cxxFlags);
             }
+        }
+
+        // Read C and assembler flags independently. This keeps project-level
+        // native builds generic while allowing each language its own ABI flags.
+        $cFlags = $cfg['c-flags'] ?? null;
+        if (!empty($cFlags)) {
+            $this->cFlags = is_array($cFlags)
+                ? implode(' ', $cFlags)
+                : str_replace("\n", ' ', (string) $cFlags);
+        }
+        $asmFlags = $cfg['asm-flags'] ?? null;
+        if (!empty($asmFlags)) {
+            $this->asmFlags = is_array($asmFlags)
+                ? implode(' ', $asmFlags)
+                : str_replace("\n", ' ', (string) $asmFlags);
         }
 
         // Read cxx-std
@@ -3337,6 +4072,27 @@ CODE;
         return $this->filterIgnoredFiles($list);
     }
 
+    /** @return list<string> */
+    public function getProjectObjectFiles(): array
+    {
+        return $this->projectObjectFiles;
+    }
+
+    protected function validateProjectObjectFiles(): void
+    {
+        if ($this->isDryRun()) {
+            return;
+        }
+        foreach ($this->projectObjectFiles as $object) {
+            if (!is_file($object)) {
+                $this->error(
+                    "Precompiled project object not found: {$object}\n"
+                    . 'Compile project C/C++/assembly sources before invoking tpc.'
+                );
+            }
+        }
+    }
+
     /**
      * @return array{0: string, 1: string|null}
      */
@@ -3380,9 +4136,10 @@ CODE;
 
     protected function doConvert(string $phpCode): string
     {
+        $this->generatedMethodBodies = [];
         $this->climate->info('convert: ' . $this->getRelativePath($this->file));
 
-        $ast = $this->parser->parse($phpCode);
+        $ast = $this->getAstCache()->load($this->file, $phpCode);
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
         if ($this->isNanoPolicyMode()) {
@@ -3406,6 +4163,7 @@ CODE;
 
         $stmts = $traverser->traverse($ast);
 
+        $this->cacheSitePass = 'body';
         $this->resetFile();
         $this->resetNamespace();
         $this->resetClass();
@@ -3449,7 +4207,7 @@ CODE;
         }
 
         foreach ($this->functionDefineInFile as $functionDef) {
-            if ($functionDef->attributeFactory || $this->functionUsesNativeObject($functionDef)) {
+            if ($functionDef->attributeFactory || $this->functionRequiresNativeAbi($functionDef)) {
                 continue;
             }
             $cppCode .= $this->genFunctionWrapper($functionDef);
@@ -3625,7 +4383,20 @@ CODE;
         $this->climate->info('generate arginfo file: ' . $this->getRelativePath($file));
         generateStubFile($file, $this->getIncludeDir() . '/' . $headerFile, true, $this->getPhpVersion());
 
+        $this->registerArgInfoHeader($headerFile);
+    }
+
+    protected function registerExistingArgInfoHeader(string $file): void
+    {
+        $this->registerArgInfoHeader($this->getArgInfoHeaderFile($file, true));
+    }
+
+    private function registerArgInfoHeader(string $headerFile): void
+    {
         $headerCode = file_get_contents($this->getBuildDir() . '/include/' . $headerFile);
+        if (!is_string($headerCode)) {
+            throw new \RuntimeException('Cannot read generated arginfo header: ' . $headerFile);
+        }
         if (preg_match('/\\bstatic\\s+void\\s+(typephp_release_ast_constants_[A-Za-z0-9_]+)\\s*\\(void\\)/', $headerCode, $releaseMatch)) {
             $this->releaseAstConstantFns[] = $releaseMatch[1];
         }
@@ -3638,7 +4409,9 @@ CODE;
                 $this->registerSymbols[] = $registerSymbolFn;
             }
         }
-        $this->argInfoHeaderFiles[] = $headerFile;
+        if (!in_array($headerFile, $this->argInfoHeaderFiles, true)) {
+            $this->argInfoHeaderFiles[] = $headerFile;
+        }
     }
 
     public function composeTraitAst(Node\Stmt\ClassLike $stmt, Node\Name $className): void
@@ -4563,7 +5336,9 @@ CODE;
             $paramB = $b->params[$i];
             $typeA = $paramA->type ? $this->typeNodeToString($paramA->type) : null;
             $typeB = $paramB->type ? $this->typeNodeToString($paramB->type) : null;
-            if ($typeA !== $typeB) {
+            if ($typeA !== $typeB
+                || $this->parseStdParameterDefinition($paramA) !== $this->parseStdParameterDefinition($paramB)
+                || $this->parseTypedArrayParameterDefinition($paramA) !== $this->parseTypedArrayParameterDefinition($paramB)) {
                 $this->fatalError(
                     $classStmt,
                     "Trait `{$traitA}` and Trait `{$traitB}` define the same abstract method `{$methodName}` " .
@@ -5055,7 +5830,7 @@ CODE;
         // returns with EG(exception) set. Convert back to normal Zend exception
         // propagation at the outermost wrapper.
         $this->indentLevel++;
-        $cppCode = $this->getIndent() . 'try {' . PHP_EOL;
+        $cppCode = $this->getIndent() . 'PHPX_TRY {' . PHP_EOL;
         $this->indentLevel++;
 
         $argCountCheck = $this->genParameterCountCheck(
@@ -5177,7 +5952,8 @@ CODE;
             }
         }
         $this->indentLevel--;
-        $cppCode .= $this->getIndent() . '} catch (zend_object *) {' . PHP_EOL;
+        $cppCode .= $this->getIndent()
+            . '} PHPX_CATCH(zend_object *, typephp_wrapper_exception) {' . PHP_EOL;
         $this->indentLevel++;
         $cppCode .= $this->getIndent() . '/* EG(exception) is already set; return control to ZendVM for frame cleanup. */' . PHP_EOL;
         $this->indentLevel--;
@@ -5251,22 +6027,9 @@ CODE;
             if ($classDef->nativeObject) {
                 return '';
             }
-            $defaultPropCount = 0;
-            foreach ($classDef->properties as $property) {
-                if (!$property->isStatic() && $property->requiresRuntimeDefaultInit) {
-                    $property->runtimeDefaultOffset = $this->getPropertyOffset(
-                        $classDef->getNamespacedName(false),
-                        $property->name,
-                    );
-                    $defaultPropCount++;
-                }
-            }
-            if ($defaultPropCount > 0) {
-                $classDef->requireCtor = true;
-            }
             $methods = $classDef->methods;
             foreach ($methods as $methodDef) {
-                if ($this->functionUsesNativeObject($methodDef->functionDef)) {
+                if ($this->functionRequiresNativeAbi($methodDef->functionDef)) {
                     continue;
                 }
                 $cppCode .= $this->genMethodWrapper($classDef, $methodDef);
@@ -5330,6 +6093,9 @@ CODE;
                 ? Type::ARRAY
                 : ($this->getNativeObjectArgumentType($argInfo) ?? $argInfo->type);
             $this->addArgument($argInfo->name, $argumentType);
+            if ($argInfo->typedArray !== null) {
+                $this->context->typedArrays[$argInfo->name] = $argInfo->typedArray;
+            }
             if (!$argInfo->variadic and $argInfo->declaredClass) {
                 $this->addObject($argInfo->name, $argInfo->declaredClass);
             }
@@ -5341,6 +6107,7 @@ CODE;
                 $this->markNativeObjectNonNull($argInfo->name);
             }
         }
+        $stdParameterBindings = $this->initializeStdContainerParameters($this->functionDef);
         $this->initializeImmutableFunctionContext();
         $this->prepareReferenceCaptureDegradations($v->stmts, true);
 
@@ -5384,6 +6151,23 @@ CODE;
             foreach ($optimizedLoopVars as $varName => $type) {
                 $this->context->localVars[$varName] = $type;
             }
+
+            $promotions = (new NativeObjectStackPromotionAnalyzer(
+                fn (Expr\New_ $allocation): ?string => $this->resolveNewExprClass($allocation),
+                fn (string $class): bool => $this->nativeObjectClassCanUseStackStorage($class),
+                fn (string $class, string $method): bool => $this->nativeObjectMethodPreservesReceiver(
+                    $class,
+                    $method,
+                ),
+            ))->analyze($v->stmts);
+            foreach ($promotions as $varName => $promotion) {
+                $escapedName = $this->escapeVarName($varName);
+                $this->context->nativeStackPromotions[$escapedName] = [
+                    'class' => $promotion['class'],
+                    'slot' => $escapedName . '__native_stack_slot',
+                    'allocationId' => spl_object_id($promotion['allocation']),
+                ];
+            }
         }
 
         if ($v->stmts && !$this->class && $this->methodDef === null) {
@@ -5414,9 +6198,17 @@ CODE;
                 ? Type::REF
                 : ($this->getNativeObjectReturnType($this->functionDef) ?? $this->getReturnType()));
         $nativeName = self::PREFIX . $name;
+        $nativeClassMethod = $this->classDef?->nativeObject === true;
         $functionAttribute = $this->getFunctionOptimizationAttribute($this->functionDef);
-        $functionDeclCode = $functionAttribute . $cppReturnType . ' ' . ($multiReturn ? $this->getMultiReturnImplName($name) : $nativeName) . '(';
-        if ($this->class) {
+        if ($nativeClassMethod) {
+            $functionDeclCode = $functionAttribute . $cppReturnType . ' '
+                . $this->getNativeObjectCppName($this->classDef) . '::'
+                . $this->getNativeObjectMethodCppName($this->method) . '(';
+        } else {
+            $functionDeclCode = $functionAttribute . $cppReturnType . ' '
+                . ($multiReturn ? $this->getMultiReturnImplName($name) : $nativeName) . '(';
+        }
+        if ($this->class && !$nativeClassMethod) {
             $functionDeclCode .= ($this->getNativeObjectMethodThisType($this->functionDef)
                 ?? (Type::OBJECT . ' &')) . 'this_';
             if ($this->functionDef->params) {
@@ -5434,7 +6226,11 @@ CODE;
 
         $code = $functionDeclCode . ' {' . PHP_EOL;
         $this->indentLevel++;
-        $preamble = $this->genDegradedArgumentLocals();
+        $preamble = $nativeClassMethod
+            ? $this->getIndent() . 'auto &this_ = *this;' . PHP_EOL
+            : '';
+        $preamble .= $this->genDegradedArgumentLocals();
+        $preamble .= $stdParameterBindings;
         $preamble .= $this->genScopeVarDecl();
         $preamble .= $this->genNativeObjectParameterChecks($this->functionDef);
         // Runtime union/nullable parameter type checks
@@ -5475,7 +6271,7 @@ CODE;
         $code .= $stmts;
         $code .= "}\n";
 
-        if ($multiReturn) {
+        if ($multiReturn && !$nativeClassMethod) {
             $forwardArgs = implode(', ', array_map(
                 fn($argInfo) => $this->canConsumeForwardedArgument($argInfo)
                     ? 'php::takeValue(' . $argInfo->name . ')'
@@ -6134,6 +6930,9 @@ CODE;
 
     private function isParameterTypeOverrideCompatible(ArgInfo $childArg, ArgInfo $parentArg): bool
     {
+        if ($childArg->typedArray !== null || $parentArg->typedArray !== null) {
+            return $childArg->typedArray !== null && $childArg->typedArray === $parentArg->typedArray;
+        }
         // Child methods may omit parameter types (contravariance — accepting a
         // wider set of inputs is always compatible with the parent contract).
         if ($this->isTopParameterType($childArg)) {
@@ -6141,6 +6940,10 @@ CODE;
         }
         if ($this->isTopParameterType($parentArg)) {
             return false;
+        }
+        if ($childArg->stdContainer !== null || $parentArg->stdContainer !== null) {
+            return $childArg->stdContainer !== null && $parentArg->stdContainer !== null
+                && $this->getStdTypeKey($childArg->stdContainer) === $this->getStdTypeKey($parentArg->stdContainer);
         }
 
         $parentAcceptedTypes = $this->getParameterAcceptedTypes($parentArg);
@@ -7342,6 +8145,9 @@ CODE;
             // only run in the implementation phase.
             $this->checkParentMethodCanBeOverridden($v, $name);
             $methodCodes[$name] = $this->parseFunction($v);
+            if ($this->splitTranslationUnitsEnabled && !$this->classDef->nativeObject && $methodCodes[$name] !== '') {
+                $this->generatedMethodBodies[] = $methodCodes[$name];
+            }
         } elseif ($this->classDef->trait === null
             && !is_string($v->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE))
             && $this->classDef->hasAbstractMethod($name)
@@ -7570,7 +8376,8 @@ CODE;
             || $existing->type !== $incoming->type
             || $existing->class !== $incoming->class
             || $existing->nullable !== $incoming->nullable
-            || $existing->arrayDef != $incoming->arrayDef
+            || $existing->typedArray != $incoming->typedArray
+            || $existing->stdContainer != $incoming->stdContainer
         ) {
             return false;
         }
@@ -7637,6 +8444,29 @@ CODE;
         $cppCode .= $this->genWrapperFunctionArgs($fn, $functionDef, $functionDef->getNamespacedName());
 
         return $cppCode;
+    }
+
+    private function genStubWrappers(): string
+    {
+        $code = '';
+        foreach ($this->symbols->classes() as $classDef) {
+            if (!$this->isStubFile($classDef->sourceFile) || $classDef->nativeObject || $classDef->trait !== null) {
+                continue;
+            }
+            foreach ($classDef->methods as $methodDef) {
+                if (!$methodDef->functionDef->abstractMethod
+                    && !$this->functionRequiresNativeAbi($methodDef->functionDef)) {
+                    $code .= $this->genMethodWrapper($classDef, $methodDef);
+                }
+            }
+        }
+        foreach ($this->symbols->functions() as $functionDef) {
+            if ($functionDef->stub && !$functionDef->method && !$functionDef->attributeFactory
+                && !$this->functionRequiresNativeAbi($functionDef)) {
+                $code .= $this->genFunctionWrapper($functionDef);
+            }
+        }
+        return $code;
     }
 
     /** Return the generated C++ symbol for a hidden runtime-attribute factory. */

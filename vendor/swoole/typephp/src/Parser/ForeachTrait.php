@@ -214,8 +214,12 @@ trait ForeachTrait
 
     protected function parseForeach(Foreach_ $node): string
     {
+        if (($typedArray = $this->getTypedArrayDefinition($node->expr)) !== null) {
+            return $this->parseTypedArrayForeach($node, $typedArray);
+        }
         if ($node->byRef) {
             $this->assertImmutableMutationTarget($node->expr);
+            $this->assertTypedArrayReferenceForbidden($node->expr);
         }
         $nativeClass = $this->detectClassOfExpr($node->expr);
         if ($this->isNativeObjectClass($nativeClass)) {

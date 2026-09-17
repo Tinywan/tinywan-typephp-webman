@@ -275,6 +275,7 @@ trait TypeConversionTrait
 
     protected function convertToRef(NodeAbstract $expr): string
     {
+        $this->assertTypedArrayReferenceForbidden($expr);
         $this->assertNativeObjectReferenceForbidden($expr, $expr);
         $this->checkLeftValue($expr);
         if ($expr instanceof Node\Expr\ArrayDimFetch) {

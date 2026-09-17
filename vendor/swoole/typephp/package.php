@@ -228,6 +228,9 @@ PHPX_HOME must point to the bundled phpx directory. Its required files include:
     phpx\lib\phpx.lib
     phpx\src\misc
 
+The bundled php.ini uses extension_dir = "./ext/" instead of the CI runner's
+absolute extension path.
+
 TEXT;
 mustWriteFile($windowsSetupFile, $windowsSetup);
 
@@ -253,6 +256,18 @@ if (!is_dir($phpDir)) {
     // 运行时和 SDK 已经展开，继续打包这些归档只会重复占用空间。
     // php8embed.lib 必须保留；部分 PHP SDK 仅在根目录提供该导入库。
     copyDirectory($phpDir, $topLevelDir, ['dev/php8ts.lib'], null, ['zip']);
+
+    // Do not ship setup-php's runner-specific C:\tools\php\ext setting.
+    // Rewrite only the staged copy; the CI installation remains untouched.
+    $packagedPhpIni = "{$topLevelDir}/php.ini";
+    if (!is_file($packagedPhpIni)) {
+        throw new RuntimeException("打包目录缺少 php.ini: {$packagedPhpIni}");
+    }
+    $phpIni = file_get_contents($packagedPhpIni);
+    if (!is_string($phpIni)) {
+        throw new RuntimeException("无法读取 php.ini: {$packagedPhpIni}");
+    }
+    mustWriteFile($packagedPhpIni, makeWindowsPhpIniPortable($phpIni));
 
     $packagedEmbedLib = "{$topLevelDir}/{$phpEmbedLibRelativePath}";
     if (!is_file($packagedEmbedLib)) {
@@ -426,6 +441,9 @@ if (!$zip->close()) {
 
 $requiredArchiveEntries = [
     "{$topLevelDir}/{$compilerExe}",
+    "{$topLevelDir}/php.exe",
+    "{$topLevelDir}/php.ini",
+    "{$topLevelDir}/ext/php_zip.dll",
     "{$topLevelDir}/WINDOWS-SETUP.txt",
     "{$topLevelDir}/phpx.dll",
     "{$topLevelDir}/{$phpRuntimeDllRelativePath}",
@@ -778,6 +796,29 @@ function copyDirectory(string $src, string $dest, array $excludeDirs = [], ?stri
             mustCopy($srcPath, $destPath);
         }
     }
+}
+
+/** Preserve enabled extensions and line endings while removing the CI path. */
+function makeWindowsPhpIniPortable(string $ini): string
+{
+    $bom = str_starts_with($ini, "\xEF\xBB\xBF") ? "\xEF\xBB\xBF" : '';
+    $ini = substr($ini, strlen($bom));
+    $portable = preg_replace(
+        '/^[\t ]*extension_dir[\t ]*=[^\r\n]*/mi',
+        'extension_dir = "./ext/"',
+        $ini,
+        -1,
+        $replacements,
+    );
+    if (!is_string($portable)) {
+        throw new RuntimeException('Unable to rewrite extension_dir in php.ini');
+    }
+    if ($replacements === 0) {
+        $newline = str_contains($ini, "\r\n") ? "\r\n" : "\n";
+        // Prepend to the global section, not a trailing [PATH=...] section.
+        $portable = 'extension_dir = "./ext/"' . $newline . $ini;
+    }
+    return $bom . $portable;
 }
 
 function mustCreateDirectory(string $dir): void
