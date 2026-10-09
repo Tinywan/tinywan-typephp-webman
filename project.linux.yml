@@ -4,6 +4,12 @@ sources:
   - main.php
   - support/helpers.php
   - support/fast-route-functions.php
+  - support/http-session.php
+  - support/http-session-file-handler.php
+  - support/coroutine-context.php
+  - support/coroutine-context-fiber.php
+  - support/coroutine-coroutine.php
+  - support/coroutine-fiber.php
   - vendor/psr
   - vendor/nikic/fast-route/src/BadRouteException.php
   - vendor/nikic/fast-route/src/DataGenerator.php
@@ -84,6 +90,16 @@ ignore:
   # ==========================================
   - vendor/workerman/coroutine/src/Pool.php
   - vendor/workerman/coroutine/src/Utils/DestructionWatcher.php
+
+  # ==========================================
+  # 4. 协议与协程：顶层初始化语句（stray code）排除，由 support/ 接管并在 main.php 初始化
+  # ==========================================
+  - vendor/workerman/workerman/src/Protocols/Http/Session.php
+  - vendor/workerman/workerman/src/Protocols/Http/Session/FileSessionHandler.php
+  - vendor/workerman/coroutine/src/Context.php
+  - vendor/workerman/coroutine/src/Context/Fiber.php
+  - vendor/workerman/coroutine/src/Coroutine.php
+  - vendor/workerman/coroutine/src/Coroutine/Fiber.php
 
 output: build/webman-server
 mode: bin

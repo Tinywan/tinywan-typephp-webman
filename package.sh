@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 模式判断：是否开启全静态编译 (--full-static)
+# 模式判断：是否开启全静态编�?(--full-static)
 FULL_STATIC_MODE=0
 for arg in "$@"; do
     if [ "$arg" = "--full-static" ]; then
@@ -39,7 +39,7 @@ PHPX_DIR="$SCRIPT_DIR/vendor/swoole/phpx"
 export PHPX_HOME="$PHPX_DIR"
 
 if [ "$FULL_STATIC_MODE" = "1" ]; then
-    # 全静态编译前置检查
+    # 全静态编译前置检�?
     if ! command -v clang &> /dev/null; then
         echo "[ERROR] Clang compiler is required for --full-static build, but 'clang' was not found in PATH."
         exit 1
@@ -61,8 +61,9 @@ if [ "$FULL_STATIC_MODE" = "1" ]; then
         echo "[ERROR] static libphp.a not found at $SDK_DIR/lib/libphp.a!"
         exit 1
     fi
+    export PHP_HOME="$SDK_DIR"
 else
-    # 常规动态编译流程：确认 PHP_HOME 并编译动态 PHPX
+    # 常规动态编译流程：确认 PHP_HOME 并编译动�?PHPX
     if [ -z "$PHP_HOME" ]; then
         PHP_PREFIX=$(php-config --prefix 2>/dev/null || echo "/usr")
         export PHP_HOME="$PHP_PREFIX"
@@ -78,7 +79,7 @@ else
             [ -d "$d" ] && EXTRA_INC="$EXTRA_INC -I$d"
         done
         
-        # 在 CMakeLists.txt 的 include_directories 中注入
+        # �?CMakeLists.txt �?include_directories 中注�?
         sed -i 's/include_directories(include tests\/include src\/misc)/include_directories(include tests\/include src\/misc \/usr\/include \/usr\/local\/include \/usr\/include\/x86_64-linux-gnu)/g' CMakeLists.txt
         
         cmake . -Dphp_dir="$PHP_HOME" -DBUILD_TESTS=OFF -DBUILD_EXT=OFF -DCMAKE_CXX_FLAGS="$EXTRA_INC" -DCMAKE_C_FLAGS="$EXTRA_INC"
@@ -180,7 +181,7 @@ if [ -d "$SCRIPT_DIR/app/view" ]; then
     cp -r "$SCRIPT_DIR/app/view" "$SCRIPT_DIR/dist/app/"
 fi
 
-# 1. 自动扫描并打包 PHP 扩展模块 (.so)
+# 1. 自动扫描并打�?PHP 扩展模块 (.so)
 mkdir -p "$SCRIPT_DIR/dist/ext"
 PHP_EXT_DIR=$(php-config --extension-dir 2>/dev/null || true)
 if [ -d "$PHP_EXT_DIR" ]; then
@@ -188,7 +189,7 @@ if [ -d "$PHP_EXT_DIR" ]; then
     cp -f "$PHP_EXT_DIR"/*.so "$SCRIPT_DIR/dist/ext/" 2>/dev/null || true
 fi
 
-# 2. 自动通过 ldd 探测并打包所有程序与扩展的底层共享库 (如 gmp, mpfr, libzip 等)
+# 2. 自动通过 ldd 探测并打包所有程序与扩展的底层共享库 (�?gmp, mpfr, libzip �?
 mkdir -p "$SCRIPT_DIR/dist/lib"
 echo "[INFO] Scanning and bundling all shared library dependencies via ldd ..."
 for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx.so" "$SCRIPT_DIR/dist/libphp.so" "$SCRIPT_DIR"/dist/ext/*.so; do
@@ -196,7 +197,7 @@ for bin_or_lib in "$SCRIPT_DIR/dist/webman-server.bin" "$SCRIPT_DIR/dist/libphpx
         ldd "$bin_or_lib" 2>/dev/null | grep "=>" | awk '{print $3}' | while read -r libpath; do
             if [ -f "$libpath" ]; then
                 libname=$(basename "$libpath")
-                # 排除 Linux 最基础的 glibc 核心库以防跨发行版 ABI 冲突，收集 gmp/mpfr/phpx/libzip 等业务扩展库
+                # 排除 Linux 最基础�?glibc 核心库以防跨发行�?ABI 冲突，收�?gmp/mpfr/phpx/libzip 等业务扩展库
                 case "$libname" in
                     libc.so*|ld-linux*|libdl.so*|libpthread.so*|libm.so*|librt.so*)
                         ;;
@@ -224,8 +225,8 @@ if command -v patchelf &> /dev/null; then
     done
 fi
 
-# 生成 Linux 专用的纯净自包含 php.ini
-# 注意：PHP 扩展加载有顺序依赖（如 mysqlnd 必须在 pdo/mysqli 前加载，pdo 必须在 pdo_mysql 前加载）
+# 生成 Linux 专用的纯净自包�?php.ini
+# 注意：PHP 扩展加载有顺序依赖（�?mysqlnd 必须�?pdo/mysqli 前加载，pdo 必须�?pdo_mysql 前加载）
 cat > "$SCRIPT_DIR/dist/php.ini" << 'EOF'
 output_buffering=0
 implicit_flush=1
@@ -233,7 +234,7 @@ memory_limit=4G
 opcache.enable_cli=0
 extension_dir="./ext"
 
-; 核心进程管理与网络扩展
+; 核心进程管理与网络扩�?
 extension=posix.so
 extension=pcntl.so
 extension=openssl.so
@@ -252,7 +253,7 @@ extension=sockets.so
 extension=event.so
 EOF
 
-# 如果 extensions.txt 中有其他自定义扩展，追加到 php.ini
+# 如果 extensions.txt 中有其他自定义扩展，追加�?php.ini
 if [ -f "$SCRIPT_DIR/extensions.txt" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
         clean_ext=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/#.*$//')
@@ -264,7 +265,7 @@ if [ -f "$SCRIPT_DIR/extensions.txt" ]; then
     done < "$SCRIPT_DIR/extensions.txt"
 fi
 
-# 检查所有扩展，若 ext/ 目录下没有对应 .so（说明已静态内联进内核），则注释该行以防产生 Warning
+# 检查所有扩展，�?ext/ 目录下没有对�?.so（说明已静态内联进内核），则注释该行以防产�?Warning
 for ext_so in "$SCRIPT_DIR"/dist/ext/*.so; do
     :
 done
