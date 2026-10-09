@@ -1,0 +1,23 @@
+name: typephp_taskboard
+version: 0.1.0
+mode: bin
+cxx-std: c++17
+sources:
+  - main.php
+  - app
+  - php-src
+  - cpp-src
+
+# Replace D:/workspace/qt/6.8.3/msvc2022_64 with the actual Qt MSVC x64 installation.
+cxx-flags:
+  - '/Zc:__cplusplus'
+  - '/permissive-'
+  - '/I"D:/workspace/qt/6.8.3/msvc2022_64/include"'
+  - '/I"D:/workspace/qt/6.8.3/msvc2022_64/include/QtCore"'
+  - '/I"D:/workspace/qt/6.8.3/msvc2022_64/include/QtGui"'
+  - '/I"D:/workspace/qt/6.8.3/msvc2022_64/include/QtWidgets"'
+ld-flags:
+  - '/LIBPATH:"D:/workspace/qt/6.8.3/msvc2022_64/lib"'
+  - Qt6Widgets.lib
+  - Qt6Gui.lib
+  - Qt6Core.lib

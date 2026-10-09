@@ -187,7 +187,10 @@ class PreprocessorTest extends TestCase
         $cppFile = $this->compiler->getBuildDir() . '/include/test.cc';
         $result = $this->compiler->getObjectFile($cppFile);
 
-        $this->assertSame($this->compiler->getBuildDir() . '/include/test.o', $result);
+        $this->assertSame(
+            $this->compiler->getBuildDir() . '/cache/objects/generated/include/test.o',
+            $result,
+        );
     }
 
     public function testGetObjectFileDifferentObjectExtension(): void
@@ -204,9 +207,12 @@ class PreprocessorTest extends TestCase
         $cppObject = $this->compiler->getObjectFile('/some/path/foo.cpp');
         $ccObject = $this->compiler->getObjectFile('/some/path/foo.cc');
 
-        $this->assertSame('/some/path/foo.c.o', $cObject);
-        $this->assertSame('/some/path/foo.cpp.o', $cppObject);
-        $this->assertSame('/some/path/foo.cc.o', $ccObject);
+        $this->assertSame(dirname($cObject), dirname($cppObject));
+        $this->assertSame(dirname($cObject), dirname($ccObject));
+        $this->assertStringStartsWith($this->compiler->getBuildDir() . '/cache/objects/external/', $cObject);
+        $this->assertSame('foo.c.o', basename($cObject));
+        $this->assertSame('foo.cpp.o', basename($cppObject));
+        $this->assertSame('foo.cc.o', basename($ccObject));
     }
 
     // ========================================================================

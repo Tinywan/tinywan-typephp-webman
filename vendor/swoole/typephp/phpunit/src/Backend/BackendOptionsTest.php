@@ -37,6 +37,19 @@ class BackendOptionsTest extends TestCase
         $this->assertStringContainsString('/nologo', $options);
     }
 
+    public function testMsvcNanoSectionGarbageCollectionOptions(): void
+    {
+        $compiler = new Msvc(new Windows());
+
+        $compileOptions = $compiler->buildCompileOptions(['section_gc' => true]);
+        self::assertStringContainsString('/Gy', $compileOptions);
+        self::assertStringContainsString('/Gw', $compileOptions);
+
+        $linkOptions = $compiler->buildLinkOptions(['section_gc' => true]);
+        self::assertStringContainsString('/OPT:REF', $linkOptions);
+        self::assertStringContainsString('/OPT:ICF', $linkOptions);
+    }
+
     /**
      * 测试 MSVC 编译选项 - ZTS 模式
      */

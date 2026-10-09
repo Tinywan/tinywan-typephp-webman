@@ -57,6 +57,7 @@ final class TranslationUnitSplitTest extends TestCase
         $this->set('splitTranslationUnitsEnabled', true);
         $this->set('generatedMethodBodies', [$body, $small]);
         $this->set('constData', ['blob' => '1,2,3', 'unused_blob' => '4,5,6']);
+        $this->set('globalVarsInFile', [$this->source => ['_GET' => 'php::Array']]);
         $remaining = $this->invoke('splitLargeTranslationUnit', $code, $primary, false);
         $parts = $this->invoke('getSplitTranslationUnits', $this->source);
         self::assertCount(1, $parts);
@@ -64,6 +65,7 @@ final class TranslationUnitSplitTest extends TestCase
         self::assertStringContainsString($small, $remaining);
         $part = file_get_contents($parts[0]);
         self::assertStringContainsString($body, $part);
+        self::assertStringContainsString('extern THREAD_LOCAL php::Var _global_var__GET;', $part);
         self::assertStringContainsString('static const unsigned char blob[]', $part);
         self::assertStringNotContainsString('unused_blob', $part);
         self::assertStringNotContainsString('_arginfo.h', $part);

@@ -10,6 +10,7 @@
 - [编译器命令行](COMPILER_CLI.md)：当前 CLI 参数和项目配置。
 - [编译模式](COMPILATION_MODES.md)：binary、extension、library 模式。
 - [快速入门](QUICKSTART.md)：最小编译流程。
+- [将 PHP 依赖嵌入可执行文件](EMBEDDED_FILES.md)：`embedded-files` 的发布配置、Composer autoload、构建依赖和缓存规则。
 - [编译期函数](COMPILE_TIME_FUNCTIONS.md)：`std::any()`、`std::ref()`、`std::expected()`、`std::unexpected()` 和关键词方法。
 - [原生类型](NATIVE_TYPES.md)、[高精度类型](HIGH_PRECISION_TYPES.md)、[Std 容器](STD_CONTAINERS.md)。
 - [三套对象存储与传递模型](OBJECT_STORAGE_AND_PASSING_MODELS.md)：Zend Object、PHPX Box 与 Native Class Object 的职责、ABI 和不可替代边界。

@@ -4,6 +4,38 @@
 
 using namespace php;
 
+TEST(string, trim_default_null_bytes) {
+    const char input[] = "\0 \t\n\r\vhello\0world\v\r\n\t \0";
+    String value(input, sizeof(input) - 1);
+    String expected("hello\0world", 11);
+    EXPECT_TRUE(value.trim().equals(expected));
+    Array args;
+    args.append(value);
+    EXPECT_TRUE(value.trim().equals(call("trim", args).toString()));
+    EXPECT_TRUE(String("\0\0", 2).trim().empty());
+    EXPECT_TRUE(String("").trim().empty());
+
+    // Explicit masks retain their existing C-string semantics.
+    EXPECT_TRUE(value.trim("").equals(value));
+    EXPECT_TRUE(value.trim(" ").equals(value));
+    EXPECT_TRUE(String("/hello/").trim("/").equals("hello"));
+    EXPECT_TRUE(String("/hello/").trim("/", TRIM_LEFT).equals("hello/"));
+    EXPECT_TRUE(String("/hello/").trim("/", TRIM_RIGHT).equals("/hello"));
+}
+
+TEST(string, trim_default_matches_php_for_all_bytes) {
+    for (int byte = 0; byte < 256; byte++) {
+        SCOPED_TRACE(byte);
+        const char input[] = {static_cast<char>(byte), 'x', static_cast<char>(byte)};
+        String value(input, sizeof(input));
+        Array args;
+        args.append(value);
+        EXPECT_TRUE(value.trim().equals(call("trim", args).toString()));
+        EXPECT_TRUE(value.trim(nullptr, TRIM_LEFT).equals(call("ltrim", args).toString()));
+        EXPECT_TRUE(value.trim(nullptr, TRIM_RIGHT).equals(call("rtrim", args).toString()));
+    }
+}
+
 TEST(string, base) {
     auto s = zend_string_init(ZEND_STRL("hello world"), false);
     String s1{s};
@@ -116,7 +148,7 @@ TEST(string, split) {
 
 TEST(string, replace) {
     String str("<h1>hello world!</h1>");
-    str.stripTags("<br>");
+    str = str.stripTags("<br>");
     ASSERT_TRUE(str.equals(std::string("hello world!")));
 
     auto s1 = "'hello world'";
@@ -124,7 +156,7 @@ TEST(string, replace) {
     auto s3 = s2.addSlashes();
     ASSERT_TRUE(s3.equals(std::string("\\'hello world\\'")));
 
-    s3.stripSlashes();
+    s3 = s3.stripSlashes();
     ASSERT_TRUE(s3.equals(s1));
 }
 

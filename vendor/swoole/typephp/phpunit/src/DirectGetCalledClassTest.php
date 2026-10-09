@@ -55,8 +55,8 @@ final class DirectGetCalledClassTest extends BaseTest
         self::assertStringContainsString('_typephp_called_class', $code);
         self::assertStringContainsString('CalledClassDynamic\\\\get_called_class', $code);
         self::assertStringNotContainsString('ZEND_STRL("get_called_class")', $code);
-        self::assertSame(1, substr_count($code, 'typephp_get_function_resolution_cache('));
-        self::assertSame(1, substr_count($code, 'typephp_get_function_call_cache('));
+        self::assertSame(1, substr_count($code, 'get_function_resolution_cache('));
+        self::assertSame(1, substr_count($code, 'get_function_call_cache('));
         self::assertStringContainsString('resolution == 0', $code);
         self::assertStringContainsString('resolution = php::fn::function_exists(', $code);
         self::assertStringContainsString(') ? 1 : 2;', $code);
@@ -66,7 +66,7 @@ final class DirectGetCalledClassTest extends BaseTest
         self::assertIsString($extension);
         self::assertStringContainsString('uint8_t function_resolution_cache_map[1]', $extension);
         self::assertStringContainsString(
-            'uint8_t &typephp_get_function_resolution_cache(FunctionResolutionCacheId cache_id)',
+            'uint8_t &get_function_resolution_cache(FunctionResolutionCacheId cache_id)',
             $extension,
         );
 

@@ -153,8 +153,8 @@ trait StdContainerTrait
             }
             $dimensions = [];
             foreach ($expr->items as $item) {
-                if ($item === null || $item->key !== null || $item->unpack || !$this->isScalarInt($item->value)) {
-                    $this->fatalError($item ?? $expr, 'StdArray dimensions must be a positional array of integer literals');
+                if ($item->key !== null || $item->unpack || !$this->isScalarInt($item->value)) {
+                    $this->fatalError($item, 'StdArray dimensions must be a positional array of integer literals');
                 }
                 $dimensions[] = $item->value->value;
             }
@@ -183,6 +183,7 @@ trait StdContainerTrait
                 'vector' => Type::STD_VECTOR,
                 'map' => Type::STD_MAP,
                 'ordered_map' => Type::STD_ORDERED_MAP,
+                default => throw new \LogicException('Unknown std container kind: ' . (string) $info['kind']),
             };
             if ($type === Type::STD_ARRAY) {
                 $this->context->stdArrays[$argument->name] = $info;
@@ -825,14 +826,18 @@ trait StdContainerTrait
     /** Return the one-array value-initializer overload, if this call uses it. */
     protected function getStdValueInitializer(Expr\StaticCall $expr): ?Expr\Array_
     {
-        if (count($expr->args) !== 1 || !$expr->args[0]->value instanceof Expr\Array_) {
+        if (count($expr->args) !== 1) {
             return null;
         }
         $argument = $expr->args[0];
+        $value = $argument->value;
+        if (!$value instanceof Expr\Array_) {
+            return null;
+        }
         if ($argument->name !== null || $argument->unpack || $argument->byRef) {
             $this->fatalError($argument, 'Std container value initialization requires one positional array argument');
         }
-        return $argument->value;
+        return $value;
     }
 
     /** @return array{type: string, class: ?string} */
@@ -893,8 +898,8 @@ trait StdContainerTrait
         $valueInfo = null;
         $keyType = null;
         foreach ($array->items as $item) {
-            if ($item === null || $item->unpack || $item->byRef) {
-                $this->fatalError($item ?? $array, $owner . ' initializer does not support holes, unpacking, or references');
+            if ($item->unpack || $item->byRef) {
+                $this->fatalError($item, $owner . ' initializer does not support unpacking or references');
             }
             if ($keyMode === 'positional' && $item->key !== null) {
                 $this->fatalError($item->key, $owner . ' initializer requires positional array elements');
@@ -952,8 +957,8 @@ trait StdContainerTrait
         $entries = [];
         $nested = null;
         foreach ($array->items as $index => $item) {
-            if ($item === null || $item->unpack || $item->byRef || $item->key !== null) {
-                $this->fatalError($item ?? $array, $owner . ' initializer must be a positional array without holes, unpacking, or references');
+            if ($item->unpack || $item->byRef || $item->key !== null) {
+                $this->fatalError($item, $owner . ' initializer must be a positional array without unpacking or references');
             }
 
             $isNested = $item->value instanceof Expr\Array_;

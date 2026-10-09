@@ -22,6 +22,7 @@ use TypePhp\Exception\SyntaxError;
 use TypePhp\Transform\PropertyHookLowering;
 use TypePhp\Transform\CompileTimeAttribute;
 use TypePhp\Transform\NativeClassAttributeLowering;
+use TypePhp\Transform\NativePropertyTypeLowering;
 use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\PrinterLowering;
 use TypePhp\Transform\ArrayableLowering;
@@ -44,7 +45,7 @@ use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
 
-class Preprocessor extends CompilerBase
+abstract class Preprocessor extends CompilerBase
 {
     /**
      * Magic methods forbidden on PHP enums. Enum cases are runtime-managed
@@ -222,9 +223,8 @@ class Preprocessor extends CompilerBase
                 continue;
             }
             $source = file_get_contents($file);
-            if (is_string($source)
-                && (str_contains($source, 'global') || str_contains($source, '$GLOBALS'))
-            ) {
+            // PHP keywords are case-insensitive; this also includes $GLOBALS accesses.
+            if (is_string($source) && stripos($source, 'global') !== false) {
                 $candidateSources[$file] = $source;
             }
         }
@@ -342,15 +342,15 @@ class Preprocessor extends CompilerBase
         $ext = $this->getPlatform()->getObjectExtension();
 
         // Composer packages are immutable build inputs. Keep their objects in
-        // the project build directory instead of writing beside vendor sources.
+        // the project cache instead of writing beside vendor sources.
         if (isset($this->nanoRuntimeSources[$cppFile])) {
             $separator = $this->getPlatform()->getPathSeparator();
-            $objectDir = $this->buildDir . $separator . 'nano-objects';
-            if (!is_dir($objectDir)) {
-                mkdir($objectDir, 0777, true);
-            }
-            return $objectDir . $separator . $info['filename'] . '-'
-                . substr(sha1($cppFile), 0, 12) . $ext;
+            $name = $info['filename'] . '-' . substr(sha1($cppFile), 0, 12) . $ext;
+            return $this->cacheObjectFile(
+                $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                    . $separator . 'nano' . $separator . $name,
+                $this->buildDir . $separator . 'nano-objects' . $separator . $name,
+            );
         }
 
         // Keep the same path separator as cppFile
@@ -362,11 +362,12 @@ class Preprocessor extends CompilerBase
             // other PHPX misc sources are target-independent and share their
             // cached object files within the build directory.
             $cacheScope = $this->isProjectRuntimeEntryFile($cppFile) ? $this->targetName : 'shared';
-            $objectDir = $this->buildDir . $separator . 'phpx-misc' . $separator . $cacheScope;
-            if (!is_dir($objectDir)) {
-                mkdir($objectDir, 0777, true);
-            }
-            return $objectDir . $separator . $info['filename'] . $ext;
+            $name = $info['filename'] . $ext;
+            return $this->cacheObjectFile(
+                $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                    . $separator . 'phpx-misc' . $separator . $cacheScope . $separator . $name,
+                $this->buildDir . $separator . 'phpx-misc' . $separator . $cacheScope . $separator . $name,
+            );
         }
 
         $filename = $info['filename'];
@@ -376,7 +377,46 @@ class Preprocessor extends CompilerBase
             $filename .= '.' . $info['extension'];
         }
 
-        return $info['dirname'] . $this->getPlatform()->getPathSeparator() . $filename . $ext;
+        $separator = $this->getPlatform()->getPathSeparator();
+        $legacy = $info['dirname'] . $separator . $filename . $ext;
+        $normalizedBuildDir = rtrim(str_replace('\\', '/', $this->buildDir), '/') . '/';
+        if (str_starts_with($normalizedFile, $normalizedBuildDir)) {
+            $relative = substr($normalizedFile, strlen($normalizedBuildDir));
+            $relativeDir = dirname($relative);
+            $objectDir = $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                . $separator . 'generated';
+            if ($relativeDir !== '.') {
+                $objectDir .= $separator . str_replace('/', $separator, $relativeDir);
+            }
+        } else {
+            $objectDir = $this->buildDir . $separator . 'cache' . $separator . 'objects'
+                . $separator . 'external' . $separator . substr(sha1($info['dirname']), 0, 16);
+            // A legacy object beside an external source may belong to a
+            // different build directory. Leave that file alone.
+            $legacy = null;
+        }
+        return $this->cacheObjectFile($objectDir . $separator . $filename . $ext, $legacy);
+    }
+
+    private function cacheObjectFile(string $object, ?string $legacy): string
+    {
+        $directory = dirname($object);
+        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+            throw new \RuntimeException('Cannot create object cache directory: ' . $directory);
+        }
+        if ($legacy !== null) {
+            foreach (['', '.typephp-cache'] as $suffix) {
+                if (!is_file($legacy . $suffix)) {
+                    continue;
+                }
+                if (is_file($object . $suffix)) {
+                    unlink($legacy . $suffix);
+                } else {
+                    rename($legacy . $suffix, $object . $suffix);
+                }
+            }
+        }
+        return $object;
     }
 
     private function isGeneratedCppFile(string $file): bool
@@ -394,7 +434,18 @@ class Preprocessor extends CompilerBase
     {
         $normalizedFile = str_replace('\\', '/', $file);
         $runtimeEntry = str_replace('\\', '/', $this->getPhpxDir() . '/src/misc/typephp_main.cc');
-        return $normalizedFile === $runtimeEntry;
+        if ($normalizedFile === $runtimeEntry) {
+            return true;
+        }
+        if (!$this->isNanoMode() || !$this->isBuildModeLib()) {
+            return false;
+        }
+        $nanoLibraryEntry = str_replace(
+            '\\',
+            '/',
+            $this->getPhpxDir() . '/src/typephp/typephp_main_nano.cc',
+        );
+        return $normalizedFile === $nanoLibraryEntry;
     }
 
     public function prepareFile(string $file): void
@@ -432,7 +483,6 @@ class Preprocessor extends CompilerBase
             if ($this->isNanoPolicyMode()) {
                 $traverser->addVisitor(new NanoSyntaxValidationVisitor(
                     fn (Node $node, string $message) => $this->fatalError($node, $message),
-                    $this->isNanoMode(),
                 ));
             }
             $traverser->addVisitor(new VoidCastValidationVisitor(
@@ -935,7 +985,9 @@ class Preprocessor extends CompilerBase
         return false;
     }
 
-    private function hasNoExportAttribute(NodeAbstract $node): bool
+    private function hasNoExportAttribute(
+        Node\Stmt\Function_|Node\Stmt\ClassMethod|Node\Stmt\ClassLike $node,
+    ): bool
     {
         foreach ($node->attrGroups as $group) {
             foreach ($group->attrs as $attribute) {
@@ -1619,8 +1671,9 @@ class Preprocessor extends CompilerBase
             }
         }
 
-        if (!$this->method && $this->canOptimizeMultiReturn($v, $functionDef)) {
-            $functionDef->multiReturnCount = count($v->stmts[array_key_last($v->stmts)]->expr->items);
+        $multiReturn = !$this->method ? $this->getOptimizableMultiReturn($v, $functionDef) : null;
+        if ($multiReturn !== null) {
+            $functionDef->multiReturnCount = count($multiReturn->items);
             // The fixed tuple is an internal ABI detail. PHP and ordinary native
             // callers continue to observe an array return value.
             $functionDef->returnType = Type::ARRAY;
@@ -1670,28 +1723,31 @@ class Preprocessor extends CompilerBase
         return $functionDef;
     }
 
-    private function canOptimizeMultiReturn(Node\Stmt\Function_|Node\Stmt\ClassMethod $function, FunctionDef $functionDef): bool
+    private function getOptimizableMultiReturn(
+        Node\Stmt\Function_|Node\Stmt\ClassMethod $function,
+        FunctionDef $functionDef,
+    ): ?Node\Expr\Array_
     {
         if ($functionDef->stub || $functionDef->generator || $functionDef->returnsByRef
             || ($functionDef->returnType !== Type::ARRAY && !$functionDef->returnTypeUndeclared)
             || !$function->stmts) {
-            return false;
+            return null;
         }
 
         $return = $function->stmts[array_key_last($function->stmts)] ?? null;
         if (!$return instanceof Node\Stmt\Return_ || !$return->expr instanceof Node\Expr\Array_
             || count($return->expr->items) < 2) {
-            return false;
+            return null;
         }
 
         $returns = (new NodeFinder())->findInstanceOf($function->stmts, Node\Stmt\Return_::class);
         if (count($returns) !== 1) {
-            return false;
+            return null;
         }
 
         foreach ($return->expr->items as $item) {
-            if ($item === null || $item->key !== null || $item->unpack || $item->byRef) {
-                return false;
+            if ($item->key !== null || $item->unpack || $item->byRef) {
+                return null;
             }
             $value = $item->value;
             if (($value instanceof Node\Expr\Variable && is_string($value->name))
@@ -1699,9 +1755,9 @@ class Preprocessor extends CompilerBase
                 || $value instanceof Node\Expr\ConstFetch) {
                 continue;
             }
-            return false;
+            return null;
         }
-        return true;
+        return $return->expr;
     }
 
     protected function prepareFunction(Node\Stmt\ClassMethod|Node\Stmt\Function_ $v): void
@@ -1924,51 +1980,50 @@ class Preprocessor extends CompilerBase
 
         $code = '';
         foreach ($class->stmts as $v) {
-            $type = $v->getType();
-            switch ($type) {
-                case 'Stmt_ClassConst':
-                    break;
-                case 'Stmt_Property':
-                    if ($this->classDef->enum) {
-                        $this->fatalError($v, "Enum {$fullClassName} cannot include properties");
-                    }
-                    $this->parseClassPropertyDef($v);
-                    break;
-                case 'Stmt_TraitUse':
-                    $this->prepareTraitUse($v);
-                    break;
-                case 'Stmt_Nop':
-                    break;
-                case 'Stmt_EnumCase':
-                    $caseName = $this->parseIdentifier($v->name);
-                    if (array_key_exists($caseName, $this->classDef->enumCases)
-                        || $this->classDef->hasConstant($caseName)
-                    ) {
-                        $enumName = $this->classDef->getNamespacedName(false);
-                        $this->fatalError($v, "Cannot redefine class constant {$enumName}::{$caseName}");
-                    }
-                    // Keep every backing expression until declaration
-                    // finalization. Literal values also seed enumCases for
-                    // declaration consumers, but code generation only accepts
-                    // values finalized after the complete symbol graph exists.
-                    $this->classDef->enumCases[$caseName] =
-                        $v->expr instanceof Node\Scalar\Int_ || $v->expr instanceof Node\Scalar\String_
-                            ? $v->expr->value
-                            : null;
-                    if ($v->expr !== null) {
-                        $this->classDef->enumCaseExpressions[$caseName] = $v->expr;
-                    }
-                    break;
-                case 'Stmt_ClassMethod':
-                    $this->prepareClassMethod($v, $class);
-                    break;
-                case 'Stmt_Expression':
-                    $this->foundStrayCode($v);
-                    break;
-                default:
-                    $this->unsupportedSyntax($v);
-                    break;
+            if ($v instanceof Node\Stmt\ClassConst || $v instanceof Node\Stmt\Nop) {
+                continue;
             }
+            if ($v instanceof Node\Stmt\Property) {
+                if ($this->classDef->enum) {
+                    $this->fatalError($v, "Enum {$fullClassName} cannot include properties");
+                }
+                $this->parseClassPropertyDef($v);
+                continue;
+            }
+            if ($v instanceof Node\Stmt\TraitUse) {
+                $this->prepareTraitUse($v);
+                continue;
+            }
+            if ($v instanceof Node\Stmt\EnumCase) {
+                $caseName = $this->parseIdentifier($v->name);
+                if (array_key_exists($caseName, $this->classDef->enumCases)
+                    || $this->classDef->hasConstant($caseName)
+                ) {
+                    $enumName = $this->classDef->getNamespacedName(false);
+                    $this->fatalError($v, "Cannot redefine class constant {$enumName}::{$caseName}");
+                }
+                // Keep every backing expression until declaration
+                // finalization. Literal values also seed enumCases for
+                // declaration consumers, but code generation only accepts
+                // values finalized after the complete symbol graph exists.
+                $this->classDef->enumCases[$caseName] =
+                    $v->expr instanceof Node\Scalar\Int_ || $v->expr instanceof Node\Scalar\String_
+                        ? $v->expr->value
+                        : null;
+                if ($v->expr !== null) {
+                    $this->classDef->enumCaseExpressions[$caseName] = $v->expr;
+                }
+                continue;
+            }
+            if ($v instanceof Node\Stmt\ClassMethod) {
+                $this->prepareClassMethod($v, $class);
+                continue;
+            }
+            if ($v instanceof Node\Stmt\Expression) {
+                $this->foundStrayCode($v);
+                continue;
+            }
+            $this->unsupportedSyntax($v);
         }
 
         // Trait members are later injected into the consuming class for stub
@@ -2399,6 +2454,7 @@ class Preprocessor extends CompilerBase
             false,
         );
         $propDef->node = $errorNode;
+        $propDef->nativeStorageType = NativePropertyTypeLowering::getStorageType($errorNode);
         if ($typeNode !== null
             && !$typeNode instanceof NullableType
             && !$typeNode instanceof UnionType
@@ -2541,79 +2597,87 @@ class Preprocessor extends CompilerBase
         }
         $scopeClass ??= $this->getFullClassName();
 
-        switch ($node->getType()) {
-            case 'Scalar_Int':
-                return 'int';
-            case 'Scalar_Float':
-                return 'float';
-            case 'Scalar_String':
-            case 'Scalar_InterpolatedString':
-            case 'Expr_BinaryOp_Concat':
-                return 'string';
-            case 'Expr_Array':
-                return 'array';
-            case 'Expr_UnaryMinus':
-            case 'Expr_UnaryPlus':
-                return $this->detectDefaultValueType($node->expr, $scopeClass, $depth + 1);
-            case 'Expr_ConstFetch':
-                return match (strtolower($node->name->toString())) {
-                    'true'          => 'true',
-                    'false'         => 'false',
-                    'null'          => 'null',
-                    default         => null,
-                };
-            case 'Expr_ClassConstFetch':
-                if (!$node->class instanceof Node\Name || !$node->name instanceof Node\Identifier) {
-                    return null;
-                }
-                $constName = $node->name->toString();
-                if (strcasecmp($constName, 'class') === 0) {
-                    return 'string';
-                }
-                $className = $node->class->toString();
-                if (strcasecmp($className, 'self') === 0 || strcasecmp($className, 'static') === 0) {
-                    $targetClass = $scopeClass;
-                } elseif (strcasecmp($className, 'parent') === 0) {
-                    $targetClass = $this->getParentClass($scopeClass);
-                } else {
-                    $targetClass = $this->getNamespacedClassName($className);
-                }
-                if ($targetClass === '' || !$this->hasClass($targetClass)) {
-                    return null;
-                }
-                $targetDef = $this->getClass($targetClass);
-                if ($targetDef->enum && array_key_exists($constName, $targetDef->enumCases)) {
-                    return 'enum:' . $targetDef->getNamespacedName(false);
-                }
-                if (!$targetDef->hasConstant($constName)) {
-                    return null;
-                }
-                return $this->detectDefaultValueType(
-                    $targetDef->getConstant($constName)->valueExpr,
-                    $targetClass,
-                    $depth + 1
-                );
-            default:
-                try {
-                    $value = (new ConstExprEvaluator(
-                        static function (Node\Expr $expr): never {
-                            throw new \RuntimeException('Unresolved constant expression');
-                        }
-                    ))->evaluateDirectly($node);
-                } catch (\Throwable) {
-                    return null;
-                }
-                return match (true) {
-                    is_int($value) => 'int',
-                    is_float($value) => 'float',
-                    is_string($value) => 'string',
-                    $value === true => 'true',
-                    $value === false => 'false',
-                    is_array($value) => 'array',
-                    $value === null => 'null',
-                    default => null,
-                };
+        if ($node instanceof Node\Scalar\Int_) {
+            return 'int';
         }
+        if ($node instanceof Node\Scalar\Float_) {
+            return 'float';
+        }
+        if ($node instanceof Node\Scalar\String_
+            || $node instanceof Node\Scalar\InterpolatedString
+            || $node instanceof Node\Expr\BinaryOp\Concat
+        ) {
+            return 'string';
+        }
+        if ($node instanceof Node\Expr\Array_) {
+            return 'array';
+        }
+        if ($node instanceof Node\Expr\UnaryMinus) {
+            return $this->detectDefaultValueType($node->expr, $scopeClass, $depth + 1);
+        }
+        if ($node instanceof Node\Expr\ConstFetch) {
+            return match (strtolower($node->name->toString())) {
+                'true' => 'true',
+                'false' => 'false',
+                'null' => 'null',
+                default => null,
+            };
+        }
+        if ($node instanceof Node\Expr\ClassConstFetch) {
+            if (!$node->class instanceof Node\Name || !$node->name instanceof Node\Identifier) {
+                return null;
+            }
+            $constName = $node->name->toString();
+            if (strcasecmp($constName, 'class') === 0) {
+                return 'string';
+            }
+            $className = $node->class->toString();
+            if (strcasecmp($className, 'self') === 0 || strcasecmp($className, 'static') === 0) {
+                $targetClass = $scopeClass;
+            } elseif (strcasecmp($className, 'parent') === 0) {
+                $targetClass = $this->getParentClass($scopeClass);
+            } else {
+                $targetClass = $this->getNamespacedClassName($className);
+            }
+            if ($targetClass === '' || !$this->hasClass($targetClass)) {
+                return null;
+            }
+            $targetDef = $this->getClass($targetClass);
+            if ($targetDef->enum && array_key_exists($constName, $targetDef->enumCases)) {
+                return 'enum:' . $targetDef->getNamespacedName(false);
+            }
+            if (!$targetDef->hasConstant($constName)) {
+                return null;
+            }
+            return $this->detectDefaultValueType(
+                $targetDef->getConstant($constName)->valueExpr,
+                $targetClass,
+                $depth + 1,
+            );
+        }
+
+        if (!$node instanceof Node\Expr) {
+            return null;
+        }
+        try {
+            $value = (new ConstExprEvaluator(
+                static function (Node\Expr $expr): never {
+                    throw new \RuntimeException('Unresolved constant expression');
+                },
+            ))->evaluateDirectly($node);
+        } catch (\Throwable) {
+            return null;
+        }
+        return match (true) {
+            is_int($value) => 'int',
+            is_float($value) => 'float',
+            is_string($value) => 'string',
+            $value === true => 'true',
+            $value === false => 'false',
+            is_array($value) => 'array',
+            $value === null => 'null',
+            default => null,
+        };
     }
 
     private function propertyTypeAcceptsEnumCase(NodeAbstract $typeNode, string $enumClass): bool

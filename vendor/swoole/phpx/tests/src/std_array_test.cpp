@@ -30,6 +30,129 @@ TEST(std_array, array_key_exists) {
     ASSERT_FALSE(fn::array_key_exists(99, a));
 }
 
+namespace {
+
+std::string capture_array_key_exists(const Variant &key, const Array &array, bool native, bool throw_errors = false) {
+    eval(R"(
+        $GLOBALS['phpx_array_key_diagnostics'] = [];
+        set_error_handler(static function ($severity, $message) {
+            $GLOBALS['phpx_array_key_diagnostics'][] = [$severity, $message];
+            return true;
+        });
+    )");
+    if (throw_errors) {
+        eval(R"(
+            restore_error_handler();
+            set_error_handler(static function ($severity, $message) {
+                throw new ErrorException($message, 0, $severity);
+            });
+        )");
+    }
+    std::string outcome;
+    try {
+        Variant result = native ? php::call("array_key_exists", {key, array})
+                                : Variant(fn::array_key_exists(key, array));
+        outcome = result.toBool() ? "true" : "false";
+    } catch (zend_object *) {
+        auto exception = php::catchException();
+        outcome = exception.getClassName().toStdString() + ":" + exception.call("getMessage").toStdString();
+    }
+    eval("restore_error_handler();");
+    outcome += "|" + eval("return json_encode($GLOBALS['phpx_array_key_diagnostics']);").toStdString();
+    eval("unset($GLOBALS['phpx_array_key_diagnostics']);");
+    return outcome;
+}
+
+}  // namespace
+
+TEST(std_array, array_key_exists_key_types_match_php) {
+    Array array = eval(R"(return [0 => null, 1 => false, -2 => true, '' => 'empty', '01' => null, "a\0b" => true];)");
+    Variant resource = eval("return fopen('php://memory', 'r+');");
+    array.set(Variant(Z_RES_HANDLE_P(resource.unwrap_ptr())), "resource");
+    const Variant keys[] = {false,
+                            true,
+                            nullptr,
+                            1.0,
+                            -2.0,
+                            99.0,
+                            1.5,
+                            -2.5,
+                            std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::quiet_NaN(),
+                            "0",
+                            "01",
+                            "-2",
+                            "missing",
+                            std::string("a\0b", 3),
+                            resource,
+                            Array(),
+                            newObject("stdClass")};
+    for (const auto &key : keys) {
+        SCOPED_TRACE(key.typeStr());
+        EXPECT_EQ(capture_array_key_exists(key, array, false), capture_array_key_exists(key, array, true));
+        Array empty;
+        EXPECT_EQ(capture_array_key_exists(key, empty, false), capture_array_key_exists(key, empty, true));
+    }
+    php::call("fclose", {resource});
+}
+
+TEST(std_array, array_key_exists_reference_key) {
+    Array array;
+    array.set(Variant(1), nullptr);
+    Variant key(true);
+    Variant reference(&key);
+    ASSERT_TRUE(reference.isReference());
+    EXPECT_TRUE(fn::array_key_exists(reference, array));
+    EXPECT_TRUE(key.isTrue());
+}
+
+TEST(std_array, array_key_exists_propagates_diagnostic_exceptions) {
+    Array array;
+    array.set(Variant(1), nullptr);
+    Variant resource = eval("return fopen('php://memory', 'r+');");
+    for (const auto &key : {Variant(1.5), Variant(nullptr), resource}) {
+        SCOPED_TRACE(key.typeStr());
+        EXPECT_EQ(capture_array_key_exists(key, array, false, true), capture_array_key_exists(key, array, true, true));
+        EXPECT_EQ(EG(exception), nullptr);
+    }
+    php::call("fclose", {resource});
+}
+
+TEST(std_array, array_key_exists_snapshots_arguments_before_diagnostics) {
+    const char *keys[] = {
+        "1.5",
+#if PHP_VERSION_ID >= 80500
+        "null",
+#endif
+        "fopen('php://memory', 'r+')",
+    };
+    for (const auto *expression : keys) {
+        SCOPED_TRACE(expression);
+        for (bool native : {false, true}) {
+            eval(std::string("$GLOBALS['phpx_lookup_key'] = ") + expression + ";");
+            eval(R"(
+                $GLOBALS['phpx_lookup_array'] = [0 => null, 1 => null, '' => null];
+                if (is_resource($GLOBALS['phpx_lookup_key'])) {
+                    $GLOBALS['phpx_lookup_array'][get_resource_id($GLOBALS['phpx_lookup_key'])] = null;
+                }
+                set_error_handler(static function () {
+                    $GLOBALS['phpx_lookup_key'] = 123;
+                    $GLOBALS['phpx_lookup_array'] = [];
+                    return true;
+                });
+            )");
+            Variant key(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_lookup_key")), Ctor::Indirect);
+            Array array(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_lookup_array")), Ctor::Indirect);
+            bool found = native ? php::call("array_key_exists", {key, array}).toBool() : fn::array_key_exists(key, array);
+            eval("restore_error_handler();");
+            EXPECT_TRUE(found);
+            EXPECT_EQ(key.toInt(), 123);
+            EXPECT_EQ(array.count(), 0);
+            eval("unset($GLOBALS['phpx_lookup_key'], $GLOBALS['phpx_lookup_array']);");
+        }
+    }
+}
+
 TEST(std_array, array_search) {
     Array a{1, 2, 3, "hello"};
 
@@ -56,6 +179,155 @@ TEST(std_array, array_search) {
     ASSERT_STREQ(fn::array_search(7, keyed, true).toCString(), "named");
     ASSERT_EQ(fn::array_search("eleven", keyed, true).toInt(), 11);
     ASSERT_STREQ(fn::array_search("7", keyed).toCString(), "named");
+}
+
+TEST(std_array, searches_propagate_comparison_exceptions) {
+    eval(R"(
+        class PhpxThrowingSearchValue {
+            public function __toString(): string {
+                throw new RuntimeException('array comparison failed');
+            }
+        }
+    )");
+    Array values = eval("return [new PhpxThrowingSearchValue(), 'needle'];");
+    for (int operation = 0; operation < 3; operation++) {
+        SCOPED_TRACE(operation);
+        bool caught = false;
+        try {
+            if (operation == 0) {
+                fn::in_array("needle", values);
+            } else if (operation == 1) {
+                fn::array_search("needle", values);
+            } else {
+                fn::array_keys_filter(values, "needle", false);
+            }
+        } catch (zend_object *) {
+            caught = true;
+            auto exception = php::catchException();
+            EXPECT_EQ(exception.getClassName().toStdString(), "RuntimeException");
+            EXPECT_EQ(exception.call("getMessage").toStdString(), "array comparison failed");
+        }
+        // Clear a leaked pending exception so a failed assertion cannot affect later tests.
+        if (EG(exception)) {
+            php::catchException();
+        }
+        EXPECT_TRUE(caught);
+    }
+    EXPECT_TRUE(fn::in_array("needle", values, true));
+    EXPECT_EQ(fn::array_search("needle", values, true).toInt(), 1);
+    EXPECT_EQ(fn::array_keys_filter(values, "needle", true).count(), 1);
+}
+
+TEST(std_array, searches_snapshot_arguments_before_comparison_callbacks) {
+    eval(R"(
+        class PhpxMutatingSearchValue {
+            public function __construct(private string $value) {}
+            public function __toString(): string {
+                $GLOBALS['phpx_search_needle'] = 'changed';
+                $GLOBALS['phpx_search_values'] = [];
+                $GLOBALS['phpx_search_calls']++;
+                return $this->value;
+            }
+        }
+    )");
+    for (int operation = 0; operation < 3; operation++) {
+        SCOPED_TRACE(operation);
+        std::string outcomes[2];
+        for (int native = 0; native < 2; native++) {
+            eval(R"(
+                $GLOBALS['phpx_search_needle'] = 'needle';
+                $GLOBALS['phpx_search_values'] = [
+                    'first' => new PhpxMutatingSearchValue('other'),
+                    'match' => 'needle',
+                    'last' => new PhpxMutatingSearchValue('needle'),
+                ];
+                $GLOBALS['phpx_search_calls'] = 0;
+            )");
+            Variant needle(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_search_needle")), Ctor::Indirect);
+            Array values(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_search_values")), Ctor::Indirect);
+            Variant result;
+            if (operation == 0) {
+                result = native ? php::call("in_array", {needle, values}) : Variant(fn::in_array(needle, values));
+            } else if (operation == 1) {
+                result = native ? php::call("array_search", {needle, values}) : fn::array_search(needle, values);
+            } else {
+                result = native ? php::call("array_keys", {values, needle})
+                                : Variant(fn::array_keys_filter(values, needle, false));
+            }
+            outcomes[native] = php::call("serialize", {result}).toStdString();
+            EXPECT_EQ(needle.toStdString(), "changed");
+            EXPECT_EQ(values.count(), 0);
+            EXPECT_EQ(eval("return $GLOBALS['phpx_search_calls'];").toInt(), operation == 2 ? 2 : 1);
+            eval("unset($GLOBALS['phpx_search_needle'], $GLOBALS['phpx_search_values'], $GLOBALS['phpx_search_calls']);");
+        }
+        EXPECT_EQ(outcomes[0], outcomes[1]);
+    }
+}
+
+TEST(std_array, searches_propagate_snapshot_destructor_exceptions) {
+    eval(R"(
+        class PhpxDestructingSearchValue {
+            public function __toString(): string {
+                $GLOBALS['phpx_destructing_search'] = [];
+                return 'needle';
+            }
+            public function __destruct() {
+                throw new RuntimeException('search destruction failed');
+            }
+        }
+    )");
+    for (int operation = 0; operation < 3; operation++) {
+        SCOPED_TRACE(operation);
+        eval("$GLOBALS['phpx_destructing_search'] = [new PhpxDestructingSearchValue()];");
+        Array values(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_destructing_search")), Ctor::Indirect);
+        bool caught = false;
+        try {
+            if (operation == 0) {
+                fn::in_array("needle", values);
+            } else if (operation == 1) {
+                fn::array_search("needle", values);
+            } else {
+                fn::array_keys_filter(values, "needle", false);
+            }
+        } catch (zend_object *) {
+            caught = true;
+            auto exception = php::catchException();
+            EXPECT_EQ(exception.getClassName().toStdString(), "RuntimeException");
+            EXPECT_EQ(exception.call("getMessage").toStdString(), "search destruction failed");
+        }
+        if (EG(exception)) {
+            php::catchException();
+        }
+        EXPECT_TRUE(caught);
+        eval("unset($GLOBALS['phpx_destructing_search']);");
+    }
+}
+
+TEST(std_array, search_snapshots_preserve_referenced_elements) {
+    eval(R"(
+        class PhpxReferenceSearchValue {
+            public function __toString(): string {
+                $GLOBALS['phpx_search_reference'] = 'needle';
+                return 'other';
+            }
+        }
+    )");
+    for (int operation = 0; operation < 3; operation++) {
+        Array values = eval(R"(
+            $GLOBALS['phpx_search_reference'] = 'before';
+            return [new PhpxReferenceSearchValue(), &$GLOBALS['phpx_search_reference']];
+        )");
+        if (operation == 0) {
+            EXPECT_TRUE(fn::in_array("needle", values));
+        } else if (operation == 1) {
+            EXPECT_EQ(fn::array_search("needle", values).toInt(), 1);
+        } else {
+            auto keys = fn::array_keys_filter(values, "needle", false);
+            ASSERT_EQ(keys.count(), 1);
+            EXPECT_EQ(keys.get(0).toInt(), 1);
+        }
+    }
+    eval("unset($GLOBALS['phpx_search_reference']);");
 }
 
 TEST(std_array, array_keys) {
@@ -136,6 +408,240 @@ TEST(std_array, array_merge) {
     ASSERT_EQ(m3.length(), 0);
 }
 
+TEST(std_array, array_merge_reindexes_numeric_keys_in_first_array) {
+    Array first;
+    first.set(9, "a");
+    first.set(-4, "b");
+    first.set("name", "first");
+
+    auto single = fn::array_merge(first);
+    ASSERT_TRUE(same(single, call("array_merge", {first})));
+    ASSERT_EQ(single.length(), 3);
+    ASSERT_STREQ(single.get(0).toString().toCString(), "a");
+    ASSERT_STREQ(single.get(1).toString().toCString(), "b");
+    ASSERT_STREQ(single.get("name").toString().toCString(), "first");
+    auto single_keys = fn::array_keys(single);
+    ASSERT_EQ(single_keys.get(0).toInt(), 0);
+    ASSERT_EQ(single_keys.get(1).toInt(), 1);
+    ASSERT_STREQ(single_keys.get(2).toCString(), "name");
+
+    Array second;
+    second.set(42, "c");
+    second.set("name", "second");
+
+    auto merged = fn::array_merge(first, second);
+    ASSERT_TRUE(same(merged, call("array_merge", {first, second})));
+    ASSERT_EQ(merged.length(), 4);
+    ASSERT_STREQ(merged.get(0).toString().toCString(), "a");
+    ASSERT_STREQ(merged.get(1).toString().toCString(), "b");
+    ASSERT_STREQ(merged.get(2).toString().toCString(), "c");
+    ASSERT_STREQ(merged.get("name").toString().toCString(), "second");
+    auto merged_keys = fn::array_keys(merged);
+    ASSERT_EQ(merged_keys.get(0).toInt(), 0);
+    ASSERT_EQ(merged_keys.get(1).toInt(), 1);
+    ASSERT_STREQ(merged_keys.get(2).toCString(), "name");
+    ASSERT_EQ(merged_keys.get(3).toInt(), 2);
+}
+
+TEST(std_array, array_merge_matches_php_for_holes_tail_deletions_and_empty_input) {
+    Array with_hole{"zero", "one", "two"};
+    ASSERT_TRUE(with_hole.del(1));
+    auto hole_result = fn::array_merge(with_hole);
+    ASSERT_TRUE(same(hole_result, call("array_merge", {with_hole})));
+    ASSERT_STREQ(hole_result.get(0).toCString(), "zero");
+    ASSERT_STREQ(hole_result.get(1).toCString(), "two");
+
+    Array with_deleted_tail{"zero", "one"};
+    ASSERT_TRUE(with_deleted_tail.del(1));
+    auto tail_result = fn::array_merge(with_deleted_tail);
+    ASSERT_TRUE(same(tail_result, call("array_merge", {with_deleted_tail})));
+    ASSERT_STREQ(tail_result.get(0).toCString(), "zero");
+
+    Array empty;
+    ASSERT_TRUE(same(fn::array_merge(empty), call("array_merge", {empty})));
+}
+
+TEST(std_array, array_merge_empty_pair_preserves_php_append_keys) {
+    Array with_deleted_tail{"zero", "one"};
+    ASSERT_TRUE(with_deleted_tail.del(1));
+    Array empty;
+
+    auto empty_second = fn::array_merge(with_deleted_tail, empty);
+    ASSERT_TRUE(same(empty_second, call("array_merge", {with_deleted_tail, empty})));
+    ASSERT_EQ(empty_second.array(), with_deleted_tail.array());
+    empty_second.append("next");
+    ASSERT_STREQ(empty_second.get(2).toCString(), "next");
+    ASSERT_STREQ(with_deleted_tail.get(0).toCString(), "zero");
+
+    auto empty_first = fn::array_merge(empty, with_deleted_tail);
+    ASSERT_TRUE(same(empty_first, call("array_merge", {empty, with_deleted_tail})));
+    ASSERT_EQ(empty_first.array(), with_deleted_tail.array());
+    empty_first.append("next");
+    ASSERT_STREQ(empty_first.get(2).toCString(), "next");
+
+    Array first_empty{"first"};
+    ASSERT_TRUE(first_empty.del(0));
+    Array second_empty{"first", "second"};
+    ASSERT_TRUE(second_empty.del(0));
+    ASSERT_TRUE(second_empty.del(1));
+    auto both_empty = fn::array_merge(first_empty, second_empty);
+    ASSERT_TRUE(same(both_empty, call("array_merge", {first_empty, second_empty})));
+    ASSERT_EQ(both_empty.array(), second_empty.array());
+    both_empty.append("next");
+    ASSERT_STREQ(both_empty.get(2).toCString(), "next");
+
+    Array with_hole{"zero", "one", "two"};
+    ASSERT_TRUE(with_hole.del(1));
+    auto hole_result = fn::array_merge(with_hole, empty);
+    ASSERT_TRUE(same(hole_result, call("array_merge", {with_hole, empty})));
+    ASSERT_NE(hole_result.array(), with_hole.array());
+    hole_result.append("next");
+    ASSERT_STREQ(hole_result.get(2).toCString(), "next");
+}
+
+TEST(std_array, array_merge_variadic_does_not_apply_empty_pair_fast_path) {
+    Array with_deleted_tail{"zero", "one"};
+    ASSERT_TRUE(with_deleted_tail.del(1));
+    Array empty;
+    Array next;
+    next.set(42, "next");
+
+    auto three = fn::array_merge(with_deleted_tail, empty, next);
+    ASSERT_TRUE(same(three, call("array_merge", {with_deleted_tail, empty, next})));
+    ASSERT_STREQ(three.get(0).toCString(), "zero");
+    ASSERT_STREQ(three.get(1).toCString(), "next");
+    three.append("after three");
+    ASSERT_STREQ(three.get(2).toCString(), "after three");
+
+    auto four = fn::array_merge(with_deleted_tail, empty, empty, next);
+    ASSERT_TRUE(same(four, call("array_merge", {with_deleted_tail, empty, empty, next})));
+    ASSERT_STREQ(four.get(0).toCString(), "zero");
+    ASSERT_STREQ(four.get(1).toCString(), "next");
+    four.append("after four");
+    ASSERT_STREQ(four.get(2).toCString(), "after four");
+
+    Array empty_with_next_two{"first", "second"};
+    ASSERT_TRUE(empty_with_next_two.del(0));
+    ASSERT_TRUE(empty_with_next_two.del(1));
+    auto trailing_empty = fn::array_merge(empty, empty, empty_with_next_two);
+    ASSERT_TRUE(same(trailing_empty, call("array_merge", {empty, empty, empty_with_next_two})));
+    trailing_empty.append("next");
+    ASSERT_STREQ(trailing_empty.get(0).toCString(), "next");
+}
+
+TEST(std_array, array_merge_matches_php_key_and_next_index_matrix) {
+    constexpr size_t shape_count = 7;
+    const char *shape_names[shape_count] = {
+        "fresh_empty", "empty_next_two", "dense_packed", "tail_deleted",
+        "holes", "mixed_negative_numeric", "pure_string_stale_next",
+    };
+    auto make_shape = [](size_t shape) {
+        Array array;
+        switch (shape) {
+        case 0:
+            return array;
+        case 1:
+            array.append("first");
+            array.append("second");
+            array.del(0);
+            array.del(1);
+            return array;
+        case 2:
+            array.append("zero");
+            array.append("one");
+            return array;
+        case 3:
+            array.append("zero");
+            array.append("one");
+            array.del(1);
+            return array;
+        case 4:
+            array.append("zero");
+            array.append("one");
+            array.append("two");
+            array.del(1);
+            return array;
+        case 5:
+            array.set(-4, "negative");
+            array.set("name", "named");
+            return array;
+        case 6:
+            array.set("name", "named");
+            array.set(4, "numeric");
+            array.del(4);
+            return array;
+        default:
+            return array;
+        }
+    };
+
+    for (size_t first = 0; first < shape_count; first++) {
+        for (size_t second = 0; second < shape_count; second++) {
+            auto a = make_shape(first);
+            auto b = make_shape(second);
+            auto actual = fn::array_merge(a, b);
+            auto expected = call("array_merge", {a, b}).toArray();
+            EXPECT_TRUE(same(actual, expected)) << shape_names[first] << ", " << shape_names[second];
+            actual.append("next");
+            expected.append("next");
+            EXPECT_TRUE(same(actual, expected)) << shape_names[first] << ", " << shape_names[second];
+        }
+    }
+
+    for (size_t first = 0; first < shape_count; first++) {
+        for (size_t second = 0; second < shape_count; second++) {
+            for (size_t third = 0; third < shape_count; third++) {
+                auto a = make_shape(first);
+                auto b = make_shape(second);
+                auto c = make_shape(third);
+                auto actual = fn::array_merge(a, b, c);
+                auto expected = call("array_merge", {a, b, c}).toArray();
+                EXPECT_TRUE(same(actual, expected))
+                    << shape_names[first] << ", " << shape_names[second] << ", " << shape_names[third];
+                actual.append("next");
+                expected.append("next");
+                EXPECT_TRUE(same(actual, expected))
+                    << shape_names[first] << ", " << shape_names[second] << ", " << shape_names[third];
+            }
+        }
+    }
+}
+
+TEST(std_array, array_merge_preserves_copy_on_write_and_references) {
+    Array input;
+    input.set(9, "input");
+    Array other;
+    other.set(42, "other");
+    auto result = fn::array_merge(input, other);
+
+    result.set(0, "result");
+    ASSERT_STREQ(input.get(9).toCString(), "input");
+    input.set(9, "changed input");
+    ASSERT_STREQ(result.get(0).toCString(), "result");
+    result.set(1, "changed result");
+    ASSERT_STREQ(other.get(42).toCString(), "other");
+    other.set(42, "changed other");
+    ASSERT_STREQ(result.get(1).toCString(), "changed result");
+
+    Array packed{"packed"};
+    auto packed_result = fn::array_merge(packed);
+    ASSERT_EQ(packed_result.array(), packed.array());
+    packed_result.set(0, "changed packed result");
+    ASSERT_STREQ(packed.get(0).toCString(), "packed");
+
+    Variant value = 1;
+    Reference reference = value.toReference();
+    Variant referenced(reference.const_ptr(), Ctor::CopyRef);
+    Array referenced_input;
+    referenced_input.set(9, referenced);
+    auto referenced_result = fn::array_merge(referenced_input);
+
+    ASSERT_TRUE(referenced_result.get(0).isReference());
+    referenced_result[0] = 2;
+    ASSERT_EQ(value.toInt(), 2);
+    ASSERT_EQ(referenced_input.get(9).toInt(), 2);
+}
+
 TEST(std_array, array_merge_variadic) {
     Array a1;
     a1.set(Variant(0), "a");
@@ -176,6 +682,7 @@ TEST(std_array, count) {
     ASSERT_EQ(fn::count(v), 3);
 
     Array nested{Array{1, 2}, Array{3}};
+    ASSERT_EQ(fn::count(nested, 0), 2);
     ASSERT_EQ(fn::count(nested, 1), 5);
 }
 
@@ -192,6 +699,36 @@ TEST(std_array, count_exception) {
     )");
     var obj = eval("return new PhpxStdArrayThrowingCountable();");
     try_call([&obj]() { fn::count(obj); }, "std count failed");
+}
+
+TEST(std_array, count_invalid_mode) {
+    // Invalid modes must be rejected before inspecting the value or invoking Countable.
+    const Variant values[] = {
+        Array{1, 2},
+        Variant(123),
+        newObject("stdClass"),
+        newObject("ArrayObject"),
+        eval(R"(return new class implements Countable {
+            public function count(): int { throw new RuntimeException('count must not be called'); }
+        };)"),
+    };
+    const Int modes[] = {2, -1, std::numeric_limits<Int>::min(), std::numeric_limits<Int>::max()};
+    for (const auto &value : values) {
+        for (Int mode : modes) {
+            SCOPED_TRACE(mode);
+            bool caught = false;
+            try {
+                fn::count(value, mode);
+            } catch (zend_object *) {
+                auto exception = catchException();
+                EXPECT_TRUE(exception.instanceOf("ValueError"));
+                EXPECT_STREQ(exception.call("getMessage").toCString(),
+                             "count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE");
+                caught = true;
+            }
+            EXPECT_TRUE(caught);
+        }
+    }
 }
 
 TEST(std_array, array_is_list) {
@@ -247,6 +784,59 @@ TEST(std_array, array_fill) {
              "array_fill(): Argument #2 ($count) is too large");
     try_call([]() { fn::array_fill(std::numeric_limits<php::Int>::max(), 2, "x"); },
              "Cannot add element to the array as the next element is already occupied");
+}
+
+TEST(std_array, array_fill_matches_native_keys_and_append) {
+    Array values;
+    values.append(Variant());
+    values.append(true);
+    values.append(42);
+    values.append(1.5);
+    values.append(String("a\0b", 3));
+    values.append(Array{1, 2});
+    values.append(newObject("stdClass"));
+
+    for (Int start : {Int(-2), Int(0), Int(1), Int(20)}) {
+        for (Int count : {Int(0), Int(1), Int(3), Int(9), Int(100)}) {
+            for (size_t i = 0; i < values.length(); i++) {
+                SCOPED_TRACE(start);
+                SCOPED_TRACE(count);
+                SCOPED_TRACE(i);
+                auto value = values.get(static_cast<Int>(i));
+                Array args{start, count, value};
+                Array expected(call("array_fill", args));
+                auto actual = fn::array_fill(start, count, value);
+                EXPECT_TRUE(actual.equals(expected, true));
+                actual.append("tail");
+                expected.append("tail");
+                EXPECT_TRUE(actual.equals(expected, true));
+            }
+        }
+    }
+}
+
+TEST(std_array, array_fill_retains_values_and_preserves_copy_on_write) {
+    auto object = newObject("stdClass");
+    auto initial_refs = Z_REFCOUNT_P(object.unwrap_ptr());
+    {
+        auto filled = fn::array_fill(0, 9, object);
+        EXPECT_EQ(Z_REFCOUNT_P(object.unwrap_ptr()), initial_refs + 9);
+        filled.set(0, Variant());
+        EXPECT_EQ(Z_REFCOUNT_P(object.unwrap_ptr()), initial_refs + 8);
+        EXPECT_TRUE(filled.get(1).equals(object, true));
+    }
+    EXPECT_EQ(Z_REFCOUNT_P(object.unwrap_ptr()), initial_refs);
+
+    Array value{1, 2};
+    auto filled = fn::array_fill(0, 3, value);
+    value.set(0, 99);
+    EXPECT_TRUE(filled.get(0).equals(Array{1, 2}, true));
+    Array first(filled.get(0));
+    first.set(0, 42);
+    filled.set(0, first);
+    EXPECT_TRUE(filled.get(0).equals(Array{42, 2}, true));
+    EXPECT_TRUE(filled.get(1).equals(Array{1, 2}, true));
+    EXPECT_TRUE(value.equals(Array{99, 2}, true));
 }
 
 TEST(std_array, array_keys_filter) {

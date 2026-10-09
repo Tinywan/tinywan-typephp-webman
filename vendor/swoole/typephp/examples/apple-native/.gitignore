@@ -1,7 +1,9 @@
 /build/
 /build-*/
 /ios-build/
+/ios-simulator-build/
 /dist/
 /*.rsp
 /typephp_macos_hello
 /typephp_ios_hello
+/typephp_ios_simulator_hello

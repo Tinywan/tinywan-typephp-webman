@@ -972,6 +972,17 @@ trait NativeClassSupportTrait
         return false;
     }
 
+    /** Whether this class declares or overrides a Native virtual method slot. */
+    protected function nativeObjectHasVirtualMethods(ClassDef $class): bool
+    {
+        foreach ([...$class->methods, ...$class->abstractMethodDefs] as $method) {
+            if ($this->getNativeVirtualMethodSlots($class, $method) !== []) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     protected function getNativeObjectArgumentType(ArgInfo $argument): ?string
     {
         $class = $argument->declaredClass ?: $argument->class;
@@ -1193,6 +1204,7 @@ trait NativeClassSupportTrait
         $definition = $resolution->propertyDef;
 
         if ($definition->nullable
+            || $definition->nativeStorageType !== ''
             || $definition->getter !== null
             || $definition->setter !== null
             || Type::getReferenceType($definition->type) !== $referenceType
@@ -1860,6 +1872,9 @@ trait NativeClassSupportTrait
 
     protected function getNativeObjectPropertyType(PropertyDef $property): string
     {
+        if ($property->nativeStorageType !== '') {
+            return $property->nativeStorageType;
+        }
         if ($property->type === Type::OBJECT && $this->isNativeObjectClass($property->class)) {
             return $this->getNativeObjectPointerType($property->class);
         }
@@ -1871,6 +1886,14 @@ trait NativeClassSupportTrait
             Type::STREAM, Type::BOX, Type::BIGINT, Type::BIGFLOAT, Type::DECIMAL => Type::VAR,
             default => $property->type,
         };
+    }
+
+    protected function promoteNativeObjectPropertyValue(PropertyDef $property, string $expression): string
+    {
+        if ($property->nativeStorageType === '') {
+            return $expression;
+        }
+        return 'static_cast<' . $property->type . '>(' . $expression . ')';
     }
 
     protected function getNativeObjectInitializerName(string|ClassDef $class): string
@@ -2010,6 +2033,8 @@ trait NativeClassSupportTrait
 
         foreach ($classes as $class) {
             $name = $this->getNativeObjectCppName($class);
+            $usesVirtualClone = $this->nativeObjectUsesVirtualClone($class);
+            $usesVtable = $usesVirtualClone || $this->nativeObjectHasVirtualMethods($class);
             $hasNativeDestructor = $this->findNativeObjectMethod(
                 $class->getNamespacedName(false),
                 '__destruct',
@@ -2026,9 +2051,13 @@ trait NativeClassSupportTrait
                 $code .= $this->getNativeMethodParameterDeclarations($constructor->functionDef);
             }
             $code .= ');' . PHP_EOL;
-            $code .= '    virtual ~' . $name . '() '
+            // The concrete type descriptor invokes the exact destructor, so
+            // destruction alone must not add a vptr to an otherwise flat class.
+            $code .= '    ' . ($usesVtable ? 'virtual ' : '') . '~' . $name . '() '
                 . ($hasNativeDestructor ? 'noexcept(false)' : 'noexcept')
-                . ($class->extends !== '' && $this->isNativeObjectClass($class->extends) ? ' override' : '')
+                . ($usesVtable
+                    && $class->extends !== ''
+                    && $this->isNativeObjectClass($class->extends) ? ' override' : '')
                 . ';' . PHP_EOL;
             if ($class->hasMethod('__destruct')) {
                 $code .= '    void __typephp_finalize_destructor();' . PHP_EOL;
@@ -2087,7 +2116,7 @@ trait NativeClassSupportTrait
                     }
                 }
             }
-            if ($this->nativeObjectUsesVirtualClone($class)) {
+            if ($usesVirtualClone) {
                 $code .= '    virtual ' . $name . ' *' . self::NATIVE_VIRTUAL_CLONE_METHOD . '() const';
                 if ($class->extends !== '' && $this->isNativeObjectClass($class->extends)) {
                     $code .= ' override';

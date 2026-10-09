@@ -100,13 +100,6 @@ final class AstCache
     private function store(string $cacheFile, string $source, string $sourceHash, array $ast): void
     {
         try {
-            if (!is_dir($this->cacheDirectory)
-                && !mkdir($this->cacheDirectory, 0777, true)
-                && !is_dir($this->cacheDirectory)
-            ) {
-                return;
-            }
-
             $contents = serialize([
                 'schema' => self::SCHEMA_VERSION,
                 'phpVersion' => $this->phpVersion,
@@ -115,26 +108,7 @@ final class AstCache
                 'sourceHash' => $sourceHash,
                 'ast' => $ast,
             ]);
-            $temporary = tempnam($this->cacheDirectory, '.ast-');
-            if ($temporary === false) {
-                return;
-            }
-            try {
-                if (file_put_contents($temporary, $contents, LOCK_EX) === false) {
-                    return;
-                }
-                if (!@rename($temporary, $cacheFile)) {
-                    // Windows cannot atomically replace an existing file. A
-                    // concurrent reader may safely treat the short gap as a
-                    // cache miss and rebuild the disposable snapshot.
-                    @unlink($cacheFile);
-                    @rename($temporary, $cacheFile);
-                }
-            } finally {
-                if (is_file($temporary)) {
-                    @unlink($temporary);
-                }
-            }
+            AtomicFile::write($cacheFile, $contents, '.ast-');
         } catch (\Throwable) {
             // AST caching is an optimization. Serialization or filesystem
             // failures must never prevent an otherwise valid compilation.

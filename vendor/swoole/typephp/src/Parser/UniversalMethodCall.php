@@ -329,6 +329,30 @@ trait UniversalMethodCall
 
     protected const array MUTATING_HANDLERS = ['direct_method_mutate', 'php_fn_ref'];
 
+    /** @var array<string, array<string, true>> */
+    private const array UNIVERSAL_MUTATING_METHODS = [
+        Type::ARRAY => [
+            'sort' => true,
+            'pop' => true,
+            'push' => true,
+            'shift' => true,
+            'unshift' => true,
+            'splice' => true,
+            'walk' => true,
+            'sortDesc' => true,
+            'keySort' => true,
+            'valueSort' => true,
+            'set' => true,
+            'del' => true,
+            'clean' => true,
+        ],
+    ];
+
+    protected function isUniversalMethodMutating(string $type, string $method): bool
+    {
+        return isset(self::UNIVERSAL_MUTATING_METHODS[$type][$method]);
+    }
+
     protected function detectUniversalMethodReturnType(string $type, string $method): ?string
     {
         $builtin = self::UNIVERSAL_METHODS[$type][$method]['return_type'] ?? null;

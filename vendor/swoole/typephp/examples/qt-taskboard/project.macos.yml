@@ -1,0 +1,26 @@
+name: typephp_taskboard
+version: 0.1.0
+mode: bin
+cxx-std: c++17
+sources:
+  - main.php
+  - app
+  - php-src
+  - cpp-src
+
+# Homebrew qtbase (Apple Silicon). Adjust the prefix for Intel Macs or Qt SDKs.
+cxx-flags:
+  - -F/opt/homebrew/lib
+  - -I/opt/homebrew/lib/QtCore.framework/Headers
+  - -I/opt/homebrew/lib/QtGui.framework/Headers
+  - -I/opt/homebrew/lib/QtWidgets.framework/Headers
+  - -I/opt/homebrew/include
+  - -DQT_CORE_LIB
+  - -DQT_GUI_LIB
+  - -DQT_WIDGETS_LIB
+ld-flags:
+  - -F/opt/homebrew/lib
+  - -Wl,-framework,QtWidgets
+  - -Wl,-framework,QtGui
+  - -Wl,-framework,QtCore
+  - -Wl,-rpath,/opt/homebrew/lib

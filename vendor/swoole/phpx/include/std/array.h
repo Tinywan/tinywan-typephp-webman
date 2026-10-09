@@ -26,13 +26,46 @@ namespace php::fn {
 Bool in_array(const Variant &needle, const Array &haystack, bool strict = false);
 
 inline Bool array_key_exists(const Variant &key, const Array &array) {
-    if (key.isInt()) {
-        return zend_hash_index_exists(array.array(), key.toInt());
+    auto *value = key.unwrap_ptr();
+    switch (Z_TYPE_P(value)) {
+    case IS_LONG:
+        return zend_hash_index_exists(array.array(), Z_LVAL_P(value));
+    case IS_STRING:
+        return zend_symtable_exists(array.array(), Z_STR_P(value));
+    case IS_FALSE:
+        return zend_hash_index_exists(array.array(), 0);
+    case IS_TRUE:
+        return zend_hash_index_exists(array.array(), 1);
+    default:
+        break;
     }
-    if (key.isString()) {
-        return zend_symtable_exists(array.array(), Z_STR_P(key.unwrap_ptr()));
+
+    // Diagnostics may invoke user handlers that replace either caller argument.
+    // Retain value snapshots just as PHP's by-value function call does.
+    Variant stable_key(key);
+    Array stable_array(array.unwrap_ptr());
+    value = stable_key.unwrap_ptr();
+    switch (Z_TYPE_P(value)) {
+    case IS_NULL:
+#if PHP_VERSION_ID >= 80500
+        zend_error(E_DEPRECATED,
+                   "Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead");
+        throwErrorIfOccurred();
+#endif
+        return zend_hash_exists(stable_array.array(), ZSTR_EMPTY_ALLOC());
+    case IS_DOUBLE: {
+        zend_long index = zend_dval_to_lval_safe(Z_DVAL_P(value));
+        throwErrorIfOccurred();
+        return zend_hash_index_exists(stable_array.array(), index);
     }
-    return false;
+    case IS_RESOURCE:
+        zend_use_resource_as_offset(value);
+        throwErrorIfOccurred();
+        return zend_hash_index_exists(stable_array.array(), Z_RES_HANDLE_P(value));
+    default:
+        throwExceptionEx(zend_ce_type_error, 0, "array_key_exists(): Argument #1 ($key) must be a valid array offset type");
+        return false;
+    }
 }
 
 Variant array_search(const Variant &needle, const Array &haystack, bool strict = false);
@@ -63,8 +96,11 @@ Array array_merge(const Array &array, const Array &other);
 template <typename... Rest>
 inline Array array_merge(const Array &array, const Array &other, const Rest &...arrays) {
     static_assert((std::is_same_v<Array, std::decay_t<Rest>> && ...), "array_merge only accepts Array arguments");
-    Array result = array_merge(array, other);
-    ((result = array_merge(result, arrays)), ...);
+    // The two-array overload's empty-input shortcut must not apply to a larger call.
+    Array result = array_merge(array);
+    SEPARATE_ARRAY(result.ptr());
+    php_array_merge(result.array(), other.array());
+    (php_array_merge(result.array(), arrays.array()), ...);
     return result;
 }
 

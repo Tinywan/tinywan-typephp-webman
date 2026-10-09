@@ -1256,8 +1256,11 @@ trait PropertyAccessTrait
         if ($this->isNativeObjectClass($nativeExpressionClass)) {
             $objectName = $this->materializeNativeObjectReceiver($object, $nativeExpressionClass);
             $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_VAR);
-            return $this->getNativeObjectMemberReceiver($objectName)
+            $field = $this->getNativeObjectMemberReceiver($objectName)
                 . $this->getNativeObjectPropertyCppName($resolution->propertyDef, $resolution->classDef);
+            return $this->isPropertyFetchUpdate($expr)
+                ? $field
+                : $this->promoteNativeObjectPropertyValue($resolution->propertyDef, $field);
         }
 
         $update = $this->isPropertyFetchUpdate($expr);
@@ -1276,8 +1279,11 @@ trait PropertyAccessTrait
                 $this->fatalError($expr, "Native class `{$class}` has no property `\${$propertyName}`");
             }
             $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_VAR);
-            return $this->getNativeObjectMemberReceiver($objectName)
+            $field = $this->getNativeObjectMemberReceiver($objectName)
                 . $this->getNativeObjectPropertyCppName($resolution->propertyDef, $resolution->classDef);
+            return $this->isPropertyFetchUpdate($expr)
+                ? $field
+                : $this->promoteNativeObjectPropertyValue($resolution->propertyDef, $field);
         }
         $objectVar = $this->parenthesizeOpenOperand($objectName);
         $directMagic = !$update && !$this->isNativePropertyAccess($expr)

@@ -22,11 +22,78 @@ final class ProjectYamlLoader
 
     public function load(string $path): array
     {
-        $config = Yaml::parseFile($path);
+        return $this->loadFile($path, []);
+    }
+
+    /** @param list<string> $stack */
+    private function loadFile(string $path, array $stack): array
+    {
+        $canonicalPath = realpath($path);
+        if ($canonicalPath === false || !is_file($canonicalPath)) {
+            ($this->error)('Project YAML file does not exist: `' . $path . '`');
+        }
+        $cycleAt = array_search($canonicalPath, $stack, true);
+        if ($cycleAt !== false) {
+            $cycle = array_slice($stack, $cycleAt);
+            $cycle[] = $canonicalPath;
+            ($this->error)('Circular project YAML include: ' . implode(' -> ', $cycle));
+        }
+        $stack[] = $canonicalPath;
+
+        $config = Yaml::parseFile($canonicalPath);
         if (!is_array($config)) {
             ($this->error)('Project YAML root must be a map');
         }
-        return $config;
+
+        $include = $config['include'] ?? [];
+        unset($config['include']);
+        if (is_string($include)) {
+            $include = [$include];
+        } elseif (!is_array($include) || !array_is_list($include)) {
+            ($this->error)('`include` must be a YAML file path or a list of YAML file paths');
+        }
+
+        $merged = [];
+        foreach ($include as $includedPath) {
+            if (!is_string($includedPath) || trim($includedPath) === '') {
+                ($this->error)('Each `include` entry must be a non-empty string');
+            }
+            $includedPath = trim($includedPath);
+            if (!$this->isAbsolutePath($includedPath)) {
+                $includedPath = dirname($canonicalPath) . DIRECTORY_SEPARATOR . $includedPath;
+            }
+            $merged = $this->mergeConfig(
+                $merged,
+                $this->loadFile($includedPath, $stack),
+            );
+        }
+
+        return $this->mergeConfig($merged, $config);
+    }
+
+    private function isAbsolutePath(string $path): bool
+    {
+        return $path !== '' && (
+            $path[0] === '/'
+            || $path[0] === '\\'
+            || preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) === 1
+        );
+    }
+
+    private function mergeConfig(array $base, array $override): array
+    {
+        foreach ($override as $key => $value) {
+            if (isset($base[$key])
+                && is_array($base[$key])
+                && !array_is_list($base[$key])
+                && is_array($value)
+                && !array_is_list($value)) {
+                $base[$key] = $this->mergeConfig($base[$key], $value);
+            } else {
+                $base[$key] = $value;
+            }
+        }
+        return $base;
     }
 
     /** @return array{0: string, 1: string|null} */

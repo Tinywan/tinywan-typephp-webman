@@ -3,9 +3,9 @@
 /**
  * TypePHP cross-platform release packager.
  *
- * Windows produces a self-contained PHP/PHPX SDK package. Linux contains the
- * tested ELF compiler and production Composer vendor tree, but no host native
- * libraries. All platforms share version, staging, verification, and cleanup.
+ * Windows produces a self-contained PHP/PHPX SDK package. Linux and macOS
+ * contain the tested compiler plus release documentation. Composer runtime
+ * files are embedded in the compiler and must not be duplicated in packages.
  */
 
 if (!chdir(__DIR__)) {
@@ -15,8 +15,8 @@ if (!chdir(__DIR__)) {
 if (in_array('--help', $argv ?? [], true) || in_array('-h', $argv ?? [], true)) {
     echo "Usage: php package.php\n\n";
     echo "Windows: requires PHP_HOME and PHPX_HOME; creates a self-contained SDK package.\n";
-    echo "Linux: uses strip; packages the tested ELF and production Composer vendor tree.\n";
-    echo "macOS: uses strip; packages the tested Mach-O binary and production Composer vendor tree.\n";
+    echo "Linux: uses strip; packages the tested ELF and release documentation.\n";
+    echo "macOS: uses strip; packages the tested Mach-O binary and release documentation.\n";
     echo "Supported architectures: 64-bit CPUs, including x64 and ARM64.\n";
     exit(0);
 }
@@ -73,10 +73,13 @@ if (PHP_INT_SIZE !== 8) {
 $arch = normalizeArchitecture((string)$processorArchitecture);
 
 $osType = 'windows';
-$outputFile = "tpc_v{$versionId}_{$osType}_{$arch}.zip";
+$phpAbi = packagePhpAbi();
+$topLevelDir = "tpc_v{$versionId}_{$osType}_{$arch}_{$phpAbi}";
+$outputFile = $topLevelDir . '.zip';
 
 echo "操作系统: {$osType}\n";
 echo "硬件架构: {$arch}\n";
+echo "PHP ABI: {$phpAbi}\n";
 echo "输出文件: {$outputFile}\n\n";
 
 // ==================== 3. 检查必要文件 ====================
@@ -85,8 +88,8 @@ echo "[3/7] 检查必要文件...\n";
 $requiredFiles = [
     $compilerExe,
     'README.md',
+    'README-CN.md',
     'LICENSE',
-    'composer.json',
     'examples/hello.php',
 ];
 
@@ -96,6 +99,8 @@ foreach ($requiredFiles as $file) {
         exit(1);
     }
 }
+
+verifyEmbeddedComposerRuntime($compilerExe);
 
 $phpEmbedLibCandidates = [
     'SDK/lib/php8embed.lib' => "{$phpDir}/SDK/lib/php8embed.lib",
@@ -179,7 +184,6 @@ foreach ($requiredPhpxPaths as $description => $path) {
 
 echo "所有文件检查通过\n\n";
 
-$topLevelDir = "tpc_v{$versionId}_{$osType}_{$arch}";
 if (is_dir($topLevelDir)) {
     echo "清理旧的临时目录...\n";
     removeDirectory($topLevelDir);
@@ -214,7 +218,7 @@ TypePHP Windows setup
 =====================
 
 TypePHP for Windows uses the prebuilt PHPX DLL and import library included in
-this package. The Composer path vendor\swoole\phpx is not used on Windows.
+this package. Composer runtime dependencies are embedded in tpc.exe.
 
 Open a command prompt in this directory and run:
 
@@ -296,8 +300,8 @@ mustCreateDirectory("{$topLevelDir}/examples");
 // 复制项目文件
 $projectFiles = [
     'README.md' => '.',
+    'README-CN.md' => '.',
     'LICENSE' => '.',
-    'composer.json' => '.',
     'examples/hello.php' => 'examples',
 ];
 
@@ -331,29 +335,6 @@ if (is_dir($tetrisWin32Dir)) {
 }
 
 echo "项目文件复制完成\n\n";
-
-// ==================== 6.3. 复制 vendor 目录 ====================
-echo "[6.3/7] 复制 vendor 目录...\n";
-
-$vendorDir = 'vendor';
-if (!is_dir($vendorDir)) {
-    echo "错误: vendor 目录不存在，请先运行 composer install\n";
-    exit(1);
-} else {
-    echo "复制 vendor 目录...\n";
-    // 排除 vendor/swoole/phpx 目录（Windows 下不需要 composer 安装的 phpx）
-    copyDirectory($vendorDir, "{$topLevelDir}/vendor", ['swoole/phpx']);
-    
-    // 统计 vendor 目录的文件数量
-    $vendorIterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator("{$topLevelDir}/vendor"),
-        RecursiveIteratorIterator::LEAVES_ONLY
-    );
-    $vendorFileCount = iterator_count($vendorIterator);
-    echo "已复制 {$vendorFileCount} 个文件\n";
-}
-
-echo "\n";
 
 // ==================== 6.5. 复制 phpx 文件 ====================
 echo "[6.5/7] 复制 phpx 相关文件...\n";
@@ -441,6 +422,9 @@ if (!$zip->close()) {
 
 $requiredArchiveEntries = [
     "{$topLevelDir}/{$compilerExe}",
+    "{$topLevelDir}/README.md",
+    "{$topLevelDir}/README-CN.md",
+    "{$topLevelDir}/LICENSE",
     "{$topLevelDir}/php.exe",
     "{$topLevelDir}/php.ini",
     "{$topLevelDir}/ext/php_zip.dll",
@@ -465,6 +449,13 @@ foreach ($requiredArchiveEntries as $entry) {
     if ($verificationZip->locateName($entry) === false) {
         $verificationZip->close();
         throw new RuntimeException("压缩包缺少必需文件: {$entry}");
+    }
+}
+for ($index = 0; $index < $verificationZip->numFiles; $index++) {
+    $entry = $verificationZip->getNameIndex($index);
+    if (is_string($entry) && str_starts_with($entry, "{$topLevelDir}/vendor/")) {
+        $verificationZip->close();
+        throw new RuntimeException("压缩包不应包含 vendor 目录: {$entry}");
     }
 }
 $verificationZip->close();
@@ -501,9 +492,8 @@ echo "  - phpx/include/ (PHPX 头文件)\n";
 echo "  - phpx/lib/ (PHPX 库文件)\n";
 echo "  - phpx/src/misc/ (PHPX Embed/CLI runtime adapters)\n";
 echo "  - PHP 运行时环境 (完整目录结构)\n";
-echo "  - vendor/ (Composer 依赖包，无需再次安装)\n";
-echo "  - composer.json (Composer 配置文件)\n";
-echo "  - README.md/LICENSE (文档)\n";
+echo "  - Composer 运行时依赖（已内嵌到 {$compilerExe}）\n";
+echo "  - README.md/README-CN.md/LICENSE (文档)\n";
 echo "  - examples/hello.php (PHP 示例代码)\n";
 echo "  - examples/win32-hello/ (Windows GUI 编程实例)\n";
 echo "  - examples/tetris-win32/ (俄罗斯方块游戏实例)\n\n";
@@ -584,20 +574,19 @@ function packageUnixLike(): void
     }
 
     $arch = normalizeArchitecture(php_uname('m'));
+    $phpAbi = packagePhpAbi();
 
     $binary = 'tpc';
-    $requiredFiles = [
-        $binary,
-        'vendor/autoload.php',
-        'vendor/composer/installed.php',
-    ];
+    $releaseFiles = ['README.md', 'README-CN.md', 'LICENSE'];
+    $requiredFiles = [$binary, ...$releaseFiles];
     foreach ($requiredFiles as $file) {
         if (!is_file($file)) {
             throw new RuntimeException("Required package file not found: {$file}");
         }
     }
+    verifyEmbeddedComposerRuntime($binary);
     $versionId = resolvePackageVersion();
-    $topLevelDir = "tpc_v{$versionId}_{$osType}_{$arch}";
+    $topLevelDir = "tpc_v{$versionId}_{$osType}_{$arch}_{$phpAbi}";
     $outputFile = $topLevelDir . '.tar.gz';
 
     echo "========================================\n";
@@ -605,6 +594,7 @@ function packageUnixLike(): void
     echo "========================================\n";
     echo "Version: {$versionId}\n";
     echo "Architecture: {$arch}\n";
+    echo "PHP ABI: {$phpAbi}\n";
     echo "Output: {$outputFile}\n\n";
 
     if (is_dir($topLevelDir)) {
@@ -637,6 +627,9 @@ function packageUnixLike(): void
     if (!chmod($stagedBinary, 0755)) {
         throw new RuntimeException("Unable to mark executable: {$stagedBinary}");
     }
+    foreach ($releaseFiles as $releaseFile) {
+        mustCopy($releaseFile, "{$topLevelDir}/{$releaseFile}");
+    }
 
     exec('command -v strip 2>/dev/null', $stripPath, $stripStatus);
     if ($stripStatus !== 0) {
@@ -652,36 +645,9 @@ function packageUnixLike(): void
         throw new RuntimeException("strip failed:\n" . implode("\n", $stripOutput));
     }
 
-    // Linux and macOS releases intentionally use the target system's libphp,
-    // libphpx, and other native dependencies. Composer sources and headers are
-    // portable, but test-built host libraries must not enter the archive.
-    mustCreateDirectory("{$topLevelDir}/vendor");
-    copyDirectory(
-        'vendor',
-        "{$topLevelDir}/vendor",
-        [],
-        null,
-        ['a', 'dll', 'dylib', 'exe', 'exp', 'lib', 'o', 'obj', 'pdb', 'so'],
-    );
-
-    $requiredEntries = [
-        "{$topLevelDir}/{$binary}",
-        "{$topLevelDir}/vendor/autoload.php",
-        "{$topLevelDir}/vendor/composer/installed.php",
-    ];
-    $files = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator(
-            "{$topLevelDir}/vendor",
-            FilesystemIterator::SKIP_DOTS,
-        ),
-        RecursiveIteratorIterator::LEAVES_ONLY,
-    );
-    foreach ($files as $file) {
-        if ($file->isFile() && isNativeLibraryPath($file->getPathname())) {
-            throw new RuntimeException(
-                "{$osType} package unexpectedly contains a native library: {$file->getPathname()}",
-            );
-        }
+    $requiredEntries = ["{$topLevelDir}/{$binary}"];
+    foreach ($releaseFiles as $releaseFile) {
+        $requiredEntries[] = "{$topLevelDir}/{$releaseFile}";
     }
 
     exec('command -v tar 2>/dev/null', $tarPath, $tarStatus);
@@ -705,6 +671,11 @@ function packageUnixLike(): void
             throw new RuntimeException("Archive is missing required entry: {$entry}");
         }
     }
+    foreach ($archiveEntries as $entry) {
+        if (str_starts_with($entry, "{$topLevelDir}/vendor/")) {
+            throw new RuntimeException("Archive must not contain a vendor directory: {$entry}");
+        }
+    }
 
     removeDirectory($topLevelDir);
     $cleanupStage = false;
@@ -719,12 +690,47 @@ function formatMegabytes(int $bytes): string
     return number_format($bytes / 1024 / 1024, 3, '.', '');
 }
 
-function isNativeLibraryPath(string $path): bool
+function packagePhpAbi(): string
 {
-    return preg_match(
-        '/\.(?:a|dll|dylib(?:\.\d+)*|exe|exp|lib|o|obj|pdb|so(?:\.\d+)*)$/i',
-        $path,
-    ) === 1;
+    return 'php' . PHP_VERSION . '-' . (PHP_ZTS ? 'zts' : 'nts');
+}
+
+/**
+ * Prove that the release compiler loads Composer from its embedded file table.
+ * Keeping the source vendor directory visible would let a non-embedded binary
+ * pass the ordinary --version smoke test and produce a broken release package.
+ */
+function verifyEmbeddedComposerRuntime(string $compiler): void
+{
+    $vendorDirectory = 'vendor';
+    if (!is_dir($vendorDirectory)) {
+        throw new RuntimeException('The build vendor directory is required to verify the embedded compiler');
+    }
+
+    $hiddenVendorDirectory = '.vendor-package-check-' . getmypid();
+    if (file_exists($hiddenVendorDirectory)) {
+        throw new RuntimeException("Temporary vendor path already exists: {$hiddenVendorDirectory}");
+    }
+    if (!rename($vendorDirectory, $hiddenVendorDirectory)) {
+        throw new RuntimeException('Unable to hide vendor while verifying the embedded compiler');
+    }
+
+    $status = 1;
+    $output = [];
+    try {
+        exec(escapeshellarg(realpath($compiler) ?: $compiler) . ' --version 2>&1', $output, $status);
+    } finally {
+        if (!rename($hiddenVendorDirectory, $vendorDirectory)) {
+            throw new RuntimeException('Unable to restore vendor after verifying the embedded compiler');
+        }
+    }
+
+    if ($status !== 0) {
+        throw new RuntimeException(
+            "Release compiler cannot start without a vendor directory:\n" . implode("\n", $output),
+        );
+    }
+    echo "Embedded Composer runtime check passed without vendor/\n";
 }
 
 /**

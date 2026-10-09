@@ -46,6 +46,7 @@ codesign \
     --sign "$identity" \
     --entitlements "$entitlements" \
     --timestamp=none \
+    --generate-entitlement-der \
     "$bundle"
 codesign --verify --deep --strict --verbose=2 "$bundle"
 

@@ -1,0 +1,26 @@
+name: typephp_ios_simulator_hello
+version: 0.1.0
+mode: bin
+output: typephp_ios_simulator_hello
+php-version: "8.4"
+cxx-std: c++17
+cpp-compiler: xcrun --sdk iphonesimulator clang++
+target-platform: arm64-apple-ios15.0-simulator
+build-dir: ios-simulator-build
+
+sources:
+  - php-src/application.php
+  - php-src/ios-main.php
+  - ios-src
+
+cxx-flags:
+  - -fobjc-arc
+  - -mios-simulator-version-min=15.0
+
+ld-flags:
+  - -mios-simulator-version-min=15.0
+  - -Wl,-dead_strip
+  - -framework UIKit
+  - -framework Foundation
+  - -framework CoreGraphics
+  - -lresolv

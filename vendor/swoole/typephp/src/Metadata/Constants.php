@@ -131,7 +131,7 @@ class Constants
     public const array COMPILER_OPTIONS = [
         'nano' => [
             'longPrefix' => 'nano',
-            'description' => 'Enable VM-free Nano policy (php-nano runtime outside Windows)',
+            'description' => 'Enable the VM-free, source-composed php-nano runtime',
             'required' => false,
             'noValue' => true,
         ],
@@ -177,6 +177,11 @@ class Constants
             'description' => 'PHP language version to accept (8.4 or 8.5; default: 8.5)',
             'required' => false,
         ],
+        'proxy' => [
+            'longPrefix' => 'proxy',
+            'description' => 'Proxy URL used for network transfers (HTTP(S) or SOCKS)',
+            'required' => false,
+        ],
         'force' => [
             'prefix' => 'f',
             'longPrefix' => 'force',
@@ -187,9 +192,25 @@ class Constants
         'mode' => [
             'longPrefix' => 'mode',
             'prefix' => 'm',
-            'description' => 'Build mode, -m bin(binary), -m lib(shared library), or -m ext(PHP extension), default: bin',
+            'description' => 'Build mode: bin, lib, or ext; default: bin',
             'required' => false,
             'defaultValue' => CompilerBase::BUILD_MODE_BIN,
+        ],
+        'php-builder' => [
+            'longPrefix' => 'php-builder',
+            'description' => 'Build PHP from source, e.g. "extensions: [curl]; zts: on"',
+            'required' => false,
+            'defaultValue' => '{}',
+        ],
+        'sapi' => [
+            'longPrefix' => 'sapi',
+            'description' => 'PHP SAPI target: embed, cli, fpm, or a comma-separated list',
+            'required' => false,
+        ],
+        'entry' => [
+            'longPrefix' => 'entry',
+            'description' => 'PHP entry file executed by the CLI SAPI',
+            'required' => false,
         ],
         'run' => [
             'prefix' => 'r',
@@ -329,7 +350,7 @@ class Constants
      * MSVC compiler warning suppression list.
      * These warnings come from Windows SDK and PHP SDK headers and are compiler noise that does not affect functionality.
      *
-     * @var array<string, string> key is the warning number, value is the description
+     * @var array<int, string> key is the warning number, value is the description
      */
     public const array MSVC_SUPPRESSED_WARNINGS = [
         '4244' => '类型转换可能丢失数据 (int -> smaller type)',

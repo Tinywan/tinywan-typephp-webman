@@ -35,6 +35,34 @@ final class EnumCaseAstConstantLifecycleTest extends \BaseTest
         self::assertLessThan($firstRegisterPos, $guardPos, 'the lifecycle guard must precede every class registration');
     }
 
+    public function testEmbedBinaryLeavesTemporaryModuleOrderingToRuntime(): void
+    {
+        $extension = $this->generateExtension(
+            'enum-case-class-constant.php',
+            'ast_lifecycle_embed',
+            CompilerBase::BUILD_MODE_BIN,
+        );
+        $minit = $this->sliceFunction($extension, 'PHP_MINIT_FUNCTION', 'PHP_MSHUTDOWN_FUNCTION');
+
+        self::assertStringNotContainsString(
+            'registers enum-case class constants that must be released by MSHUTDOWN',
+            $minit,
+        );
+        self::assertStringContainsString('register_class_', $minit);
+        self::assertMatchesRegularExpression(
+            '/EG\(current_module\)->type = MODULE_PERSISTENT;\s*'
+                . 'zend_interned_strings_switch_storage\(false\);.*register_class_.*'
+                . 'zend_interned_strings_switch_storage\(true\);\s*'
+                . 'EG\(current_module\)->type = MODULE_TEMPORARY;/s',
+            $minit,
+        );
+        self::assertMatchesRegularExpression(
+            '/TYPEPHP_EMBED_PRE_SHUTDOWN_FUNCTION\(ast_lifecycle_embed\)\s*\{\s*'
+                . 'typephp_release_ast_constants_enum_case_class_constant\(\);\s*\}/',
+            $extension,
+        );
+    }
+
     public function testAstConstantRegistrationIsOrderedAfterEveryFallibleMinitStep(): void
     {
         $minit = $this->generateMinitBody('enum-case-class-constant.php', 'ast_lifecycle_order');
@@ -73,26 +101,37 @@ final class EnumCaseAstConstantLifecycleTest extends \BaseTest
     {
         $extension = $this->generateExtension('class-constant-codegen.php', 'ast_lifecycle_none');
 
-        self::assertStringNotContainsString('MODULE_TEMPORARY', $extension);
+        self::assertStringNotContainsString(
+            'registers enum-case class constants that must be released by MSHUTDOWN',
+            $extension,
+        );
         self::assertStringNotContainsString('typephp_release_ast_constants_', $extension);
     }
 
-    private function generateMinitBody(string $fixture, string $target): string
+    private function generateMinitBody(
+        string $fixture,
+        string $target,
+        string $mode = CompilerBase::BUILD_MODE_EXT,
+    ): string
     {
         return $this->sliceFunction(
-            $this->generateExtension($fixture, $target),
+            $this->generateExtension($fixture, $target, $mode),
             'PHP_MINIT_FUNCTION',
             'PHP_MSHUTDOWN_FUNCTION',
         );
     }
 
-    private function generateExtension(string $fixture, string $target): string
+    private function generateExtension(
+        string $fixture,
+        string $target,
+        string $mode = CompilerBase::BUILD_MODE_EXT,
+    ): string
     {
         global $translator;
 
         $compiler = CompilerTest::create(TYPEPHP_ROOT_PATH);
         $translator = $compiler;
-        $compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $compiler->setBuildMode($mode);
         $compiler->setTargetName($target);
         $source = TYPEPHP_ROOT_PATH . '/phpunit/code/' . $fixture;
         $compiler->addFiles([$source]);

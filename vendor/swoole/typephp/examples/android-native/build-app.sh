@@ -8,6 +8,16 @@ android_sdk=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/swoole/soft/android-sdk}}
 android_ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-/home/swoole/soft/android-ndk-r27d}}
 phpx_root=${PHPX_HOME:-$(cd "${compiler_root}/../phpx" && pwd)}
 phpx_android_sdk=${PHPX_ANDROID_SDK_DIR:-${phpx_root}/android/arm64-v8a}
+nano_arg=
+
+case "${1:-}" in
+    "") ;;
+    --nano) nano_arg=--nano ;;
+    *)
+        echo "Usage: $0 [--nano]" >&2
+        exit 2
+        ;;
+esac
 
 if [[ ! -d "${android_sdk}/build-tools" || ! -f "${android_sdk}/platforms/android-36/android.jar" ]]; then
     echo "Android SDK Platform 36 and Build Tools are required: ${android_sdk}" >&2
@@ -17,7 +27,7 @@ if [[ ! -f "${android_ndk}/build/cmake/android.toolchain.cmake" ]]; then
     echo "Android NDK is required: ${android_ndk}" >&2
     exit 1
 fi
-if [[ ! -f "${phpx_android_sdk}/.typephp-android-sdk-abi" ]]; then
+if [[ -z "${nano_arg}" && ! -f "${phpx_android_sdk}/.typephp-android-sdk-abi" ]]; then
     echo "TypePHP Android SDK is required: ${phpx_android_sdk}" >&2
     exit 1
 fi
@@ -39,13 +49,19 @@ mkdir -p \
     "${resources_dir}/drawable-nodpi" \
     "${compiled_resources_dir}" \
     "${dist_dir}"
-cp -p "${compiler_root}/examples/objective-c-macos/ios-assets/AppIcon-180.png" \
+cp -p "${compiler_root}/examples/apple-native/ios-assets/AppIcon-180.png" \
     "${resources_dir}/drawable-nodpi/typephp_icon.png"
 
-ANDROID_NDK_HOME="${android_ndk}" \
-PHPX_HOME="${phpx_root}" \
-PHPX_ANDROID_SDK_DIR="${phpx_android_sdk}" \
-php "${compiler_root}/bin/tpc.php" "${project_dir}/android.yml" --no-progress
+if [[ -n "${nano_arg}" ]]; then
+    ANDROID_NDK_HOME="${android_ndk}" \
+    PHPX_HOME="${phpx_root}" \
+    php "${compiler_root}/bin/tpc.php" "${project_dir}/android.yml" "${nano_arg}" --no-progress
+else
+    ANDROID_NDK_HOME="${android_ndk}" \
+    PHPX_HOME="${phpx_root}" \
+    PHPX_ANDROID_SDK_DIR="${phpx_android_sdk}" \
+    php "${compiler_root}/bin/tpc.php" "${project_dir}/android.yml" --no-progress
+fi
 
 javac -source 8 -target 8 -encoding UTF-8 \
     -bootclasspath "${android_jar}" \

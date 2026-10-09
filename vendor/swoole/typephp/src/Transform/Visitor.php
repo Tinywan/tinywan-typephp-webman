@@ -132,6 +132,13 @@ class Visitor extends NodeVisitorAbstract
 
         $methods = [];
         $classReadonly = $node instanceof Stmt\Class_ && $node->isReadonly();
+        if ($node instanceof Stmt\Class_ && NativeClassAttributeLowering::isNative($node)) {
+            $this->guard(
+                $node,
+                static fn () => NativePropertyTypeLowering::lowerClass($node),
+                'Native',
+            );
+        }
         foreach ($node->stmts as $stmt) {
             if ($stmt instanceof Stmt\Property) {
                 foreach (PropertyHookLowering::lowerProperty($stmt) as $method) {

@@ -38,7 +38,7 @@ final class ClassFieldSelection
 
         $fields = [];
         foreach ($argument->value->items as $item) {
-            if ($item === null || $item->unpack || $item->key !== null
+            if ($item->unpack || $item->key !== null
                 || !$item->value instanceof Node\Scalar\String_) {
                 throw new SyntaxError($name . ' $fields must be a list of property-name strings');
             }

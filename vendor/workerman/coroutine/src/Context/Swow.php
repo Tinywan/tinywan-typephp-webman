@@ -74,3 +74,5 @@ class Swow implements ContextInterface
     }
 
 }
+
+Swow::initContext();

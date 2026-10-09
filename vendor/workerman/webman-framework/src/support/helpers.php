@@ -1,17 +1,55 @@
 <?php
 
-use Webman\App;
-use Webman\Config;
-use Webman\Route;
+/**
+ * This file is part of webman.
+ *
+ * Licensed under The MIT License
+ * For full copyright and license information, please see the MIT-LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @author    walkor<walkor@workerman.net>
+ * @copyright walkor<walkor@workerman.net>
+ * @link      http://www.workerman.net/
+ * @license   http://www.opensource.org/licenses/mit-license.php MIT License
+ */
+
 use support\Container;
 use support\Request;
 use support\Response;
-use support\view\Raw;
+use support\Translation;
 use support\view\Blade;
+use support\view\Raw;
 use support\view\ThinkPHP;
 use support\view\Twig;
+use Twig\Error\LoaderError;
+use Twig\Error\RuntimeError;
+use Twig\Error\SyntaxError;
+use Webman\App;
+use Webman\Config;
+use Webman\Route;
+use Workerman\Protocols\Http\Session;
 use Workerman\Worker;
 
+/**
+ * Get the base path of the application
+ */
+if (!defined('BASE_PATH')) {
+    if (!$basePath = Phar::running()) {
+        $basePath = getcwd();
+        while ($basePath !== dirname($basePath)) {
+            if (is_dir("$basePath/vendor") && is_file("$basePath/start.php")) {
+                break;
+            }
+            $basePath = dirname($basePath);
+        }
+        if ($basePath === dirname($basePath)) {
+            $basePath = __DIR__ . '/../../../../../';
+        }
+    }
+    define('BASE_PATH', realpath($basePath) ?: $basePath);
+}
+
+if (!function_exists('run_path')) {
     /**
      * return the program execute directory
      * @param string $path
@@ -25,8 +63,9 @@ use Workerman\Worker;
         }
         return path_combine($runPath, $path);
     }
+}
 
-
+if (!function_exists('base_path')) {
     /**
      * if the param $path equal false,will return this program current execute directory
      * @param string|false $path
@@ -39,8 +78,9 @@ use Workerman\Worker;
         }
         return path_combine(BASE_PATH, $path);
     }
+}
 
-
+if (!function_exists('app_path')) {
     /**
      * App path
      * @param string $path
@@ -50,8 +90,9 @@ use Workerman\Worker;
     {
         return path_combine(BASE_PATH . DIRECTORY_SEPARATOR . 'app', $path);
     }
+}
 
-
+if (!function_exists('public_path')) {
     /**
      * Public path
      * @param string $path
@@ -75,8 +116,9 @@ use Workerman\Worker;
         }
         return $path === '' ? $publicPath : path_combine($publicPath, $path);
     }
+}
 
-
+if (!function_exists('config_path')) {
     /**
      * Config path
      * @param string $path
@@ -86,8 +128,9 @@ use Workerman\Worker;
     {
         return path_combine(BASE_PATH . DIRECTORY_SEPARATOR . 'config', $path);
     }
+}
 
-
+if (!function_exists('runtime_path')) {
     /**
      * Runtime path
      * @param string $path
@@ -101,8 +144,9 @@ use Workerman\Worker;
         }
         return path_combine($runtimePath, $path);
     }
+}
 
-
+if (!function_exists('path_combine')) {
     /**
      * Generate paths based on given information
      * @param string $front
@@ -113,8 +157,9 @@ use Workerman\Worker;
     {
         return $front . ($back ? (DIRECTORY_SEPARATOR . ltrim($back, DIRECTORY_SEPARATOR)) : $back);
     }
+}
 
-
+if (!function_exists('response')) {
     /**
      * Response
      * @param int $status
@@ -126,8 +171,9 @@ use Workerman\Worker;
     {
         return new Response($status, $headers, $body);
     }
+}
 
-
+if (!function_exists('json')) {
     /**
      * Json response
      * @param $data
@@ -138,8 +184,9 @@ use Workerman\Worker;
     {
         return new Response(200, ['Content-Type' => 'application/json'], json_encode($data, $options));
     }
+}
 
-
+if (!function_exists('xml')) {
     /**
      * Xml response
      * @param $xml
@@ -152,8 +199,9 @@ use Workerman\Worker;
         }
         return new Response(200, ['Content-Type' => 'text/xml'], $xml);
     }
+}
 
-
+if (!function_exists('jsonp')) {
     /**
      * Jsonp response
      * @param $data
@@ -167,8 +215,9 @@ use Workerman\Worker;
         }
         return new Response(200, [], "$callbackName($data)");
     }
+}
 
-
+if (!function_exists('redirect')) {
     /**
      * Redirect response
      * @param string $location
@@ -184,8 +233,9 @@ use Workerman\Worker;
         }
         return $response;
     }
+}
 
-
+if (!function_exists('view')) {
     /**
      * View response
      * @param mixed $template
@@ -200,8 +250,9 @@ use Workerman\Worker;
         $handler = \config($plugin ? "plugin.$plugin.view.handler" : 'view.handler');
         return new Response(200, [], $handler::render($template, $vars, $app, $plugin));
     }
+}
 
-
+if (!function_exists('raw_view')) {
     /**
      * Raw view response
      * @param mixed $template
@@ -215,8 +266,9 @@ use Workerman\Worker;
     {
         return new Response(200, [], Raw::render(...template_inputs($template, $vars, $app, $plugin)));
     }
+}
 
-
+if (!function_exists('blade_view')) {
     /**
      * Blade view response
      * @param mixed $template
@@ -229,8 +281,9 @@ use Workerman\Worker;
     {
         return new Response(200, [], Blade::render(...template_inputs($template, $vars, $app, $plugin)));
     }
+}
 
-
+if (!function_exists('think_view')) {
     /**
      * Think view response
      * @param mixed $template
@@ -243,8 +296,9 @@ use Workerman\Worker;
     {
         return new Response(200, [], ThinkPHP::render(...template_inputs($template, $vars, $app, $plugin)));
     }
+}
 
-
+if (!function_exists('twig_view')) {
     /**
      * Twig view response
      * @param mixed $template
@@ -257,18 +311,20 @@ use Workerman\Worker;
     {
         return new Response(200, [], Twig::render(...template_inputs($template, $vars, $app, $plugin)));
     }
+}
 
-
+if (!function_exists('request')) {
     /**
      * Get request
      * @return \Webman\Http\Request|Request|null
      */
     function request()
     {
-        return \Webman\App::request();
+        return App::request();
     }
+}
 
-
+if (!function_exists('config')) {
     /**
      * Get config
      * @param string|null $key
@@ -277,10 +333,11 @@ use Workerman\Worker;
      */
     function config(?string $key = null, mixed $default = null)
     {
-        return \Webman\Config::get($key, $default);
+        return Config::get($key, $default);
     }
+}
 
-
+if (!function_exists('route')) {
     /**
      * Create url
      * @param string $name
@@ -304,8 +361,9 @@ use Workerman\Worker;
 
         return $route->url($parameters);
     }
+}
 
-
+if (!function_exists('session')) {
     /**
      * Session
      * @param array|string|null $key
@@ -340,8 +398,9 @@ use Workerman\Worker;
         }
         return $session->get($key, $default);
     }
+}
 
-
+if (!function_exists('trans')) {
     /**
      * Translation
      * @param string $id
@@ -355,8 +414,9 @@ use Workerman\Worker;
         $res = Translation::trans($id, $parameters, $domain, $locale);
         return $res === '' ? $id : $res;
     }
+}
 
-
+if (!function_exists('locale')) {
     /**
      * Locale
      * @param string|null $locale
@@ -370,8 +430,9 @@ use Workerman\Worker;
         Translation::setLocale($locale);
         return $locale;
     }
+}
 
-
+if (!function_exists('not_found')) {
     /**
      * 404 not found
      * @return Response
@@ -380,8 +441,9 @@ use Workerman\Worker;
     {
         return new Response(404, [], file_get_contents(public_path() . '/404.html'));
     }
+}
 
-
+if (!function_exists('copy_dir')) {
     /**
      * Copy dir
      * @param string $source
@@ -405,8 +467,9 @@ use Workerman\Worker;
             copy($source, $dest);
         }
     }
+}
 
-
+if (!function_exists('remove_dir')) {
     /**
      * Remove dir
      * @param string $dir
@@ -423,8 +486,9 @@ use Workerman\Worker;
         }
         return rmdir($dir);
     }
+}
 
-
+if (!function_exists('worker_bind')) {
     /**
      * Bind worker
      * @param $worker
@@ -452,8 +516,9 @@ use Workerman\Worker;
             call_user_func([$class, 'onWorkerStart'], $worker);
         }
     }
+}
 
-
+if (!function_exists('worker_start')) {
     /**
      * Start worker
      * @param $processName
@@ -466,7 +531,7 @@ use Workerman\Worker;
             return;
         }
         // feat：custom worker class [default: Workerman\Worker]
-        $class = is_a($class = $config['workerClass'] ?? '', \Workerman\Worker::class, true) ? $class : \Workerman\Worker::class;
+        $class = is_a($class = $config['workerClass'] ?? '', Worker::class, true) ? $class : Worker::class;
         $worker = new $class($config['listen'] ?? null, $config['context'] ?? []);
         $properties = [
             'count',
@@ -486,23 +551,21 @@ use Workerman\Worker;
         }
 
         $worker->onWorkerStart = function ($worker) use ($config) {
-            $bootstrap = base_path('/support/bootstrap.php');
-            if (is_file($bootstrap)) {
-                require_once $bootstrap;
-            }
+            require_once base_path('/support/bootstrap.php');
             if (isset($config['handler'])) {
                 if (!class_exists($config['handler'])) {
                     echo "process error: class {$config['handler']} not exists\r\n";
                     return;
                 }
 
-                $instance = \support\Container::make($config['handler'], $config['constructor'] ?? []);
+                $instance = Container::make($config['handler'], $config['constructor'] ?? []);
                 worker_bind($worker, $instance);
             }
         };
     }
+}
 
-
+if (!function_exists('get_realpath')) {
     /**
      * Get realpath
      * @param string $filePath
@@ -516,8 +579,9 @@ use Workerman\Worker;
             return realpath($filePath);
         }
     }
+}
 
-
+if (!function_exists('is_phar')) {
     /**
      * Is phar
      * @return bool
@@ -526,8 +590,9 @@ use Workerman\Worker;
     {
         return class_exists(Phar::class, false) && Phar::running();
     }
+}
 
-
+if (!function_exists('template_inputs')) {
     /**
      * Get template vars
      * @param mixed $template
@@ -568,8 +633,9 @@ use Workerman\Worker;
         }
         return [$template, $vars, $app, $plugin];
     }
+}
 
-
+if (!function_exists('cpu_count')) {
     /**
      * Get cpu count
      * @return int
@@ -594,8 +660,9 @@ use Workerman\Worker;
         }
         return $count > 0 ? $count : 4;
     }
+}
 
-
+if (!function_exists('input')) {
     /**
      * Get request parameters, if no parameter name is passed, an array of all values is returned, default values is supported
      * @param string|null $param param's name
@@ -606,4 +673,4 @@ use Workerman\Worker;
     {
         return is_null($param) ? \request()->all() : \request()->input($param, $default);
     }
-
+}

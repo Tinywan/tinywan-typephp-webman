@@ -264,6 +264,23 @@ trait TypeConversionTrait
         return $expr;
     }
 
+    /**
+     * php::call() returns a Variant even when the resolved internal function
+     * has a fixed Zend return type. Restore the C++ representation promised by
+     * static type detection before the value reaches typed native storage.
+     */
+    protected function convertRuntimeCallResult(?string $type, string $expr): string
+    {
+        if ($type === null) {
+            return $expr;
+        }
+        $storageType = $this->getNativeType(Type::getReferencedType($type));
+        if ($storageType === Type::VAR) {
+            return $expr;
+        }
+        return $this->convertExprFromType($storageType, $expr);
+    }
+
     protected function convertVarType($var, $expr): string
     {
         if ($this->hasVar($var)) {

@@ -17,6 +17,11 @@ final class PhpxLocator
             }
         }
 
+        $resolved = self::existingDirectory(rtrim($rootPath, '/\\') . '/vendor/swoole/phpx');
+        if ($resolved !== null) {
+            return $resolved;
+        }
+
         if (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('swoole/phpx')) {
             $installPath = InstalledVersions::getInstallPath('swoole/phpx');
             if (is_string($installPath)) {
@@ -25,11 +30,6 @@ final class PhpxLocator
                     return $resolved;
                 }
             }
-        }
-
-        $resolved = self::existingDirectory(rtrim($rootPath, '/\\') . '/vendor/swoole/phpx');
-        if ($resolved !== null) {
-            return $resolved;
         }
 
         throw new RuntimeException(

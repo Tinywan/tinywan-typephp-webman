@@ -71,7 +71,11 @@ final class GetterLowering
         return self::createGetter($param->var->name, $param->type, $param);
     }
 
-    private static function createGetter(string $property, ?Node $type, Node $target): Stmt\ClassMethod
+    private static function createGetter(
+        string $property,
+        Node\ComplexType|Node\Identifier|Node\Name|null $type,
+        Node $target,
+    ): Stmt\ClassMethod
     {
         $method = new Stmt\ClassMethod('get' . ucfirst($property), [
             'flags' => Modifiers::PUBLIC,

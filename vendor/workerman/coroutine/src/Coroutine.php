@@ -126,3 +126,4 @@ class Coroutine implements CoroutineInterface
     }
 
 }
+Coroutine::init();

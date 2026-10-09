@@ -16,19 +16,15 @@ final class NativeSourceProjectBuilder
     private bool $progressLineActive = false;
     private int $progressLineWidth = 0;
 
-    public function __construct(private readonly bool $lineProgress = false)
-    {
+    public function __construct(
+        private readonly CompilerRuntime $compilerRuntime,
+        private readonly bool $lineProgress = false,
+    ) {
     }
 
     /** @return array{output: string, sourceCount: int, compiledCount: int} */
     public function build(NativeSourceProjectConfig $project): array
     {
-        if ($project->target === 'native' && PHP_OS_FAMILY === 'Windows') {
-            throw new RuntimeException(
-                'php-nano does not target Windows; use TypePHP --nano with the full PHP/PHPX DLL runtime'
-            );
-        }
-
         $this->writeProgress("Preparing Nano {$project->target} build: {$project->name}");
 
         $compiler = $this->resolveExecutable($project->compiler);
@@ -45,7 +41,7 @@ final class NativeSourceProjectBuilder
                 'Generating C++ from ' . count($project->phpSources) . ' TypePHP source file(s)'
             );
             $generatedDir = $project->buildDir . DIRECTORY_SEPARATOR . 'generated';
-            $translator = Translator::getInstance();
+            $translator = Translator::getInstance($this->compilerRuntime);
             $phpFiles = $translator->prepareNanoSources(
                 $project->phpSources,
                 $this->projectSymbolName($project),
@@ -56,7 +52,10 @@ final class NativeSourceProjectBuilder
             $generatedIncludeDir = $generatedDir . DIRECTORY_SEPARATOR . 'include';
         }
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer(
+            $this->compilerRuntime->installationRoot,
+            PHP_OS_FAMILY,
+        ))->compose(
             $project->buildDir,
             $this->projectSymbolName($project),
             $project->phpSources !== [],
@@ -109,6 +108,7 @@ final class NativeSourceProjectBuilder
                 '-DPHP_NANO=1',
                 '-DPHPX_NANO=1',
                 '-D_POSIX_C_SOURCE=200809L',
+                ...(PHP_OS_FAMILY === 'Darwin' ? ['-D_DARWIN_C_SOURCE=1'] : []),
                 ...array_map(
                     static fn(string $define): string => '-D' . $define,
                     $composition['defines'],

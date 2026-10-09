@@ -619,7 +619,7 @@ final class TestCoverageAnalyzer
             }
             $strings = [];
             foreach ($node->value->items as $item) {
-                if ($item?->value instanceof Node\Scalar\String_) {
+                if ($item->value instanceof Node\Scalar\String_) {
                     $strings[] = $item->value->value;
                 }
             }
@@ -640,12 +640,12 @@ final class TestCoverageAnalyzer
                 continue;
             }
             foreach ($statement->expr->items as $outerItem) {
-                if (!$outerItem?->value instanceof Expr\Array_) {
+                if (!$outerItem->value instanceof Expr\Array_) {
                     continue;
                 }
                 $strings = [];
                 foreach ($outerItem->value->items as $item) {
-                    if ($item?->value instanceof Node\Scalar\String_) {
+                    if ($item->value instanceof Node\Scalar\String_) {
                         $strings[] = $item->value->value;
                     }
                 }

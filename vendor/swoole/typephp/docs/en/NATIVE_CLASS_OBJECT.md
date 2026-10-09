@@ -227,6 +227,9 @@ Type declarations are used to determine the C++ field layout at compile time. Th
 | `bool` | `php::Bool` | Native value field |
 | `int` | `php::Int` | Native value field |
 | `float` | `php::Float` | Native value field |
+| `int8` / `int16` / `int32` | `int8_t` / `int16_t` / `int32_t` | Stored at the requested width; expressions use `php::Int` |
+| `uint8` / `uint16` / `uint32` | `uint8_t` / `uint16_t` / `uint32_t` | Stored at the requested width; expressions use `php::Int` |
+| `float32` | `float` | Four-byte storage; expressions use `php::Float` |
 | `string` | `php::Str` | The PHPX RAII string type currently used by TypePHP |
 | `array` | `php::Array` | PHPX RAII array, preserving PHP COW semantics |
 | Concrete Zend class | `php::Object` | Stores a Zend Object and validates the class at the assignment entry |
@@ -239,6 +242,8 @@ Type declarations are used to determine the C++ field layout at compile time. Th
 | BigInt/BigFloat/Decimal | `php::Var` | Stores PHPX boxed high-precision values; field addressing is still fixed offset, and arithmetic reuses the existing Variant ABI |
 
 `string`, `array`, Zend Object, Stream, and mixed fields are still located directly at fixed offsets in the C++ `struct`. The underlying zval or zend object they hold is managed by the PHPX RAII type, but property reads do not require a property hash table, object handler, or ZendVM dispatch.
+
+Fixed-width scalar names apply only to Native Class properties. They select field storage rather than introducing new PHP expression types. Natural C++ alignment and tail padding still apply; TypePHP does not emit packed classes. A flat Native Class containing only scalar fields has the same payload layout and size as its generated C++ class. The Native Heap keeps its GC header immediately before that payload, outside the C++ object size.
 
 PHP itself does not allow `resource` as a property type; stream resources in TypePHP should be declared with the existing `Stream` pseudo-type. Types that PHP itself forbids in property declarations, such as `void`, `never`, and `callable`, are likewise forbidden in Native Class.
 

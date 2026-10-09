@@ -8,6 +8,7 @@
 namespace TypePhp\Resolver;
 
 use TypePhp\Type;
+use TypePhp\Entity\GlobalConstantDef;
 
 use PhpParser\Node;
 
@@ -34,7 +35,7 @@ trait DeclarationSymbolTrait
         }
     }
 
-    protected function finalizeGlobalConstantValue(\stdClass $constant, Node\Expr $expression): void
+    protected function finalizeGlobalConstantValue(GlobalConstantDef $constant, Node\Expr $expression): void
     {
         $this->resetFunction();
         $constant->value = $this->parseIdentifier($expression);
@@ -49,18 +50,17 @@ trait DeclarationSymbolTrait
 
     protected function addConstant(string $name, string $value, ?Node\Expr $valueExpr = null): void
     {
-        $constInfo                    = new \stdClass();
-        $constInfo->value             = $value;
-        $constInfo->valueExpr         = $valueExpr;
-        $constInfo->type = $this->compilerPhase === self::PHASE_CONVERT
-            ? $this->detectStrValueType($value)
-            : Type::VAR;
-        $constInfo->codegenFinalized = $this->compilerPhase === self::PHASE_CONVERT;
-        $constInfo->namespace = $this->namespace;
-        $constInfo->name = $name;
-        $constInfo->sourceFile = $this->file;
-        $constInfo->initializationCode = '';
-        $constInfo->afterInitializationCode = '';
+        $constInfo = new GlobalConstantDef(
+            name: $name,
+            value: $value,
+            valueExpr: $valueExpr,
+            namespace: $this->namespace,
+            sourceFile: $this->file,
+            type: $this->compilerPhase === self::PHASE_CONVERT
+                ? $this->detectStrValueType($value)
+                : Type::VAR,
+            codegenFinalized: $this->compilerPhase === self::PHASE_CONVERT,
+        );
         $this->constants[$this->escapeConstVar($name)] = $constInfo;
         $this->symbolDeclInFile[$this->getConstantDependencySymbol($name)] = $this->file;
     }

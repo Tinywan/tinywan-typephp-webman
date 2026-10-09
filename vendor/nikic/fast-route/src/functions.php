@@ -2,6 +2,7 @@
 
 namespace FastRoute;
 
+if (!function_exists('FastRoute\simpleDispatcher')) {
     /**
      * @param callable $routeDefinitionCallback
      * @param array $options
@@ -70,4 +71,4 @@ namespace FastRoute;
 
         return new $options['dispatcher']($dispatchData);
     }
-
+}

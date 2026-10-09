@@ -86,7 +86,7 @@ class Timer
             return;
         }
         if (function_exists('pcntl_signal')) {
-            pcntl_signal(SIGALRM, [self::class, 'signalHandle'], false);
+            pcntl_signal(SIGALRM, self::signalHandle(...), false);
         }
     }
 

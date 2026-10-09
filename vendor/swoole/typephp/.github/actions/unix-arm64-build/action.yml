@@ -181,28 +181,53 @@ runs:
         fi
 
     - name: Package tested compiler
-      if: startsWith(github.ref, 'refs/tags/') && inputs.php-version == '8.5'
+      if: startsWith(github.ref, 'refs/tags/')
       shell: bash
       run: |
         composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
+        php bin/tpc.php project-release.yml --job 2 --no-progress
+        test -x ./tpc
+        ./tpc --version
         export TYPEPHP_PACKAGE_VERSION="${GITHUB_REF_NAME}"
         php package.php
-        test "$(find . -maxdepth 1 -name 'tpc_v*_${{ inputs.os }}_arm64.tar.gz' -type f | wc -l)" -eq 1
+        test "$(find . -maxdepth 1 -name 'tpc_v*_${{ inputs.os }}_arm64_php${{ inputs.php-version }}.*-zts.tar.gz' -type f | wc -l)" -eq 1
 
     - name: Upload release package
-      if: startsWith(github.ref, 'refs/tags/') && inputs.php-version == '8.5'
+      if: startsWith(github.ref, 'refs/tags/')
       uses: actions/upload-artifact@v4
       with:
         name: release-${{ inputs.os }}-arm64-php-${{ inputs.php-version }}-zts
         if-no-files-found: error
         retention-days: 1
-        path: tpc_v*_${{ inputs.os }}_arm64.tar.gz
+        path: tpc_v*_${{ inputs.os }}_arm64_php${{ inputs.php-version }}.*-zts.tar.gz
 
     - name: Upload platform build outputs
       if: always()
+      id: upload-platform-outputs
+      continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
         name: tpc-${{ inputs.os }}-arm64-php-${{ inputs.php-version }}-zts
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 7
+        path: |
+          tpc
+          tpc.rsp
+          build/**/*.cc
+          build/**/*.h
+          build/**/*.rsp
+          .github/ci-debug/**
+          .github/smoke/${{ inputs.smoke-directory }}/${{ inputs.smoke-binary }}
+          .github/smoke/${{ inputs.smoke-directory }}/build/**/*.cc
+          .github/smoke/${{ inputs.smoke-directory }}/build/**/*.h
+
+    - name: Retry platform build output upload
+      if: always() && steps.upload-platform-outputs.outcome == 'failure'
+      uses: actions/upload-artifact@v4
+      with:
+        name: tpc-${{ inputs.os }}-arm64-php-${{ inputs.php-version }}-zts
+        overwrite: true
         include-hidden-files: true
         if-no-files-found: warn
         retention-days: 7

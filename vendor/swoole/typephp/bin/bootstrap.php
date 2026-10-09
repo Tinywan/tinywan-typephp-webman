@@ -7,7 +7,6 @@
  */
 
 define('TYPEPHP_ROOT_PATH', dirname(__DIR__));
-define('TYPEPHP_DEBUG', true);
 
 // Composer bin proxies provide the consuming project's autoloader. A source
 // checkout and a packaged compiler keep their own autoloader below TYPEPHP_ROOT_PATH.

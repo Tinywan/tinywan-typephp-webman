@@ -206,3 +206,4 @@ class FileSessionHandler implements SessionHandlerInterface
     }
 }
 
+FileSessionHandler::init();

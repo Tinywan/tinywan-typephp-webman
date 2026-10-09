@@ -2,6 +2,7 @@
 #include "phpx_std.h"
 
 #include <limits>
+#include <string>
 
 using namespace php;
 
@@ -113,6 +114,38 @@ TEST(std_string, lcfirst_ucfirst) {
     ASSERT_STREQ(s7.toCString(), "");
 }
 
+TEST(std_string, first_case_conversion_matches_php_and_reuses_unchanged_strings) {
+    for (unsigned int byte = 0; byte <= 255; byte++) {
+        SCOPED_TRACE(byte);
+        std::string bytes{static_cast<char>(byte), '\0', 'A', 'z'};
+        String input(bytes);
+        auto lower = fn::lcfirst(input);
+        auto upper = fn::ucfirst(input);
+        EXPECT_EQ(lower.toStdString(), php::call("lcfirst", {input}).toStdString());
+        EXPECT_EQ(upper.toStdString(), php::call("ucfirst", {input}).toStdString());
+        EXPECT_EQ(input.toStdString(), bytes);
+        if (byte < 'A' || byte > 'Z') {
+            EXPECT_EQ(lower.str(), input.str());
+        }
+        if (byte < 'a' || byte > 'z') {
+            EXPECT_EQ(upper.str(), input.str());
+        }
+    }
+}
+
+TEST(std_string, unchanged_first_case_results_preserve_copy_on_write) {
+    String lower_input("already lower");
+    String upper_input("Already upper");
+    auto lower = fn::lcfirst(lower_input);
+    auto upper = fn::ucfirst(upper_input);
+    lower.item(0, true) = "#";
+    upper.item(0, true) = "#";
+    EXPECT_EQ(lower.toStdString(), "#lready lower");
+    EXPECT_EQ(upper.toStdString(), "#lready upper");
+    EXPECT_EQ(lower_input.toStdString(), "already lower");
+    EXPECT_EQ(upper_input.toStdString(), "Already upper");
+}
+
 TEST(std_string, strtolower_strtoupper) {
     auto s1 = fn::strtolower("HELLO");
     ASSERT_STREQ(s1.toCString(), "hello");
@@ -213,6 +246,64 @@ TEST(std_string, strrpos) {
     try_call([]() { fn::strrpos("hello", "h", -6); }, "must be contained in argument #1");
 }
 
+TEST(std_string, search_empty_needle_offsets) {
+    struct SearchCase {
+        Int offset;
+        Int forward;
+        Int reverse;
+    };
+    const SearchCase cases[] = {
+        {0, 0, 3}, {1, 1, 3}, {3, 3, 3}, {-1, 2, 2}, {-2, 1, 1}, {-3, 0, 0},
+    };
+    for (const auto &test : cases) {
+        SCOPED_TRACE(test.offset);
+        auto forward = fn::strpos("abc", "", test.offset);
+        auto insensitive = fn::stripos("AbC", "", test.offset);
+        auto reverse = fn::strrpos("abc", "", test.offset);
+        EXPECT_TRUE(forward.isInt());
+        EXPECT_TRUE(insensitive.isInt());
+        EXPECT_TRUE(reverse.isInt());
+        EXPECT_EQ(forward.toInt(), test.forward);
+        EXPECT_EQ(insensitive.toInt(), test.forward);
+        EXPECT_EQ(reverse.toInt(), test.reverse);
+    }
+
+    EXPECT_EQ(fn::strpos("", "", 0).toInt(), 0);
+    EXPECT_EQ(fn::stripos("", "", 0).toInt(), 0);
+    EXPECT_EQ(fn::strrpos("", "", 0).toInt(), 0);
+}
+
+TEST(std_string, search_empty_needle_invalid_offsets) {
+    struct SearchFunction {
+        const char *name;
+        Variant (*call)(const String &, const String &, Int);
+    };
+    const SearchFunction functions[] = {
+        {"strpos", fn::strpos}, {"stripos", fn::stripos}, {"strrpos", fn::strrpos},
+    };
+    for (const auto &search : functions) {
+        SCOPED_TRACE(search.name);
+        for (const char *haystack : {"abc", ""}) {
+            SCOPED_TRACE(haystack);
+            for (Int offset : {Int(4), Int(-4), std::numeric_limits<Int>::max(), std::numeric_limits<Int>::min()}) {
+                SCOPED_TRACE(offset);
+                bool caught = false;
+                try {
+                    search.call(haystack, "", offset);
+                } catch (zend_object *) {
+                    auto exception = catchException();
+                    EXPECT_TRUE(exception.instanceOf("ValueError"));
+                    auto message = exception.call("getMessage");
+                    EXPECT_NE(std::string(message.toCString()).find("must be contained in argument #1"),
+                              std::string::npos);
+                    caught = true;
+                }
+                EXPECT_TRUE(caught);
+            }
+        }
+    }
+}
+
 TEST(std_string, strstr) {
     auto s1 = fn::strstr("hello world", "world");
     ASSERT_STREQ(s1.toString().toCString(), "world");
@@ -278,9 +369,153 @@ TEST(std_string, str_repeat) {
     ASSERT_STREQ(s3.toCString(), "");
 }
 
+TEST(std_string, str_repeat_empty_large_count) {
+    for (Int count : {Int(0), Int(1), Int(10), Int(ZEND_LONG_MAX)}) {
+        SCOPED_TRACE(count);
+        EXPECT_TRUE(fn::str_repeat("", count).empty());
+        EXPECT_TRUE(php::call("str_repeat", {"", count}).toString().empty());
+    }
+}
+
+TEST(std_string, str_repeat_empty_negative_count) {
+    for (Int count : {Int(-1), Int(ZEND_LONG_MIN)}) {
+        SCOPED_TRACE(count);
+        bool caught = false;
+        try {
+            fn::str_repeat("", count);
+        } catch (zend_object *) {
+            caught = true;
+            auto exception = php::catchException();
+            EXPECT_EQ(exception.getClassName().toStdString(), "ValueError");
+            EXPECT_EQ(exception.call("getMessage").toStdString(),
+                      "str_repeat(): Argument #2 ($times) must be greater than or equal to 0");
+        }
+        EXPECT_TRUE(caught);
+    }
+}
+
 TEST(std_string, str_repeat_exception) {
     try_call([]() { fn::str_repeat("x", -1); },
              "str_repeat(): Argument #2 ($times) must be greater than or equal to 0");
+}
+
+TEST(std_string, implode_propagates_string_conversion_exceptions) {
+    eval(R"(
+        class PhpxThrowingJoinValue {
+            public function __toString(): string {
+                throw new RuntimeException('join conversion failed');
+            }
+        }
+    )");
+    for (bool singleton : {false, true}) {
+        SCOPED_TRACE(singleton);
+        Array pieces = eval(singleton ? "return [new PhpxThrowingJoinValue()];"
+                                      : "return ['before', new PhpxThrowingJoinValue(), 'after'];");
+        for (bool alias : {false, true}) {
+            SCOPED_TRACE(alias);
+            bool caught = false;
+            try {
+                if (alias) {
+                    fn::join(",", pieces);
+                } else {
+                    fn::implode(",", pieces);
+                }
+            } catch (zend_object *) {
+                caught = true;
+                auto exception = php::catchException();
+                EXPECT_EQ(exception.getClassName().toStdString(), "RuntimeException");
+                EXPECT_EQ(exception.call("getMessage").toStdString(), "join conversion failed");
+            }
+            if (EG(exception)) {
+                php::catchException();
+            }
+            EXPECT_TRUE(caught);
+        }
+    }
+}
+
+TEST(std_string, implode_preserves_inputs_during_conversion_callbacks) {
+    eval(R"(
+        class PhpxMutatingJoinValue {
+            public function __toString(): string {
+                $GLOBALS['phpx_join_glue'] = 'changed';
+                $GLOBALS['phpx_join_pieces'] = [];
+                return 'converted';
+            }
+        }
+    )");
+    std::string outcomes[2];
+    for (int native = 0; native < 2; native++) {
+        eval(R"(
+            $GLOBALS['phpx_join_glue'] = str_repeat(':', 3);
+            $GLOBALS['phpx_join_pieces'] = ['before', new PhpxMutatingJoinValue(), 'after'];
+        )");
+        String glue(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_join_glue")), Ctor::Indirect);
+        Array pieces(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_join_pieces")), Ctor::Indirect);
+        outcomes[native] = native ? php::call("implode", {glue, pieces}).toStdString()
+                                 : fn::implode(glue, pieces).toStdString();
+        EXPECT_EQ(outcomes[native], "before:::converted:::after");
+        EXPECT_EQ(glue.toStdString(), "changed");
+        EXPECT_EQ(pieces.count(), 0);
+        eval("unset($GLOBALS['phpx_join_glue'], $GLOBALS['phpx_join_pieces']);");
+    }
+    EXPECT_EQ(outcomes[0], outcomes[1]);
+}
+
+TEST(std_string, implode_propagates_element_destructor_exceptions) {
+    eval(R"(
+        class PhpxDestructingJoinValue {
+            public function __toString(): string {
+                $GLOBALS['phpx_destructing_join'] = [];
+                return 'converted';
+            }
+            public function __destruct() {
+                throw new RuntimeException('join destruction failed');
+            }
+        }
+    )");
+    for (bool singleton : {false, true}) {
+        SCOPED_TRACE(singleton);
+        eval(singleton ? "$GLOBALS['phpx_destructing_join'] = [new PhpxDestructingJoinValue()];"
+                       : "$GLOBALS['phpx_destructing_join'] = ['before', new PhpxDestructingJoinValue(), 'after'];");
+        Array pieces(zend_hash_str_find(&EG(symbol_table), ZEND_STRL("phpx_destructing_join")), Ctor::Indirect);
+        bool caught = false;
+        try {
+            fn::implode(",", pieces);
+        } catch (zend_object *) {
+            caught = true;
+            auto exception = php::catchException();
+            EXPECT_EQ(exception.getClassName().toStdString(), "RuntimeException");
+            EXPECT_EQ(exception.call("getMessage").toStdString(), "join destruction failed");
+        }
+        if (EG(exception)) {
+            php::catchException();
+        }
+        EXPECT_TRUE(caught);
+        eval("unset($GLOBALS['phpx_destructing_join']);");
+    }
+}
+
+TEST(std_string, implode_propagates_error_handler_exceptions) {
+    eval(R"(
+        set_error_handler(static function ($severity, $message) {
+            throw new ErrorException($message, 0, $severity);
+        });
+    )");
+    bool caught = false;
+    try {
+        fn::implode(",", Array{Array(), "after"});
+    } catch (zend_object *) {
+        caught = true;
+        auto exception = php::catchException();
+        EXPECT_EQ(exception.getClassName().toStdString(), "ErrorException");
+        EXPECT_EQ(exception.call("getMessage").toStdString(), "Array to string conversion");
+    }
+    if (EG(exception)) {
+        php::catchException();
+    }
+    eval("restore_error_handler();");
+    EXPECT_TRUE(caught);
 }
 
 TEST(std_string, explode_implode) {
@@ -327,4 +562,24 @@ TEST(std_string, dirname_basename) {
     ASSERT_STREQ(b2.toCString(), "index");
 
     ASSERT_TRUE(fn::dirname("").empty());
+}
+
+TEST(std_string, dirname_invalid_levels) {
+    for (const char *path : {"/var/www/index.php", "a", ""}) {
+        SCOPED_TRACE(path);
+        for (int levels : {0, -1, std::numeric_limits<int>::min()}) {
+            SCOPED_TRACE(levels);
+            bool caught = false;
+            try {
+                fn::dirname(path, levels);
+            } catch (zend_object *) {
+                auto exception = catchException();
+                EXPECT_TRUE(exception.instanceOf("ValueError"));
+                EXPECT_STREQ(exception.call("getMessage").toCString(),
+                             "dirname(): Argument #2 ($levels) must be greater than or equal to 1");
+                caught = true;
+            }
+            EXPECT_TRUE(caught);
+        }
+    }
 }

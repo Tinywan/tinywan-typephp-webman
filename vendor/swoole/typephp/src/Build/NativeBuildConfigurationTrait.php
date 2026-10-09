@@ -52,19 +52,22 @@ trait NativeBuildConfigurationTrait
 
     protected function getIosSdkDir(): string
     {
-        $sdkDir = $this->getPhpxDir() . '/ios/iphoneos-arm64';
+        $target = str_ends_with(strtolower($this->targetPlatform), '-simulator')
+            ? 'iphonesimulator-arm64'
+            : 'iphoneos-arm64';
+        $sdkDir = $this->getPhpxDir() . '/ios/' . $target;
         if (!is_dir($sdkDir)) {
             $this->error(
-                'The iPhoneOS SDK was not found at: ' . $sdkDir . "\n"
+                'The iOS SDK was not found at: ' . $sdkDir . "\n"
                 . '  Build/install the matching SDK inside PHPX before compiling this target.'
             );
         }
         $abiStamp = $sdkDir . '/.typephp-ios-sdk-abi';
         if (!is_file($abiStamp)
-            || trim((string) file_get_contents($abiStamp)) !== 'typephp-iphoneos-arm64-sdk-abi-v1'
+            || trim((string) file_get_contents($abiStamp)) !== 'typephp-' . $target . '-sdk-abi-v1'
         ) {
             $this->error(
-                'The iPhoneOS SDK is missing or ABI-incompatible: ' . $sdkDir . "\n"
+                'The iOS SDK is missing or ABI-incompatible: ' . $sdkDir . "\n"
                 . '  Rebuild it with PHPX ios/build.sh and the matching PHP SDK.'
             );
         }
@@ -174,8 +177,20 @@ trait NativeBuildConfigurationTrait
             $includePaths = array_merge($includePaths, $phpSdkPaths);
         } else {
             // Linux/macOS
-            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir());
+            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir(), $this->isPhpBuilderBuild());
             $includePaths = array_merge($includePaths, $phpPaths);
+            if ($this->isPhpBuilderBuild() && $this->sapiPhpBuildDirectory !== null) {
+                $makefile = $this->sapiPhpBuildDirectory . '/Makefile';
+                $contents = is_file($makefile) ? (string) file_get_contents($makefile) : '';
+                if (preg_match('/^INCLUDES[ \t]*=[ \t]*(.*)$/m', $contents, $match) === 1) {
+                    preg_match_all('/(?:^|\s)-I([^\s]+)/', $match[1], $paths);
+                    foreach ($paths[1] ?? [] as $path) {
+                        if (is_dir($path)) {
+                            $includePaths[] = $path;
+                        }
+                    }
+                }
+            }
             // Bundled mpdecimal header directories
             $includePaths[] = $this->getPhpxDir() . '/thirdparty/mpdecimal/libmpdec';
             $includePaths[] = $this->getPhpxDir() . '/thirdparty/mpdecimal/libmpdec++';
@@ -196,9 +211,11 @@ trait NativeBuildConfigurationTrait
         }
 
         $platform = $this->getPlatform();
-        $libraryPaths = [
-            $this->getPhpxDir() . '/lib',
-        ];
+        $libraryPaths = [];
+        if ($this->isPhpBuilderBuild() && $this->sapiPhpxArchive !== null) {
+            $libraryPaths[] = dirname($this->sapiPhpxArchive);
+        }
+        $libraryPaths[] = $this->getPhpxDir() . '/lib';
 
         // Add the platform-specific PHP library paths
         if ($platform instanceof Windows) {
@@ -219,7 +236,16 @@ trait NativeBuildConfigurationTrait
     protected function getLibraries(): array
     {
         if ($this->isNanoMode()) {
-            return [];
+            return $this->isWindows()
+                ? [
+                    'advapi32.lib',
+                    'bcrypt.lib',
+                    'pathcch.lib',
+                    'shell32.lib',
+                    'user32.lib',
+                    'ws2_32.lib',
+                ]
+                : [];
         }
 
         $sdkDir = $this->getFullStaticSdkDir();
@@ -320,6 +346,10 @@ trait NativeBuildConfigurationTrait
 
         $platform = $this->getPlatform();
 
+        if ($this->isPhpBuilderBuild() && $this->sapiPhpxArchive !== null) {
+            return is_file($this->sapiPhpxArchive) ? $this->sapiPhpxArchive : null;
+        }
+
         if ($platform instanceof Windows) {
             $phpxLibPath = $this->getPhpxDir() . '\\lib\\phpx.lib';
             return is_file($phpxLibPath) ? $phpxLibPath : null;
@@ -365,7 +395,7 @@ trait NativeBuildConfigurationTrait
             $buildHint = 'Build PHPX first (for example, run `nmake phpx` in ' . $this->getPhpxDir() . '\\build)';
         } elseif ($this->isIosTarget()) {
             $expected = $this->getPhpDir() . '/lib/libphpx.a';
-            $buildHint = 'Build the integrated iPhoneOS SDK in PHPX_HOME/ios/iphoneos-arm64';
+            $buildHint = 'Build the matching iOS SDK in PHPX_HOME/ios';
         } elseif ($this->isAndroidTarget()) {
             $expected = $this->getAndroidSdkDir() . '/lib/libphpx.a';
             $buildHint = 'Build the Android SDK with PHPX sdk/build-native.sh';

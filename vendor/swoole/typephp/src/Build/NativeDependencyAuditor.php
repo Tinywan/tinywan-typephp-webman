@@ -15,6 +15,14 @@ final class NativeDependencyAuditor
         'flock',
     ];
 
+    /** Bionic/libc++ implementation imports required by an Android JNI library. */
+    public const array ANDROID_SYSTEM_ABI_ALLOWLIST = [
+        'closelog',
+        'openlog',
+        'syscall',
+        'syslog',
+    ];
+
     /** @param list<string> $flags */
     public function assertLinkFlags(string $target, array $flags): void
     {
@@ -58,6 +66,35 @@ final class NativeDependencyAuditor
         }
     }
 
+    public function assertWindowsImports(string $dumpbinOutput): void
+    {
+        $runtimeDlls = [];
+        $forbidden = [];
+        foreach (preg_split('/\R/', $dumpbinOutput) ?: [] as $line) {
+            $value = trim($line);
+            if (preg_match('/^[A-Za-z0-9_.-]+\.dll$/i', $value) === 1
+                && preg_match('/^php(?:x|\d.*)?\.dll$/i', $value) === 1) {
+                $runtimeDlls[strtolower($value)] = true;
+            }
+            if (preg_match('/(?:^|\s)([A-Za-z_][A-Za-z0-9_@?$]*)\s*$/', $value, $match) === 1
+                && $this->isForbiddenSymbol($match[1], 'windows')) {
+                $forbidden[$match[1]] = true;
+            }
+        }
+        if ($runtimeDlls !== []) {
+            throw new RuntimeException(
+                'PHP Nano Windows artifact imports a dynamic PHP runtime: '
+                . implode(', ', array_keys($runtimeDlls))
+            );
+        }
+        if ($forbidden !== []) {
+            throw new RuntimeException(
+                'PHP Nano Windows artifact imports forbidden host capabilities: '
+                . implode(', ', array_keys($forbidden))
+            );
+        }
+    }
+
     private function isForbiddenSymbol(string $symbol, string $target): bool
     {
         if ($target === 'wasip2') {
@@ -79,6 +116,10 @@ final class NativeDependencyAuditor
             if ($symbol === 'proc_raise' || $symbol === 'sched_yield') {
                 return true;
             }
+        } elseif ($target === 'android'
+            && in_array($symbol, self::ANDROID_SYSTEM_ABI_ALLOWLIST, true)
+        ) {
+            return false;
         } elseif (in_array($symbol, self::NON_POSIX_HOST_FUNCTION_ALLOWLIST, true)) {
             return false;
         }

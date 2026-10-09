@@ -17,6 +17,7 @@ use PhpParser\Node\Expr\Variable;
 use PhpParser\NodeAbstract;
 use TypePhp\Metadata\Constants;
 use TypePhp\Exception\PlaceHolder;
+use TypePhp\Resolver\Reflection;
 
 trait FunctionCallTrait
 {
@@ -173,15 +174,18 @@ trait FunctionCallTrait
         }
 
         $directCall = clone $callable;
-        $directCall->args = [new Node\Arg(new Variable($value))];
+        $args = [new Node\Arg(new Variable($value))];
 
         if ($directCall instanceof Expr\FuncCall) {
+            $directCall->args = $args;
             return $this->parseFuncCall($directCall);
         }
         if ($directCall instanceof Expr\StaticCall) {
+            $directCall->args = $args;
             return $this->parseStaticCall($directCall);
         }
         if ($directCall instanceof Expr\MethodCall) {
+            $directCall->args = $args;
             return $this->parseMethodCall($directCall);
         }
 
@@ -191,6 +195,7 @@ trait FunctionCallTrait
     protected function parseFuncCall(Expr\FuncCall $expr): string
     {
         $runtimeCallScope = null;
+        $runtimeResultType = null;
         $this->validateImmutableCall($expr);
         $pythonCall = $this->parsePythonFunctionCall($expr);
         if ($pythonCall !== null) {
@@ -379,6 +384,12 @@ trait FunctionCallTrait
                 CompilationStatistics::RUNTIME_FUNCTIONS,
                 strtolower($globalName),
             );
+            if ($functionTarget['definitelyGlobal'] && $this->isInternalFunction($globalName)) {
+                $returnType = Reflection::getFunction($globalName)?->getReturnType();
+                if ($returnType instanceof \ReflectionNamedType && !$returnType->allowsNull()) {
+                    $runtimeResultType = $this->detectFuncCallReturnType($globalName);
+                }
+            }
             $placeHolder = $this->getLiteralString($functionTarget['target']);
             $fn = $this->getFuncPtr($name);
             if ($this->debug) {
@@ -399,18 +410,24 @@ trait FunctionCallTrait
                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
             }
             $scopeArg = $runtimeCallScope === null ? '' : $runtimeCallScope . ', ';
-            return 'php::call(' . $scopeArg . $fn . ')';
+            return $this->convertRuntimeCallResult(
+                $runtimeResultType,
+                'php::call(' . $scopeArg . $fn . ')',
+            );
         }
         try {
             if ($name === '' && $runtimeCallScope === null) {
                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
                     . $this->parseCallArgs($expr->args) . ')';
             }
-            return $this->genRuntimeFunctionCall(
-                $fn,
-                $expr->args,
-                $name,
-                scope: $runtimeCallScope ?? '',
+            return $this->convertRuntimeCallResult(
+                $runtimeResultType,
+                $this->genRuntimeFunctionCall(
+                    $fn,
+                    $expr->args,
+                    $name,
+                    scope: $runtimeCallScope ?? '',
+                ),
             );
         } catch (PlaceHolder) {
             return $this->genPlaceHolder($placeHolder);
@@ -423,16 +440,17 @@ trait FunctionCallTrait
      */
     protected function parseAnyCompileTimeCall(CallLike $expr): string
     {
-        if (count($expr->args) === 0) {
+        $args = $expr->getRawArgs();
+        if (count($args) === 0) {
             return self::VALUE_NULL;
         }
-        if (count($expr->args) !== 1
-            || !$expr->args[0] instanceof Node\Arg
-            || $expr->args[0]->unpack
+        if (count($args) !== 1
+            || !$args[0] instanceof Node\Arg
+            || $args[0]->unpack
         ) {
             $this->fatalError($expr, 'The std::any function expects zero or one non-unpacked argument');
         }
-        $value = $expr->args[0]->value;
+        $value = $args[0]->value;
         if ($this->isNativeObjectClass($this->detectClassOfExpr($value))) {
             $this->fatalError(
                 $value,

@@ -97,7 +97,11 @@ final class PropertyMethodLowering
         }
     }
 
-    private static function createSetter(string $property, ?Node $type, Node $target): Stmt\ClassMethod
+    private static function createSetter(
+        string $property,
+        Node\ComplexType|Node\Identifier|Node\Name|null $type,
+        Node $target,
+    ): Stmt\ClassMethod
     {
         $method = new Stmt\ClassMethod('set' . ucfirst($property), [
             'flags' => Modifiers::PUBLIC,
@@ -112,7 +116,11 @@ final class PropertyMethodLowering
         return $method;
     }
 
-    private static function createWith(string $property, ?Node $type, Node $target): Stmt\ClassMethod
+    private static function createWith(
+        string $property,
+        Node\ComplexType|Node\Identifier|Node\Name|null $type,
+        Node $target,
+    ): Stmt\ClassMethod
     {
         $method = new Stmt\ClassMethod('with' . ucfirst($property), [
             'flags' => Modifiers::PUBLIC,

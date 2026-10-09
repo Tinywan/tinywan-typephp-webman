@@ -170,11 +170,15 @@ in TypePHP while keeping only a thin platform-native UI bridge. See the
 [Android native app example](examples/android-native/) and the
 [iOS/macOS native app example](examples/apple-native/).
 
-Native release assets are built with the latest PHP 8.5 ZTS release. TypePHP
-publishes Linux x64, Linux ARM64, macOS ARM64, and Windows x64 packages. Native
-NTS and 32-bit x86 packages are not provided. Linux and macOS archives contain
-the compiler and production Composer dependencies, while the Windows archive
-contains the complete matching PHP/PHPX runtime and SDK.
+Linux, macOS, and Windows release assets are built separately with the latest
+PHP 8.4 ZTS and PHP 8.5 ZTS releases; each filename identifies the complete
+build PHP version and ZTS ABI. Linux and macOS users must select the build that
+matches the host PHP. Each Windows x64 archive includes its matching PHP/PHPX
+runtime and SDK, so users can directly choose the bundled PHP version they want.
+Native NTS and 32-bit x86 packages are not provided. Linux and macOS archives
+contain only the compiler, English and Chinese READMEs, and the license;
+production Composer dependencies are embedded in `tpc`. Windows archives also
+omit a separate `vendor` directory.
 
 ## Installation
 
@@ -210,13 +214,12 @@ php bin/tpc.php --help
 may point to the PHP embed prefix; it must contain `bin/php-config`, PHP headers,
 and `lib/libphp.so` on Unix-like systems.
 
-### Building `libphp.so`
+### PHP runtime selection
 
-Binary and shared-library builds require PHP's `embed` SAPI. If `libphp.so` is
-missing on Linux, `tpc.php` can interactively download the PHP source and build
-it for you. A PHP extension build resolves Zend symbols from the host SAPI and
-must not load a second `libphp`. See
-[Automatic libphp.so build](docs/en/LIBPHP_INSTALLER.md).
+Binary mode uses the Embed SAPI and the host `libphp` by default. If that library
+is missing, an interactive build offers to enable `php-builder`, which builds a
+private static runtime from php-src. CLI and FPM targets always require
+`php-builder`. See [PHP builder](docs/en/LIBPHP_INSTALLER.md).
 
 ## Quick Start
 
@@ -254,38 +257,43 @@ string(16) "Linux ..."
 > arguments, and must return `void`. Top-level executable statements are not
 > allowed; executable code belongs in a function or method.
 
-### VM-free Nano executable
+### VM-free Nano executables and libraries
 
-Use `--nano` to compile one PHP source file together with PHP Nano and PHPX
-sources. The result does not link `libphp` and contains no Zend opcode
-interpreter:
+Use `--nano` to compile PHP sources together with PHP Nano and PHPX sources.
+The result does not link `libphp` and contains no Zend opcode interpreter:
 
 ```bash
 ./bin/tpc.php --nano examples/hello.php
 ./hello
 ```
 
+Nano supports `mode: bin` and `mode: lib`. Binary mode generates the process
+`main()` entry and requires a TypePHP `main()` function. Library mode defines
+`TYPEPHP_NO_MAIN` and exports the project-specific runtime initialization and
+shutdown ABI for hosts such as an Android Activity. Nano does not support
+`mode: ext`.
+
 By default, the executable is emitted in the directory where `tpc` was invoked.
 Normal and Nano builds share the `build` directory for generated code, objects,
 and other intermediate files. Use `-o` to select a different output path.
 
-PHP and Composer remain build-time tools. On Linux, macOS, iOS, and Android,
-the generated program uses the statically selected Nano runtime and its
-file-only stream layer. Native Nano may use C11, C++17, and POSIX.1-2008, but
-socket/DNS/network, remote streams, dynamic PHP loading, and process execution
-remain unavailable. WASI is a smaller subset; direct calls to APIs missing from
-that target are compile-time errors.
+PHP and Composer remain build-time tools. On Windows, Linux, macOS, iOS, and
+Android, the generated program compiles the selected PHP Nano and PHPX sources
+directly into the final executable or library. It does not import `php.dll`,
+`phpx.dll`, or a host `libphp`/`libphpx`. The runtime retains its file-only
+stream layer; socket/DNS/network, remote streams, dynamic PHP loading, and
+process execution remain unavailable. WASI is a smaller subset; direct calls
+to APIs missing from that target are compile-time errors.
 
 On every platform, `--nano` rejects the VM entry paths `eval`, `include`,
 `include_once`, `require`, and `require_once`, as well as anonymous classes.
 
-Windows uses a different build backend even when `--nano` is specified: it keeps
-the existing host compile/link pipeline and connects to `php.dll` and `phpx.dll`
-through their import libraries. It does not load the `swoole/php-nano` or
-`swoole/phpx` source manifests, nor append their C/C++ files to project `sources`.
-External-command APIs and backtick syntax are still rejected. Those command
-functions are also removed from the Zend function table at request startup, so
-indirect variable/callback calls cannot bypass the policy.
+Windows supports Nano native applications in `mode: bin` and `mode: lib` with
+the same source-composition contract as Linux and macOS. MSVC compiles the C11
+PHP Nano sources, the C++17 PHPX sources, and generated TypePHP sources into one
+PE artifact; only Windows system and compiler-runtime DLLs may remain as normal
+platform dependencies. External-command APIs and backtick syntax are rejected
+by the same Nano capability policy on every platform.
 
 Except for runtime sources, include directories, compile definitions, and link
 inputs, Nano and normal mode share command-line parsing, TypePHP code generation,
@@ -322,6 +330,10 @@ For multi-file projects, keep repeatable build settings in `project.yml`:
 ```yaml
 name: myapp
 mode: bin
+version: 1.0.0
+info:
+  Author: TypePHP Team
+  Description: My TypePHP application
 php-version: "8.5"
 optimize: 2
 job: 8
@@ -335,6 +347,10 @@ sources:
     if: PHP_VERSION_ID >= 80500
   - path: src/windows
     if: PHP_OS_FAMILY == "Windows"
+
+# Embed files for ZendVM execution and virtual file reads.
+embedded-files:
+  - vendor
 
 # Precompiled by the project's external native build.
 objects:
@@ -361,11 +377,64 @@ ext-deps:
   - curl
 ```
 
-Paths are resolved relative to the YAML file. A source entry may be a file or
+Project files can reuse common settings with `include`:
+
+```yaml
+include: project.yml
+embedded-files:
+  - vendor
+```
+
+`include` accepts one YAML path or a list. Included files are applied in order,
+then the current file overrides them. Maps are merged recursively and lists are
+replaced as a whole. Included files may include another file, but the same
+canonical file cannot appear twice in one active include chain; this rejects
+cycles while allowing a completed common file to be included again by a later
+section. Relative project paths are resolved against the outermost project file.
+
+Paths are resolved relative to the outermost project YAML file. A source entry may be a file or
 directory; conditional entries support `PHP_VERSION`, `PHP_VERSION_ID`, and
-`PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Native linker
+`PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Scanning a
+source directory descends into symlinked directories, so a dependency installed
+by a Composer path repository -- which is a symlink -- is compiled like any
+other source; `ignore` excludes it, written as the path that reaches it. Native linker
 dependencies belong in `link-libs`; `ext-deps` writes `ZEND_MOD_REQUIRED`
 entries so Zend can reject loading when a required PHP extension is missing.
+`version` provides the Zend module version. The `info` mapping accepts arbitrary
+labels and values for the module's dedicated `phpinfo()` section.
+`embedded-files` accepts files or directories with the same conditional syntax.
+For development/release configurations, Composer autoload setup, build
+requirements, cache behavior, and troubleshooting, see
+[Embedding PHP dependencies in an executable](docs/en/EMBEDDED_FILES.md).
+It is opt-in for embedded binary builds: all listed files are packed into the
+binary, and PHP files not successfully compiled from `sources` are stored as
+OPcache bytecode. `.stub.php` API declaration files remain in the raw bundle
+and are not compiled as executable bytecode. Other embedded PHP files that
+OPcache cannot compile are reported and kept only as raw files; they cannot be
+executed from the opcode table. `require` and `require_once` load scripts with
+generated bytecode through ZendVM without reading their PHP files from disk.
+The PHP CLI and OPcache used
+to build the blobs must match the target PHP runtime. Building with
+`embedded-files` therefore requires that CLI and its OPcache extension on the
+build host; `tpc` alone cannot generate the blobs. The resulting binary
+does not need Composer installation, vendor files, or an OPcache extension at
+runtime: Composer's autoload files are embedded and still resolve classes on
+demand. When OPcache is available at build time, anonymous classes use the
+same opcode table when their `new class` expression is first executed. Without
+`embedded-files`, builds lacking OPcache use embedded PHP code for anonymous
+classes instead.
+Only a `vendor` directory containing `autoload.php` uses the opcode cache.
+Its blobs are reused while the directory mtime and build PHP/OPcache remain
+unchanged. All other `embedded-files` files, including files in a `vendor`
+directory without `autoload.php`, are regenerated on every build. Directory
+mtime does not change when an existing nested file is edited; use `--force`
+to regenerate vendor opcodes in that case. Skipped non-executable vendor PHP
+files share this cache and are retried with `--force`.
+Compiler-generated anonymous class opcodes have a separate cache keyed by
+their generated PHP contents and the build PHP/OPcache, so unchanged classes
+do not cause the embedded archive to be recompiled.
+On Windows, TypePHP links the archive as a PE resource with `rc.exe` and reads
+it through the phpx opcode helper. An unchanged archive reuses the `.res` file.
 The generic `objects` list adds existing `.o`/`.obj` files directly to the
 link step. TypePHP never recompiles these files; the project owns their native
 compiler, architecture, flags, and incremental build. Keep native files that
@@ -376,8 +445,10 @@ post-link packaging step after tpc emits its ELF.
 Project-wide `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` are applied to
 C++, C, assembler, and link commands respectively.
 
-The build directory contains generated C++, dependency objects, and the
-precompiled-header cache. Reusing it makes incremental builds much faster;
+The build directory keeps readable generated C++ and headers separate from
+internal artifacts. Objects, opcode blobs, binary archives, manifests, linker
+response files, and precompiled headers live under `build-dir/cache`. Reusing
+the build directory makes incremental builds much faster;
 use `--force` only when the reusable PHPX objects must be rebuilt.
 
 See [Compiler CLI](docs/en/COMPILER_CLI.md) for all project keys and command-line
@@ -688,12 +759,16 @@ Key options:
 | `-d`, `--debug` | Debug build with symbols and source tracking |
 | `-o`, `--output <file>` | Output file name |
 | `-m`, `--mode <bin\|lib\|ext>` | Build mode (default `bin`) |
+| `--sapi <embed\|cli\|fpm>` | Binary SAPI target (default `embed`; comma-separated lists accepted) |
+| `--entry <file>` | PHP entry file executed when the CLI SAPI starts |
+| `--php-builder[=<config>]` | Build a private PHP runtime from php-src; omitted config defaults to `{}` |
 | `-r`, `--run` | Run after a successful build |
 | `-j`, `--job <num>` | Parallel compile jobs (default `4`) |
 | `-f`, `--force` | Rebuild reusable PHPX objects instead of using the cache |
 | `--build-dir <dir>` | Directory for generated C++ and intermediates |
 | `--dry` | Generate C++ only, skip compile and link |
 | `--php-version <8.4\|8.5>` | PHP syntax version to accept |
+| `--proxy <url>` | Proxy used for network transfers |
 | `--cxx-std <ver>` | C++ standard (e.g. `c++17`, `c++20`) |
 | `--march <arch>` | Target instruction set (e.g. `native`) |
 | `--target-platform <triple>` | Cross-compilation target triple |
@@ -714,8 +789,9 @@ source <(./tpc --generate-completion=bash)
 
 ## Troubleshooting
 
-- **`libphp.so` / `libphp.dylib` is missing:** install/build the matching PHP embed SAPI, set
-  `PHP_HOME`, or let `bin/tpc.php` offer the interactive Linux installer.
+- **`libphp.so` / `libphp.dylib` is missing:** install the matching Embed SAPI,
+  set `PHP_HOME`, accept the interactive `php-builder` prompt, or pass
+  `--php-builder='extensions: []; zts: off'` in non-interactive builds.
 - **PHPX cannot be found:** set `PHPX_HOME` to a PHPX installation containing
   `include/` and `lib/libphpx.so` (or the platform equivalent), then build PHPX
   before compiling the project.
@@ -763,6 +839,15 @@ PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
 ```
 
+`project.yml` deliberately uses the source tree's Composer installation for
+development and PHPT. Release packaging installs production dependencies and
+builds the standalone compiler separately with `project-release.yml`:
+
+```bash
+composer install --no-dev --classmap-authoritative
+PHPX_HOME=/path/to/phpx php bin/tpc.php project-release.yml --job 2 --no-progress
+```
+
 Static analysis and the source-derived coverage matrix are separate checks:
 
 ```bash
@@ -784,6 +869,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 ## Documentation
 
 - [Quick Start](docs/en/QUICKSTART.md) — minimal compilation flow
+- [Embedded PHP dependencies](docs/en/EMBEDDED_FILES.md) — package Composer vendor and runtime resources in an executable
 - [Change log](CHANGELOG.md) — breaking changes and pre-1.0 upgrade notes
 - [Compilation modes](docs/en/COMPILATION_MODES.md) — `bin`, `ext`, `lib`
 - [Compiler CLI](docs/en/COMPILER_CLI.md) — CLI arguments and project config

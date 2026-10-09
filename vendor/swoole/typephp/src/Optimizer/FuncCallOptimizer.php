@@ -83,7 +83,7 @@ trait FuncCallOptimizer
             'is_scalar', 'is_numeric', 'is_countable', 'is_iterable',
             'array_is_list', 'is_dir', 'is_file', 'file_exists', 'realpath',
             'in_array', 'array_search',
-            'strtotime', 'md5', 'sha1', 'hash', 'print_r',
+            'md5', 'sha1', 'hash', 'print_r',
             'base64_encode', 'base64_decode',
             'urlencode', 'urldecode', 'rawurlencode', 'rawurldecode',
             'json_encode', 'json_decode', 'serialize', 'unserialize',
@@ -1177,6 +1177,11 @@ trait FuncCallOptimizer
         if (!$this->hasOptimizerSafeReflectedArguments($n, $e, $c)) {
             return false;
         }
+        // offsetExists only matches PHP key semantics for integer/string keys.
+        // Other keys need Zend's conversions, diagnostics and TypeErrors.
+        if (!in_array($this->detectTypeOfExpr($e->args[0]->value), [Type::INT, Type::STR], true)) {
+            return false;
+        }
         // The C++ receiver is PHP's second argument, but PHP still evaluates
         // the key first. Resolve both in source order before rearranging them.
         $key = $this->getArg($e, 0);
@@ -1421,17 +1426,26 @@ trait FuncCallOptimizer
         }
         $funcName = $expr->args[0]->value;
         if ($this->isScalarString($funcName)) {
-            $nameLower = strtolower(trim($funcName->value, '\\'));
-            $nativeFunction = $this->findNativeFunction($nameLower);
-            if ($nativeFunction) {
-                // A function whose ABI contains Native pointers is callable
-                // only from generated TypePHP C++. It has no Zend wrapper and
-                // therefore must remain invisible to function_exists().
-                return $this->functionRequiresNativeAbi($this->getFunction($nativeFunction))
-                    ? 'false'
-                    : 'true';
+            // Runtime function names are absolute, case-insensitive strings.
+            // PHP accepts one leading slash, but neither namespace/import
+            // resolution nor trimming other slashes applies to these names.
+            $nameLower = strtolower($funcName->value);
+            if (str_starts_with($nameLower, '\\')) {
+                $nameLower = substr($nameLower, 1);
             }
-            $funcName = $this->getLiteralString($nameLower);
+            $nativeFunction = $this->escapeNamespace($nameLower);
+            $this->checkFunction($nativeFunction);
+            if ($this->hasFunction($nativeFunction)) {
+                $function = $this->getFunction($nativeFunction);
+                // Escaped C++ names are not an exact PHP-name lookup: a
+                // namespace separator and literal underscores can collide.
+                if (!$function->method && strtolower($function->getNamespacedName()) === $nameLower) {
+                    // Native-pointer ABIs have no Zend wrapper and must
+                    // remain invisible to function_exists().
+                    return $this->functionRequiresNativeAbi($function) ? 'false' : 'true';
+                }
+            }
+            $funcName = $this->getLiteralString($funcName->value);
             return 'php::fn::function_exists(' . $funcName . ')';
         }
         return 'php::fn::function_exists(' . $this->parseIdentifier($funcName) . ')';

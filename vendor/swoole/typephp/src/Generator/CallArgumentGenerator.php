@@ -972,6 +972,7 @@ trait CallArgumentGenerator
         return '&' . $tmpRef;
     }
 
+    /** @phpstan-assert-if-true Node\Expr\MethodCall $expr */
     protected function isToRefCall(NodeAbstract $expr): bool
     {
         return $this->isMethodCall($expr)

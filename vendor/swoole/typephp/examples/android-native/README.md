@@ -11,16 +11,23 @@ Prerequisites:
 - Android SDK Platform/Build Tools 36
 - Android NDK r27 or newer
 - JDK with `javac` and `keytool`
-- the PHPX Android SDK produced by `phpx/sdk/build-native.sh`
+- the compiler Composer dependencies, including php-nano and PHPX sources
 
 Build:
 
 ```sh
 export ANDROID_SDK_ROOT=/home/swoole/soft/android-sdk
 export ANDROID_NDK_HOME=/home/swoole/soft/android-ndk-r27d
-export PHPX_ANDROID_SDK_DIR=/path/to/android-arm64-v8a-sdk
-./build-app.sh
+export PHPX_HOME=/path/to/phpx
+./build-app.sh --nano
 ```
+
+`tpc.php` itself still runs dynamically on the host PHP. `--nano` applies to
+the generated JNI shared library, which compiles the selected php-nano and PHPX
+sources directly and does not require a prebuilt Android `libphp.a` or
+`libphpx.a`. For a non-Nano build, additionally set
+`PHPX_ANDROID_SDK_DIR` to the SDK produced by `phpx/sdk/build-native.sh` and run
+`./build-app.sh` without `--nano`.
 
 The result is `dist/typephp-android-hello-debug.apk`. With an arm64 Android
 device connected and USB debugging enabled, install and launch it using:

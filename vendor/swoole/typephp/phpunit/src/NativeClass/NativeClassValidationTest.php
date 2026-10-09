@@ -89,6 +89,41 @@ final class NativeClassValidationTest extends \BaseTest
         self::assertStringNotContainsString('nativeForwardGlobal.attr(', $code);
     }
 
+    /**
+     * @dataProvider nativeGlobalKeywordCaseProvider
+     */
+    public function testDiscoversNativeGlobalSlotWithCaseInsensitiveKeyword(string $writer): void
+    {
+        global $translator;
+
+        $compiler = \TypePhp\CompilerTest::create(TYPEPHP_ROOT_PATH);
+        $translator = $compiler;
+        $directory = dirname(__DIR__, 2) . '/code/native-class-global-keyword-case';
+        $files = [$directory . '/reader.php', $directory . '/' . $writer];
+        $compiler->discoverNativeClassDeclarations($files);
+        foreach ($files as $file) {
+            $compiler->prepareFile($file);
+        }
+        $compiler->discoverNativeGlobalObjects($files);
+        $reader = $compiler->convertFile($files[0]);
+        $compiler->convertFile($files[1]);
+
+        $code = file_get_contents($reader);
+        self::assertIsString($code);
+        self::assertStringContainsString(
+            'php::nativeRequireObject(caseSlot, "NativeCaseValue")->value',
+            $code,
+        );
+    }
+
+    public static function nativeGlobalKeywordCaseProvider(): array
+    {
+        return [
+            'uppercase' => ['uppercase.php'],
+            'mixed case' => ['mixed-case.php'],
+        ];
+    }
+
     public function testRejectsNativeAttributeOnInterface(): void
     {
         $this->expectException(\TypePhp\Exception\SyntaxError::class);
@@ -138,6 +173,15 @@ final class NativeClassValidationTest extends \BaseTest
         $this->expectException(TestError::class);
         $this->expectExceptionMessage('Native class static properties are not supported');
         $this->compile('native-class-static-property.php');
+    }
+
+    public function testRejectsUint64Property(): void
+    {
+        $this->expectException(\TypePhp\Exception\SyntaxError::class);
+        $this->expectExceptionMessage(
+            'Native property type `uint64` is not supported because it cannot be represented by php::Int',
+        );
+        $this->compile('native-class-uint64-property.php');
     }
 
     public function testRejectsInheritanceAcrossObjectModels(): void

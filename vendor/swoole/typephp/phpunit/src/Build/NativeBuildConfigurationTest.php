@@ -115,6 +115,36 @@ final class NativeBuildConfigurationTest extends TestCase
         }
     }
 
+    public function testAppleNanoKeepsDarwinSdkTypesVisibleUnderPosixProfile(): void
+    {
+        foreach ([new Macos(), new Ios()] as $platform) {
+            $compiler = $this->newCompiler($platform);
+            $compiler->enableNanoForTest();
+            $defines = $compiler->getCommonCompileOptionsForTest()['user_defines'];
+
+            self::assertContains('_POSIX_C_SOURCE=200809L', $defines);
+            self::assertContains('_DARWIN_C_SOURCE=1', $defines);
+        }
+
+        $compiler = $this->newCompiler(new Linux());
+        $compiler->enableNanoForTest();
+        self::assertNotContains(
+            '_DARWIN_C_SOURCE=1',
+            $compiler->getCommonCompileOptionsForTest()['user_defines'],
+        );
+    }
+
+    public function testIosNanoUsesDarwinDeadStripLinkerFlag(): void
+    {
+        $compiler = $this->newCompiler(new Ios());
+        $compiler->enableNanoForTest();
+
+        $options = $compiler->getLinkCommandOptionsForTest();
+
+        self::assertStringContainsString('-Wl,-dead_strip', $options['ldflags']);
+        self::assertStringNotContainsString('-Wl,--gc-sections', $options['ldflags']);
+    }
+
     public function testAndroidResolvesSelfContainedSdkAndSystemLibraries(): void
     {
         $phpxDir = $this->temporaryDirectory('phpx-android-host');
@@ -151,6 +181,20 @@ final class NativeBuildConfigurationTest extends TestCase
         self::assertTrue(Android::supportsTarget('aarch64-linux-android24'));
         self::assertFalse(Android::supportsTarget('x86_64-linux-android24'));
         self::assertSame(24, Android::getApiLevel('aarch64-linux-android24'));
+    }
+
+    public function testAndroidNanoLibraryDoesNotRequirePrebuiltPhpSdk(): void
+    {
+        $compiler = $this->newCompiler(new Android());
+        $compiler->setBuildMode(\TypePhp\CompilerBase::BUILD_MODE_LIB);
+        $compiler->enableNanoForTest();
+
+        self::assertSame([], $compiler->getLibraryPathsForTest());
+        self::assertSame([], $compiler->getLibrariesForTest());
+        $defines = $compiler->getCommonCompileOptionsForTest()['user_defines'];
+        self::assertContains('PHPX_ANDROID=1', $defines);
+        self::assertContains('TYPEPHP_NO_MAIN=1', $defines);
+        self::assertContains('PHP_NANO=1', $defines);
     }
 
     public function testNativeModulesDoNotFallBackToStaticPhpx(): void
@@ -262,6 +306,16 @@ final class NativeBuildConfigurationTest extends TestCase
             public function getCommonCompileOptionsForTest(): array
             {
                 return $this->getCommonCompileCommandOptions()->toArray();
+            }
+
+            public function getLinkCommandOptionsForTest(): array
+            {
+                return $this->getLinkCommandOptions()->toArray();
+            }
+
+            public function enableNanoForTest(): void
+            {
+                $this->nanoMode = true;
             }
         };
 

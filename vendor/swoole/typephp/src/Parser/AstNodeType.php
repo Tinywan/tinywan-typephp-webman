@@ -86,6 +86,7 @@ trait AstNodeType
         return $expr instanceof Expr\FuncCall;
     }
 
+    /** @phpstan-assert-if-true Expr\StaticCall $expr */
     protected function isStdRefCall(Node $expr): bool
     {
         return $this->isStaticCall($expr)

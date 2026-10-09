@@ -125,6 +125,9 @@ final class CompileTimeAttribute
 
     public static function consume(Node $node, string $name): bool
     {
+        if (!property_exists($node, 'attrGroups')) {
+            return false;
+        }
         $found = false;
         foreach ($node->attrGroups as $groupIndex => $group) {
             foreach ($group->attrs as $attributeIndex => $attribute) {
@@ -146,6 +149,9 @@ final class CompileTimeAttribute
 
     public static function remove(Node $node, string $name): bool
     {
+        if (!property_exists($node, 'attrGroups')) {
+            return false;
+        }
         $found = false;
         foreach ($node->attrGroups as $groupIndex => $group) {
             foreach ($group->attrs as $attributeIndex => $attribute) {

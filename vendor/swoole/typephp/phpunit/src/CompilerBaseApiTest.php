@@ -1,16 +1,27 @@
 <?php
+/**
+ * This file is part of TypePHP(AOT).
+ *
+ * @link     https://www.swoole.com/aot/
+ * @contact  service@swoole.com
+ */
 
 namespace TypePhp\Tests;
 
 use PHPUnit\Framework\TestCase;
-use TypePhp\CompilerTest;
+use TypePhp\Build\PhpBuilderConfiguration;
 use TypePhp\CompilerBase;
-use TypePhp\Metadata\Constants;
-use TypePhp\Type;
+use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
+use TypePhp\Metadata\Constants;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\Windows;
+use TypePhp\Type;
 
+/**
+ * @internal
+ * @coversNothing
+ */
 class CompilerBaseApiTest extends TestCase
 {
     private string $testDir;
@@ -60,7 +71,11 @@ class CompilerBaseApiTest extends TestCase
 
     private function getPropertyValue(string $name): mixed
     {
-        $prop = $this->ref->getProperty($name);
+        $class = $this->ref;
+        while (!$class->hasProperty($name) && ($parent = $class->getParentClass()) !== false) {
+            $class = $parent;
+        }
+        $prop = $class->getProperty($name);
         $prop->setAccessible(true);
         return $prop->getValue($this->compiler);
     }
@@ -153,7 +168,7 @@ PHP);
         foreach (['classMap', 'persistentClassMap', 'funcMap', 'persistentFuncMap', 'persistentPropMap'] as $map) {
             $this->assertSame([], $this->getPropertyValue($map), $map);
         }
-        $defaults = $this->compiler->getClassDef('CachePhase\\Defaults');
+        $defaults = $this->compiler->getClassDef('CachePhase\Defaults');
         $this->assertNotNull($defaults);
         $this->assertInstanceOf(
             \PhpParser\Node\Expr\ClassConstFetch::class,
@@ -169,7 +184,7 @@ PHP);
 
         $this->assertSame([], $this->getPropertyValue('classMap'));
         $this->assertArrayHasKey(
-            'CachePhase\\LateClass',
+            'CachePhase\LateClass',
             $this->getPropertyValue('persistentClassMap'),
         );
         $this->assertNotSame('', $defaults->getConstant('VALUE')->value);
@@ -236,8 +251,15 @@ PHP);
         $this->compiler->setBuildMode('extension');
         $this->assertSame(CompilerBase::BUILD_MODE_EXT, $this->compiler->getBuildMode());
 
-        $this->compiler->setBuildMode('cli');
+        $this->compiler->setBuildMode('binary');
         $this->assertSame(CompilerBase::BUILD_MODE_BIN, $this->compiler->getBuildMode());
+    }
+
+    public function testCliIsNotAcceptedAsABuildMode(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Invalid build mode `cli`. Expected bin, lib, or ext.');
+        $this->compiler->setBuildMode('cli');
     }
 
     public function testPhpLanguageVersionControlsParser(): void
@@ -431,7 +453,7 @@ PHP);
 
     public function testUnqualifiedRuntimeConstantUsesNamespaceFallback(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Worker');
+        $this->setPropertyValue('namespace', 'App\Worker');
         $this->setPropertyValue('noLiteralStrings', true);
 
         $code = $this->invokeMethod(
@@ -440,23 +462,23 @@ PHP);
         );
 
         $this->assertStringNotContainsString('php::fn::defined(', $code);
-        $this->assertStringContainsString('App\\\\Worker\\\\COMPOSER_PATH', $code);
+        $this->assertStringContainsString('App\\\Worker\\\COMPOSER_PATH', $code);
         $this->assertStringEndsWith(', php::ConstantLookup::UnqualifiedInNamespace)', $code);
         $this->assertStringNotContainsString('php::constant(nullptr,', $code);
     }
 
     public function testQualifiedRuntimeConstantDoesNotUseGlobalFallback(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Worker');
+        $this->setPropertyValue('namespace', 'App\Worker');
         $this->setPropertyValue('noLiteralStrings', true);
 
         $code = $this->invokeMethod(
             'parseConstFetch',
-            new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name('Config\\PATH'))
+            new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name('Config\PATH'))
         );
 
         $this->assertStringNotContainsString('php::fn::defined(', $code);
-        $this->assertStringContainsString('App\\\\Worker\\\\Config\\\\PATH', $code);
+        $this->assertStringContainsString('App\\\Worker\\\Config\\\PATH', $code);
     }
 
     public function testInlineStringArrayKeyUsesZendStringPointer(): void
@@ -559,6 +581,10 @@ extension-dependencies:
   - pdo_mysql
   - curl
   - curl
+version: 1.2.3
+info:
+  Author: TypePHP Team
+  Description: Native PHP extension
 YAML);
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -578,8 +604,27 @@ YAML);
         $this->assertSame(['curl', 'ssl'], $this->compiler->getLinkLibs());
         $this->assertSame(['/usr/local/lib', '/opt/custom/lib'], $this->compiler->getLinkPaths());
         $this->assertSame(['pdo_mysql', 'curl'], $this->compiler->getExtensionDependencies());
+        $this->assertSame('1.2.3', $this->getPropertyValue('extensionVersion'));
+        $this->assertSame([
+            'Author' => 'TypePHP Team',
+            'Description' => 'Native PHP extension',
+        ], $this->getPropertyValue('extensionInfo'));
         $this->assertSame('/tmp/project-build', $this->compiler->getBuildDir());
         $this->assertTrue($this->getPropertyValue('formatCode'));
+    }
+
+    public function testParseProjectYamlRejectsInvalidExtensionMetadata(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+info:
+  - TypePHP Team
+YAML);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`info` must be a mapping of labels to values');
+        $this->invokeMethod('parseProjectYaml', $projectFile);
     }
 
     public function testParseProjectYamlRejectsInvalidExtensionDependencies(): void
@@ -662,9 +707,156 @@ YAML);
             "zend_module_entry typephp_app_module_entry = {\n"
             . "    STANDARD_MODULE_HEADER_EX,\n"
             . "    nullptr,\n"
-            . "    typephp_app_module_deps,",
+            . '    typephp_app_module_deps,',
             $extension,
         );
+    }
+
+    public function testExtensionMetadataIsWrittenToModuleEntryAndPhpInfo(): void
+    {
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+name: metadata_demo
+sources:
+  - main.php
+version: 2.4.1
+info:
+  Maintainer: 'TypePHP "Core" Team'
+  Description: 'Native PHP\C++ extension'
+  Stable: true
+YAML);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $this->compiler->convertFile($file);
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringContainsString('PHP_MINFO_FUNCTION(typephp_metadata_demo)', $extension);
+        $this->assertStringContainsString(
+            'php_info_print_table_header(2, "typephp_metadata_demo support", "enabled");',
+            $extension,
+        );
+        $this->assertStringContainsString('php_info_print_table_row(2, "Maintainer", "TypePHP \"Core\" Team");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Description", "Native PHP\\\C++ extension");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Stable", "true");', $extension);
+        $this->assertStringContainsString(
+            "    PHP_MINFO(typephp_metadata_demo),\n"
+            . "    \"2.4.1\",\n"
+            . '    STANDARD_MODULE_PROPERTIES,',
+            $extension,
+        );
+    }
+
+    public function testNanoBuildDoesNotGeneratePhpInfoHandlerForProjectMetadata(): void
+    {
+        global $translator;
+        $translator = $this->compiler;
+        $this->setPropertyValue('nanoMode', true);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+name: nano_metadata_demo
+sources:
+  - main.php
+version: 2.4.1
+info:
+  Maintainer: TypePHP Team
+YAML);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $this->compiler->convertFile($file);
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringNotContainsString('PHP_MINFO_FUNCTION(nano_metadata_demo)', $extension);
+        $this->assertStringNotContainsString('php_info_print_table_', $extension);
+        $this->assertStringContainsString(
+            "    PHP_RSHUTDOWN(typephp_nano_metadata_demo),\n"
+            . "    nullptr,\n"
+            . "    \"2.4.1\",\n"
+            . '    STANDARD_MODULE_PROPERTIES,',
+            $extension,
+        );
+    }
+
+    public function testExtensionWithoutMetadataKeepsNullInfoAndVersion(): void
+    {
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+YAML);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $this->compiler->convertFile($file);
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringNotContainsString('PHP_MINFO_FUNCTION(typephp_app)', $extension);
+        $this->assertStringContainsString(
+            "    PHP_RSHUTDOWN(typephp_app),\n"
+            . "    nullptr,\n"
+            . "    nullptr,\n"
+            . '    STANDARD_MODULE_PROPERTIES,',
+            $extension,
+        );
+    }
+
+    public function testInternalSymbolExtensionsAreDetectedAsModuleDependencies(): void
+    {
+        if (!extension_loaded('mbstring')) {
+            $this->markTestSkipped('mbstring extension is not available');
+        }
+
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+extension-dependencies:
+  - MBSTRING
+YAML);
+        file_put_contents(dirname($projectFile) . '/main.php', <<<'PHP'
+<?php
+function main(): void
+{
+    strlen('typephp');
+    mb_strlen('类型');
+    DateTimeInterface::ATOM;
+    new ReflectionClass(stdClass::class);
+}
+PHP);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        $generatedSources = [];
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $generatedFile = $this->compiler->convertFile($file);
+            if ($generatedFile !== null) {
+                $generatedSources[] = file_get_contents($generatedFile);
+            }
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringContainsString('php::toInt(php::call(', implode("\n", $generatedSources));
+        $this->assertSame(1, substr_count($extension, 'ZEND_MOD_REQUIRED("MBSTRING")'));
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("Core")', $extension);
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("date")', $extension);
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("Reflection")', $extension);
+        $this->assertStringNotContainsString('ZEND_MOD_REQUIRED("mbstring")', $extension);
     }
 
     public function testParseProjectYamlSupportsCustomFilenameAndRelativeBuildDir(): void
@@ -744,6 +936,248 @@ YAML, 'myproject.yml', 'examples/tetris-sdl');
         $this->compiler->setTargetName('demo');
 
         $this->assertSame('demo.so', $this->invokeMethod('getTargetFileName'));
+    }
+
+    public function testSingleSapiTargetUsesConfiguredOutputName(): void
+    {
+        $this->compiler->setOutputPath($this->testDir . '/build/app');
+        $this->invokeMethod('configureSapiTargets', 'fpm');
+
+        $this->assertSame(
+            ['fpm' => $this->testDir . '/build/app'],
+            $this->compiler->getSapiOutputFiles(),
+        );
+    }
+
+    public function testMultipleSapiTargetsHaveExplicitTargetSuffixes(): void
+    {
+        $this->compiler->setOutputPath($this->testDir . '/build/app');
+        $this->invokeMethod('configureSapiTargets', ['embed', 'cli', 'fpm']);
+
+        $this->assertSame(
+            [
+                'embed' => $this->testDir . '/build/app-embed',
+                'cli' => $this->testDir . '/build/app-cli',
+                'fpm' => $this->testDir . '/build/app-fpm',
+            ],
+            $this->compiler->getSapiOutputFiles(),
+        );
+    }
+
+    public function testCombinedSapiModuleKeepsEmbedOnlyFunctionsOutOfCliAndFpm(): void
+    {
+        global $translator;
+        $compiler = CompilerTest::create(TYPEPHP_ROOT_PATH);
+        $translator = $compiler;
+        $compiler->setTargetName('combined_sapi');
+        $configureSapi = new \ReflectionMethod($compiler, 'configureSapiTargets');
+        $configureSapi->invoke($compiler, ['embed', 'cli', 'fpm']);
+        $testFile = TYPEPHP_ROOT_PATH . '/phpunit/code/compiler_api/extension_clean_maps.php';
+        $compiler->addFiles([$testFile]);
+        $compiler->prepareFile($testFile);
+        $compiler->convertFile($testFile);
+
+        $extension = (string) file_get_contents($compiler->genExtension());
+        self::assertStringContainsString('static const zend_function_entry ext_functions[]', $extension);
+        self::assertStringContainsString('static const zend_function_entry sapi_ext_functions[]', $extension);
+        self::assertSame(1, substr_count($extension, 'PHP_FE(cli_set_process_title'));
+        self::assertStringContainsString('_sapi_module_entry;', $extension);
+        self::assertStringContainsString('if (strcmp(sapi_module.name, "embed") == 0)', $extension);
+    }
+
+    public function testPhpBuilderUsesDefaultEmbedSapi(): void
+    {
+        $this->invokeMethod('configurePhpBuilder', PhpBuilderConfiguration::fromYaml([]));
+
+        $this->assertSame(['embed'], $this->compiler->getSapiTargets());
+        $this->assertTrue($this->compiler->isPhpBuilderBuild());
+        $this->assertFalse($this->compiler->isSapiBuild());
+        $this->assertTrue($this->compiler->isBuildModeBin());
+    }
+
+    public function testCliSapiRequiresPhpBuilder(): void
+    {
+        $this->invokeMethod('configureSapiTargets', 'fpm');
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('The cli and fpm SAPIs require `php-builder`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testSapiOptionIsOnlyValidForBinaryMode(): void
+    {
+        $this->compiler->setBuildMode('lib');
+        $this->invokeMethod('configureSapiTargets', 'embed');
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`sapi` is only supported with `mode: bin`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testPhpBuilderIsOnlyValidForBinaryMode(): void
+    {
+        $this->compiler->setBuildMode('ext');
+        $this->invokeMethod('configurePhpBuilder', PhpBuilderConfiguration::fromYaml([]));
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`php-builder` is only supported with `mode: bin`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testPhpBuilderCliEntryIsEmbeddedAndExcludedFromAotSources(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder:
+  zts: on
+  extensions: []
+sapi: cli
+entry: main.php
+sources:
+  - main.php
+YAML);
+
+        $files = $this->compiler->getFiles($projectFile);
+        $entry = realpath(dirname($projectFile) . '/main.php');
+
+        $this->assertSame([], $files);
+        $this->assertSame($entry, $this->getPropertyValue('sapiEntryFile'));
+        $this->assertSame([$entry], $this->getPropertyValue('embeddedFiles'));
+        $this->assertSame([$entry], $this->getPropertyValue('embeddedPhpFiles'));
+    }
+
+    public function testEntryWithoutCliIsIgnoredAndRemainsAnAotSource(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sapi: embed
+entry: main.php
+sources:
+  - main.php
+YAML);
+        $entry = realpath(dirname($projectFile) . '/main.php');
+
+        $climate = $this->getPropertyValue('climate');
+        $climate->output->defaultTo('buffer');
+        $files = $this->compiler->getFiles($projectFile);
+        $output = $climate->output->get('buffer')->get();
+
+        $this->assertStringContainsString(
+            '`entry` is ignored because `sapi` does not contain cli',
+            $output,
+        );
+        $this->assertSame([$entry], $files);
+        $this->assertNull($this->getPropertyValue('sapiEntryFile'));
+        $this->assertSame([], $this->getPropertyValue('embeddedFiles'));
+        $this->assertSame([], $this->getPropertyValue('embeddedPhpFiles'));
+    }
+
+    public function testMissingEntryWithoutCliIsIgnoredBeforeFileValidation(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sapi: fpm
+php-builder: {}
+entry: missing.php
+sources:
+  - main.php
+YAML);
+        $climate = $this->getPropertyValue('climate');
+        $climate->output->defaultTo('buffer');
+
+        $files = $this->compiler->getFiles($projectFile);
+
+        $this->assertSame([realpath(dirname($projectFile) . '/main.php')], $files);
+        $this->assertStringContainsString(
+            '`entry` is ignored because `sapi` does not contain cli',
+            $climate->output->get('buffer')->get(),
+        );
+        $this->assertNull($this->getPropertyValue('sapiEntryFile'));
+    }
+
+    public function testCommandLineEntryConfiguresPhpBuilderCliSapi(): void
+    {
+        global $argv;
+        $source = $this->testDir . '/foo.php';
+        $entry = $this->testDir . '/index.php';
+        file_put_contents($source, "<?php\nfunction compiled_helper(): void {}\n");
+        file_put_contents($entry, "<?php\ncompiled_helper();\n");
+        $argv = [
+            'compiler.php',
+            $source,
+            '--sapi=cli',
+            '--php-builder',
+            '--entry=' . $entry,
+        ];
+
+        $compiler = CompilerTest::create($this->testDir);
+        $files = $compiler->getFiles($source);
+        $reflection = new \ReflectionClass($compiler);
+        $entryProperty = $reflection->getProperty('sapiEntryFile');
+        $embeddedFilesProperty = (new \ReflectionClass(\TypePhp\Translator::class))
+            ->getProperty('embeddedFiles');
+
+        $this->assertSame([$source], $files);
+        $this->assertSame(['cli'], $compiler->getSapiTargets());
+        $this->assertTrue($compiler->isPhpBuilderBuild());
+        $this->assertSame($entry, $entryProperty->getValue($compiler));
+        $this->assertContains($entry, $embeddedFilesProperty->getValue($compiler));
+    }
+
+    public function testPhpBuilderCliRequiresEntry(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder: {}
+sapi: cli
+sources:
+  - main.php
+YAML);
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`sapi` containing cli requires an `entry` PHP file');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testPhpBuilderFpmDoesNotRequireCliEntry(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder: {}
+sapi: fpm
+sources:
+  - main.php
+YAML);
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+        $this->assertSame(['fpm'], $this->compiler->getSapiTargets());
+    }
+
+    public function testPhpBuilderFpmDoesNotRequireCompiledMainFunction(): void
+    {
+        global $translator;
+        $compiler = CompilerTest::create($this->testDir);
+        $translator = $compiler;
+        $compiler->setTargetName('fpm_without_main');
+        $configureSapi = new \ReflectionMethod($compiler, 'configureSapiTargets');
+        $configureSapi->invoke($compiler, 'fpm');
+        $source = $this->testDir . '/fpm-source.php';
+        file_put_contents($source, "<?php\nfunction request_handler(): string { return 'ok'; }\n");
+        $compiler->addFiles([$source]);
+        $compiler->prepareFile($source);
+        $compiler->convertFile($source);
+
+        $extension = (string) file_get_contents($compiler->genExtension());
+        self::assertStringContainsString('sapi_ext_functions', $extension);
+        self::assertStringNotContainsString('php::eval(', $extension);
+    }
+
+    public function testProjectWithoutAotSourcesUsesRuntimeDeclarationHeader(): void
+    {
+        $this->compiler->setTargetName('opcode_only');
+
+        $headers = $this->invokeMethod('genExtensionIncludeHeaderFiles');
+
+        $this->assertStringContainsString('php_opcode_only_runtime_decl.h', $headers);
+        $this->assertStringNotContainsString('php_opcode_only_func_decl.h', $headers);
+        $this->assertStringNotContainsString('php_opcode_only_data_decl.h', $headers);
     }
 
     public function testGeneratedZendModuleAndProjectNamespaceUseDistinctPrefixes(): void
@@ -839,6 +1273,22 @@ YAML, 'myproject.yml', 'cli-output');
         $this->assertSame('out_file', $targetProp->getValue($compiler));
     }
 
+    public function testBarePhpBuilderOptionKeepsFollowingSourcePositional(): void
+    {
+        global $argv;
+        $source = $this->testDir . '/hello.php';
+        file_put_contents($source, "<?php\nfunction main(): void {}\n");
+        $argv = ['compiler.php', '--php-builder', $source];
+
+        $compiler = CompilerTest::create($this->testDir);
+        $method = (new \ReflectionClass($compiler))->getMethod('applyCommandLineArguments');
+        $method->setAccessible(true);
+        $method->invoke($compiler);
+
+        $this->assertSame(['compiler.php', '--php-builder={}', $source], $argv);
+        $this->assertTrue($compiler->isPhpBuilderBuild());
+    }
+
     public function testApplyCommandLineArgumentsDoesNotClearYamlRepeatableOptionsWhenCliAbsent(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'
@@ -882,6 +1332,59 @@ YAML);
 
         $this->assertSame(['typephp-os'], $this->compiler->getLinkLibs());
         $this->assertSame([dirname($projectFile) . '/build'], $this->compiler->getLinkPaths());
+    }
+
+    public function testNanoModeSupportsLibraryBuildsButRejectsExtensions(): void
+    {
+        $this->setPropertyValue('nanoMode', true);
+        $this->setPropertyValue('buildMode', CompilerBase::BUILD_MODE_LIB);
+        $this->invokeMethod('applyCommandLineArguments');
+
+        $this->assertSame(CompilerBase::BUILD_MODE_LIB, $this->compiler->getBuildMode());
+
+        $this->setPropertyValue('buildMode', CompilerBase::BUILD_MODE_EXT);
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('--nano does not support extension mode (-m ext)');
+        $this->invokeMethod('applyCommandLineArguments');
+    }
+
+    public function testWindowsNanoComposesRuntimeSourcesAndRejectsExtensionMode(): void
+    {
+        global $argv;
+        $argv = ['compiler.php', '--nano'];
+        $compiler = CompilerTest::create($this->testDir);
+        $reflection = new \ReflectionClass($compiler);
+
+        $platform = $reflection->getProperty('platform');
+        $platform->setAccessible(true);
+        $platform->setValue($compiler, new Windows());
+
+        $apply = $reflection->getMethod('applyCommandLineArguments');
+        $apply->setAccessible(true);
+        $apply->invoke($compiler);
+
+        self::assertTrue($compiler->isNanoPolicyMode());
+        self::assertTrue($compiler->isNanoMode());
+
+        $buildMode = $reflection->getProperty('buildMode');
+        $buildMode->setAccessible(true);
+        $buildMode->setValue($compiler, CompilerBase::BUILD_MODE_EXT);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('--nano does not support extension mode (-m ext)');
+        $apply->invoke($compiler);
+    }
+
+    public function testWindowsNanoRequiresCxx17(): void
+    {
+        $this->setPropertyValue('nanoPolicyMode', true);
+        $this->setPropertyValue('nanoMode', false);
+        $this->setPropertyValue('platform', new Windows());
+        $this->setPropertyValue('cxxStd', 'c++20');
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('--nano requires the C++17 language standard');
+        $this->invokeMethod('applyCommandLineArguments');
     }
 
     public function testParseProjectYamlFiltersIgnoredFilesFromReturnedSources(): void
@@ -1115,7 +1618,7 @@ sources:
     if: PHP_OS_FAMILY >= "Linux"
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1129,7 +1632,7 @@ sources:
     if: PHP_VERSION
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1143,7 +1646,7 @@ sources:
     if: PHP_VERSION_ID >= getenv("MIN_PHP")
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1236,6 +1739,32 @@ YAML);
         );
     }
 
+    public function testNanoLibraryRuntimeEntryHasProjectSpecificCompileOptions(): void
+    {
+        $this->compiler->setTargetName('nano_module_accessor');
+        $this->setPropertyValue('buildMode', CompilerBase::BUILD_MODE_LIB);
+        $this->setPropertyValue('nanoMode', true);
+        $this->setPropertyValue('precompiledHeader', [
+            'header' => '/tmp/typephp_pch.hpp',
+            'artifact' => '/tmp/typephp_pch.hpp.gch',
+        ]);
+
+        $phpxDir = $this->invokeMethod('getPhpxDir');
+        $entry = $phpxDir . '/src/typephp/typephp_main_nano.cc';
+        $options = $this->invokeMethod('getSourceCompileCommandOptions', $entry, null);
+
+        $this->assertContains('TYPEPHP_PROJECT_NAME=nano_module_accessor', $options['user_defines']);
+        $this->assertContains('TYPEPHP_RUNTIME_EXPORTS=1', $options['user_defines']);
+        $this->assertArrayNotHasKey('forced_include', $options->toArray());
+        $this->assertArrayNotHasKey('precompiled_header', $options->toArray());
+        $this->assertFalse($this->compiler->hasMiscObjectFileCache($entry));
+
+        $nanoCore = dirname($phpxDir) . '/php-nano/src/core.cpp';
+        $this->setPropertyValue('nanoRuntimeSources', [$nanoCore => true]);
+        $coreOptions = $this->invokeMethod('getSourceCompileCommandOptions', $nanoCore, null);
+        $this->assertArrayNotHasKey('forced_include', $coreOptions->toArray());
+    }
+
     public function testProjectIndependentMiscObjectsUseSharedCacheScope(): void
     {
         $phpxDir = $this->invokeMethod('getPhpxDir');
@@ -1247,6 +1776,19 @@ YAML);
                 $sourceName,
             );
         }
+    }
+
+    public function testLibraryBuildDoesNotCompileExecutableProcessTitleSources(): void
+    {
+        $this->setPropertyValue('buildMode', CompilerBase::BUILD_MODE_LIB);
+        $phpxDir = $this->invokeMethod('getPhpxDir');
+
+        $sources = $this->invokeMethod('prepareNativeSourceFiles', []);
+
+        $this->assertContains($phpxDir . '/src/misc/typephp_runtime.cc', $sources);
+        $this->assertContains($phpxDir . '/src/misc/typephp_main.cc', $sources);
+        $this->assertNotContains($phpxDir . '/src/misc/php_cli_process_title.c', $sources);
+        $this->assertNotContains($phpxDir . '/src/misc/ps_title.c', $sources);
     }
 
     public function testProjectIndependentMiscObjectCacheSurvivesTargetNameChange(): void
@@ -1349,7 +1891,18 @@ YAML);
             $this->assertIsInt($moduleInitStart, $mode);
             $this->assertIsInt($moduleCleanStart, $mode);
             $moduleInit = substr($extension, $moduleInitStart, $moduleCleanStart - $moduleInitStart);
+            $moduleClean = substr($extension, $moduleCleanStart);
             $this->assertStringNotContainsString('slot.reset()', $moduleInit, $mode);
+            $this->assertStringNotContainsString(
+                'if (strcmp(sapi_module.name, "embed") == 0)',
+                $moduleClean,
+                $mode,
+            );
+            $this->assertStringNotContainsString(
+                'php::setStaticProperty("RequestStaticCache", "values", php::Array{});',
+                $moduleClean,
+                $mode,
+            );
             $this->assertMatchesRegularExpression(
                 '/PHP_RSHUTDOWN_FUNCTION\([^)]*\)\s*\{\s*'
                     . 'php::request_shutdown\(\);\s*'
@@ -1510,6 +2063,9 @@ YAML);
         $extension = file_get_contents($extensionFile);
         $this->assertStringContainsString('php::Str php_exported_defaults_arg_0_default_value() {', $extension);
         $this->assertStringContainsString('static php::Str _literal_strings[]', $extension);
+        $this->assertStringNotContainsString('_literal_string_values', $extension);
+        $this->assertStringNotContainsString('ZVAL_STRINGL(_literal_strings[', $extension);
+        $this->assertStringNotContainsString('ZVAL_NULL(_literal_strings[', $extension);
         $this->assertStringContainsString('php::Str &get_str(uint32_t index) noexcept {', $extension);
         $this->assertStringContainsString('return get_str(', $extension);
         $this->assertStringContainsString('php::Array php_exported_variadic_arg_0_default_value() {', $extension);
@@ -1587,7 +2143,7 @@ YAML);
             'TYPEPHP_COLD_ATTRIBUTE php::Str php_libraryapi__counter__label(',
             $phpCpp,
         );
-        $provider = $this->invokeMethod('getClass', 'LibraryApi\\InternalStringExtension');
+        $provider = $this->invokeMethod('getClass', 'LibraryApi\InternalStringExtension');
         $this->assertSame(Type::STR, $provider->methodsForTarget);
 
         $stubFile = $this->compiler->genLibraryImportStub($files);
@@ -1599,15 +2155,15 @@ YAML);
         $this->assertStringContainsString('public const int STEP = 2;', $stub);
         $this->assertStringContainsString('public int $value = 1;', $stub);
         $this->assertStringContainsString('#[\Constructor, \Getter, \Setter, \With]', $stub);
-        $this->assertStringContainsString("#[\Printer(fields: ['value', 'doubled'])]", $stub);
-        $this->assertStringContainsString("#[\Arrayable(['value'])]", $stub);
+        $this->assertStringContainsString("#[\\Printer(fields: ['value', 'doubled'])]", $stub);
+        $this->assertStringContainsString("#[\\Arrayable(['value'])]", $stub);
         $this->assertStringContainsString('#[\NotNull, \Validate(FILTER_VALIDATE_EMAIL)]', $stub);
         $this->assertStringContainsString('#[\MustUse, \Cold]', $stub);
         $this->assertStringContainsString('#[\MustUse, \Hot]', $stub);
         $this->assertStringContainsString('#[\Override]', $stub);
         $this->assertStringContainsString('#[\Immutable]', $stub);
         $this->assertMatchesRegularExpression(
-            '/function inspect\(\s*#\[\\\\Immutable\]\s*\\\\LibraryApi\\\\Counter \$counter\s*\): int/s',
+            '/function inspect\(\s*#\[\\\Immutable\]\s*\\\LibraryApi\\\Counter \$counter\s*\): int/s',
             $stub,
         );
         $this->assertMatchesRegularExpression(
@@ -1616,7 +2172,7 @@ YAML);
         );
         $this->assertStringContainsString('function add(int $amount = self::STEP): int', $stub);
         $this->assertMatchesRegularExpression(
-            '/function label\(\s*#\[\\\\NotNull, \\\\Validate\(FILTER_VALIDATE_EMAIL\)\]\s*string \$value\s*\): string/s',
+            '/function label\(\s*#\[\\\NotNull, \\\Validate\(FILTER_VALIDATE_EMAIL\)\]\s*string \$value\s*\): string/s',
             $stub,
         );
         $this->assertStringContainsString('function twice(int $value): int', $stub);
@@ -1955,8 +2511,8 @@ YAML);
     public function testGetNamespacedClassNameFullyQualified(): void
     {
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('\\App\\Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('\App\Entity\User')
         );
     }
 
@@ -1966,19 +2522,19 @@ YAML);
 
     public function testGetNamespacedClassNameWithUseAlias(): void
     {
-        $this->setPropertyValue('useAliases', ['user' => 'App\\Entity\\User']);
+        $this->setPropertyValue('useAliases', ['user' => 'App\Entity\User']);
         $this->assertEquals(
-            'App\\Entity\\User',
+            'App\Entity\User',
             $this->compiler->getNamespacedClassName('User')
         );
     }
 
     public function testGetNamespacedClassNameWithUseAliasSubNamespace(): void
     {
-        $this->setPropertyValue('useAliases', ['entity' => 'App\\Entity']);
+        $this->setPropertyValue('useAliases', ['entity' => 'App\Entity']);
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('Entity\User')
         );
     }
 
@@ -1986,25 +2542,25 @@ YAML);
     {
         $use = new \PhpParser\Node\Stmt\Use_([
             new \PhpParser\Node\UseItem(
-                new \PhpParser\Node\Name('Vendor\\Package\\Notes'),
+                new \PhpParser\Node\Name('Vendor\Package\Notes'),
                 new \PhpParser\Node\Identifier('NotesFactory'),
             ),
         ]);
 
         $this->invokeMethod('parseUse', $use);
-        $this->setPropertyValue('namespace', 'Application\\Api');
+        $this->setPropertyValue('namespace', 'Application\Api');
 
         $this->assertSame([], $this->getPropertyValue('useNamespaces'));
         $this->assertSame(
-            ['notesfactory' => 'Vendor\\Package\\Notes'],
+            ['notesfactory' => 'Vendor\Package\Notes'],
             $this->getPropertyValue('useAliases'),
         );
         $this->assertSame(
-            'Vendor\\Package\\Notes',
+            'Vendor\Package\Notes',
             $this->compiler->getNamespacedClassName('NOTESFACTORY'),
         );
         $this->assertSame(
-            'Application\\Api\\Notes',
+            'Application\Api\Notes',
             $this->compiler->getNamespacedClassName('Notes'),
         );
     }
@@ -2015,21 +2571,21 @@ YAML);
 
     public function testGetNamespacedClassNameWithUseNamespace(): void
     {
-        $this->setPropertyValue('useNamespaces', ['App\\Entity']);
+        $this->setPropertyValue('useNamespaces', ['App\Entity']);
         // The last segment of 'App\Entity' is 'Entity', matching input 'Entity'
         $this->assertEquals(
-            'App\\Entity',
+            'App\Entity',
             $this->compiler->getNamespacedClassName('Entity')
         );
     }
 
     public function testGetNamespacedClassNameWithUseNamespaceSub(): void
     {
-        $this->setPropertyValue('useNamespaces', ['App\\Entity']);
+        $this->setPropertyValue('useNamespaces', ['App\Entity']);
         // 'Entity\User' - first part 'Entity' matches the last part of 'App\Entity'
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('Entity\User')
         );
     }
 
@@ -2039,12 +2595,12 @@ YAML);
 
     public function testGetNamespacedClassNameWithCurrentNamespace(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Service');
+        $this->setPropertyValue('namespace', 'App\Service');
         // No matching alias or use namespace
         $this->setPropertyValue('useAliases', []);
         $this->setPropertyValue('useNamespaces', []);
         $this->assertEquals(
-            'App\\Service\\MyClass',
+            'App\Service\MyClass',
             $this->compiler->getNamespacedClassName('MyClass')
         );
     }
@@ -2066,11 +2622,11 @@ YAML);
 
     public function testGetNamespacedClassNameAliasPriority(): void
     {
-        $this->setPropertyValue('useAliases', ['user' => 'App\\Models\\User']);
-        $this->setPropertyValue('useNamespaces', ['App\\Controllers']);
+        $this->setPropertyValue('useAliases', ['user' => 'App\Models\User']);
+        $this->setPropertyValue('useNamespaces', ['App\Controllers']);
         // Alias should be checked first
         $this->assertEquals(
-            'App\\Models\\User',
+            'App\Models\User',
             $this->compiler->getNamespacedClassName('User')
         );
     }
@@ -2082,18 +2638,18 @@ YAML);
     public function testGetNamespacedFuncNameFullyQualified(): void
     {
         $this->assertEquals(
-            'App\\Lib\\helper_func',
-            $this->compiler->getNamespacedFuncName('\\App\\Lib\\helper_func')
+            'App\Lib\helper_func',
+            $this->compiler->getNamespacedFuncName('\App\Lib\helper_func')
         );
     }
 
     public function testGetNamespacedFuncNameWithUseFunction(): void
     {
         $this->setPropertyValue('useFunctions', [
-            'helper_func' => 'App\\Lib\\helper_func',
+            'helper_func' => 'App\Lib\helper_func',
         ]);
         $this->assertEquals(
-            'App\\Lib\\helper_func',
+            'App\Lib\helper_func',
             $this->compiler->getNamespacedFuncName('helper_func')
         );
     }
@@ -2113,7 +2669,7 @@ YAML);
 
     public function testGetNamespacedFuncNameNotInUseFunctions(): void
     {
-        $this->setPropertyValue('useFunctions', ['other' => 'Some\\Ns\\other']);
+        $this->setPropertyValue('useFunctions', ['other' => 'Some\Ns\other']);
         $this->assertEquals(
             'my_func',
             $this->compiler->getNamespacedFuncName('my_func')

@@ -350,8 +350,28 @@ TEST(std_misc, version_compare) {
     ASSERT_TRUE(fn::version_compare("1.0", "2.0", "!=").toBool());
     ASSERT_TRUE(fn::version_compare("1.0", "2.0", "<>").toBool());
     ASSERT_TRUE(fn::version_compare("1.0", "2.0", "ne").toBool());
-    ASSERT_EQ(fn::version_compare("1.0", "1.0", "").toInt(), 0);
-    try_call([]() { fn::version_compare("1", "2", "invalid"); }, "must be a valid comparison operator");
+    auto equal = fn::version_compare("1.0", "1.0", null);
+    ASSERT_TRUE(equal.isInt());
+    ASSERT_EQ(equal.toInt(), 0);
+    ASSERT_EQ(fn::version_compare("1.0", "2.0", null).toInt(), -1);
+    ASSERT_EQ(fn::version_compare("2.0", "1.0", null).toInt(), 1);
+}
+
+TEST(std_misc, version_compare_invalid_operator) {
+    for (const char *op : {"", "invalid"}) {
+        SCOPED_TRACE(op);
+        bool caught = false;
+        try {
+            fn::version_compare("1", "2", op);
+        } catch (zend_object *) {
+            auto exception = catchException();
+            EXPECT_TRUE(exception.instanceOf("ValueError"));
+            EXPECT_STREQ(exception.call("getMessage").toCString(),
+                         "version_compare(): Argument #3 ($operator) must be a valid comparison operator");
+            caught = true;
+        }
+        EXPECT_TRUE(caught);
+    }
 }
 
 // ========================
@@ -389,21 +409,6 @@ TEST(std_misc, gmdate_func) {
 
     auto d2 = fn::gmdate("Y-m-d");
     ASSERT_GT(d2.length(), 0);
-}
-
-TEST(std_misc, strtotime_func) {
-    auto ts1 = fn::strtotime("1970-01-01 00:00:00");
-    ASSERT_TRUE(ts1.isInt());
-    ASSERT_EQ(ts1.toInt(), 0);
-
-    auto ts2 = fn::strtotime("not a valid date string!!!");
-    ASSERT_TRUE(ts2.isFalse());
-
-    // second parameter: base timestamp
-    Variant baseTs(static_cast<Int>(100000));
-    auto ts3 = fn::strtotime("+1 day", baseTs);
-    ASSERT_TRUE(ts3.isInt());
-    ASSERT_NE(ts3.toInt(), -1);  // not a parse failure
 }
 
 // ========================
@@ -450,11 +455,59 @@ TEST(std_misc, shell_exec) {
 }
 
 TEST(std_misc, realpath) {
+    auto expected = call(getFunction("realpath"), {"/tmp"});
+    ASSERT_TRUE(expected.isString());
+
     auto path = fn::realpath("/tmp");
     ASSERT_TRUE(path.isString());
-    ASSERT_STREQ(path.toString().toCString(), "/tmp");
+    ASSERT_STREQ(path.toString().toCString(), expected.toString().toCString());
 
-    // expand_filepath resolves the path syntactically but does NOT verify existence
+    // PHP's realpath requires every path component to exist.
     auto resolved = fn::realpath("/no/such/path/xyz");
-    ASSERT_TRUE(resolved.isString());
+    ASSERT_TRUE(resolved.isFalse());
+}
+
+TEST(std_misc, realpath_symlinks) {
+    auto fixture = call(getFunction("tempnam"), {eval("return sys_get_temp_dir();"), "phpx-realpath-"}).toString();
+    auto symlink = fixture.concat(".link");
+    auto dangling_symlink = fixture.concat(".dangling");
+    ASSERT_TRUE(call(getFunction("symlink"), {fixture, symlink}).toBool());
+    ASSERT_TRUE(call(getFunction("symlink"), {fixture.concat("-missing"), dangling_symlink}).toBool());
+
+    auto expected = call(getFunction("realpath"), {fixture});
+    ASSERT_TRUE(expected.isString());
+    auto real_file = fn::realpath(fixture);
+    ASSERT_TRUE(real_file.isString());
+    ASSERT_STREQ(real_file.toString().toCString(), expected.toString().toCString());
+    auto resolved_symlink = fn::realpath(symlink);
+    ASSERT_TRUE(resolved_symlink.isString());
+    ASSERT_STREQ(resolved_symlink.toString().toCString(), expected.toString().toCString());
+    ASSERT_TRUE(fn::realpath(dangling_symlink).isFalse());
+
+    call(getFunction("unlink"), {dangling_symlink});
+    call(getFunction("unlink"), {symlink});
+    call(getFunction("unlink"), {fixture});
+}
+
+TEST(std_misc, realpath_null_byte) {
+    bool caught = false;
+    try {
+        fn::realpath(String("/tmp\0suffix", sizeof("/tmp\0suffix") - 1));
+    } catch (zend_object *) {
+        auto exception = catchException();
+        EXPECT_TRUE(exception.instanceOf("ValueError"));
+        EXPECT_STREQ(exception.call("getMessage").toString().toCString(),
+                     "realpath(): Argument #1 ($path) must not contain any null bytes");
+        caught = true;
+    }
+    EXPECT_TRUE(caught);
+}
+
+TEST(std_misc, realpath_open_basedir) {
+    auto blocked = run_in_child_capture_stdout([]() -> int {
+        eval("ini_set('open_basedir', '/phpx-realpath-not-allowed');");
+        return fn::realpath("/tmp").isFalse() ? 0 : 1;
+    });
+    ASSERT_TRUE(blocked.exited) << blocked.output;
+    ASSERT_EQ(blocked.exit_code, 0) << blocked.output;
 }

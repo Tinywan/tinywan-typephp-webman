@@ -517,7 +517,7 @@ trait AssignOpTrait
                 // Parse and materialize the receiver before the right-hand
                 // expression. PHP evaluates an object/property target before
                 // its assigned value, and C++ operand order must not decide it.
-                $leftExpr = $this->parsePropertyFetch($left);
+                $leftExpr = $this->parsePropertyFetchUpdate($left);
                 if ($def->type === Type::OBJECT && $this->isNativeObjectClass($def->class)) {
                     if ($this->isNull($right)) {
                         if (!$def->nullable) {
@@ -538,7 +538,10 @@ trait AssignOpTrait
                 if ($def->type !== Type::VAR) {
                     $rightExpr = $this->convertExprFromType($def->type, $rightExpr);
                 }
-                return $leftExpr . ' = ' . $rightExpr;
+                return $this->promoteNativeObjectPropertyValue(
+                    $def,
+                    $leftExpr . ' = ' . $rightExpr,
+                );
             }
         }
 
@@ -1308,7 +1311,11 @@ trait AssignOpTrait
             ? $def->type
             : $rightType;
 
-        return $var . ' ' . $op . ' (' . $this->convertNativePropertyWriteExpr($def->type, $effectiveRightType, $rightExpr) . ')';
+        return $this->promoteNativeObjectPropertyValue(
+            $def,
+            $var . ' ' . $op . ' ('
+                . $this->convertNativePropertyWriteExpr($def->type, $effectiveRightType, $rightExpr) . ')',
+        );
     }
 
     protected function convertNativePropertyWriteExpr(string $propertyType, string $rightType, string $rightExpr): string

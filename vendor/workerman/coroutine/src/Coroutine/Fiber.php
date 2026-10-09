@@ -150,3 +150,5 @@ class Fiber implements CoroutineInterface
     }
 
 }
+
+Fiber::init();

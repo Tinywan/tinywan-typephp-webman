@@ -23,7 +23,7 @@ final class TypedScalarArithmeticCodegenTest extends \BaseTest
     {
         $code = $this->compileFixture();
 
-        self::assertStringContainsString('php::fn::mod(a, b)', $code);
+        self::assertStringContainsString('php::toInt(php::fn::mod(a, b))', $code);
         self::assertStringNotContainsString('((a) % (b))', $code);
     }
 

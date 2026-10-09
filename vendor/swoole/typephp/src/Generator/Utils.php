@@ -158,7 +158,7 @@ trait Utils
 
     protected function escapeFileName(string $file): string
     {
-        return str_replace('-', '_', $file);
+        return str_replace(['-', ':', '<', '>', '"', '|', '?', '*'], '_', $file);
     }
 
     protected function unescapeVarName(string $name): string

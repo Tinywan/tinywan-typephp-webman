@@ -238,7 +238,7 @@ class Windows extends PlatformBase
         return '/DEBUG';
     }
 
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         return $this->buildPhpSdkIncludePaths($phpDir);
     }

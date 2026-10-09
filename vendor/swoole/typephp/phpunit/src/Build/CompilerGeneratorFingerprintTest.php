@@ -7,6 +7,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use ReflectionClass;
 use TypePhp\CompilerBase;
 use TypePhp\CompilerTest;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Entity\ClassDef;
 use TypePhp\Entity\FunctionDef;
 use TypePhp\Type;
@@ -17,13 +18,24 @@ final class CompilerGeneratorFingerprintTest extends TestCase
     public function testEmbeddedSnapshotIsUsedOnlyByNativeEntry(): void
     {
         define('TYPEPHP_COMPILER_BUILD_FINGERPRINT', str_repeat('a', 64));
-        $compiler = CompilerTest::create(TYPEPHP_ROOT_PATH);
+        $compiler = CompilerTest::create(
+            TYPEPHP_ROOT_PATH,
+            CompilerRuntime::nativeAt(TYPEPHP_ROOT_PATH, PHP_BINARY),
+        );
         $method = (new ReflectionClass(\TypePhp\Translator::class))->getMethod('getIncrementalGeneratorFingerprint');
         $native = $method->invoke($compiler);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', $native);
+        $reflection = new ReflectionClass($compiler);
+        while (!$reflection->hasProperty('opcodeBuildChecked')) {
+            $reflection = $reflection->getParentClass();
+        }
+        self::assertFalse($reflection->getProperty('opcodeBuildChecked')->getValue($compiler));
         self::assertSame($native, $method->invoke($compiler));
-        define('TYPEPHP_PHP_SCRIPT_ENTRY', true);
-        self::assertNotSame($native, $method->invoke($compiler));
+        $sourceCompiler = CompilerTest::create(
+            TYPEPHP_ROOT_PATH,
+            CompilerRuntime::source(TYPEPHP_ROOT_PATH, PHP_BINARY),
+        );
+        self::assertNotSame($native, $method->invoke($sourceCompiler));
     }
 
     public function testCompilerSnapshotIsStableAndChangesWithSourceOrOptions(): void

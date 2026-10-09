@@ -3,37 +3,40 @@ use TypePhp\Translator;
 use TypePhp\Build\WasiToolchain;
 use TypePhp\Build\WasiProjectConfig;
 use TypePhp\Build\PhpxLocator;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Build\NativeSourceProjectBuilder;
 use TypePhp\Build\NativeSourceProjectConfig;
+use TypePhp\Build\ProjectBuildRunner;
 use TypePhp\PythonTools\Command as PythonToolsCommand;
 use TypePhp\Cli\CompletionCommand;
+use TypePhp\Resolver\Reflection as ReflectionResolver;
 
 function main(int $argc, array $argv): void
+{
+    runCompiler($argc, $argv, CompilerRuntime::native($argv[0]));
+}
+
+function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
 {
     // Compiling a complete project keeps the parsed AST and generated sources in
     // memory. The default CLI limit (commonly 128M) is too small for larger builds.
     ini_set('memory_limit', '-1');
 
-    if (!defined('TYPEPHP_ROOT_PATH')) {
-        define('TYPEPHP_ROOT_PATH', getenv("TYPEPHP_HOME") ?: getcwd());
-    }
-    if (!defined('TYPEPHP_DEBUG')) {
-        define('TYPEPHP_DEBUG', true);
-    }
-    if (!defined('TYPEPHP_COMPILER_EXECUTABLE')) {
-        $compilerExecutable = realpath($argv[0]);
-        define(
-            'TYPEPHP_COMPILER_EXECUTABLE',
-            $compilerExecutable !== false ? $compilerExecutable : $argv[0],
-        );
+    // The late-loaded embed module is unloaded before PHP's object store. Drop
+    // cached reflector wrappers while their referenced internal symbols are
+    // still alive. Embed serves one request per compiler process; never add
+    // this traversal to an extension/CLI/FPM request-shutdown path.
+    if (php_sapi_name() === 'embed') {
+        register_shutdown_function([ReflectionResolver::class, 'clearCaches']);
     }
 
-    // The Zend PHP entrypoint loads the consumer project's Composer autoloader
-    // in bin/bootstrap.php. The AOT compiler starts here directly and therefore
-    // must load the dependencies packaged alongside tpc itself.
-    if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')) {
-        require_once resolveComposerAutoloader();
+    // The PHP entrypoint already loaded Composer's project autoloader in
+    // bin/bootstrap.php. The native binary loads its embedded copy here.
+    if (!$runtime->sourceEntry) {
+        require_once dirname(__DIR__) . '/vendor/autoload.php';
     }
+
+    configureProxyEnvironment($argv);
 
     $completionStatus = CompletionCommand::execute($argv);
     if ($completionStatus !== null) {
@@ -58,12 +61,12 @@ function main(int $argc, array $argv): void
         exit(1);
     }
     if ($nativeSourceProject) {
-        compileNativeSourceProject($argv);
+        compileNativeSourceProject($argv, $runtime);
         return;
     }
 
     if (getenv('TYPEPHP_WASM_INTERNAL_COMPILE') !== '1' && shouldCompileWasm($argv)) {
-        compileWasmProgram($argv);
+        compileWasmProgram($argv, $runtime);
         return;
     }
 
@@ -73,109 +76,58 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    $translator = Translator::getInstance();
-    $translator->setIndent('    ');
-    // Scan all PHP files and preprocess them.
-    $files = $translator->prepare($translator->parseArgv($argv));
-    // Generate the C++ source files.
-    $sourceFiles = $translator->convert($files);
-
-    $wasmManifest = getenv('TYPEPHP_WASM_INTERFACE_MANIFEST');
-    if (is_string($wasmManifest) && $wasmManifest !== '') {
-        $wasmWit = getenv('TYPEPHP_WASM_INTERFACE_WIT');
-        $wasmAdapter = getenv('TYPEPHP_WASM_INTERFACE_ADAPTER');
-        $wasmAsyncExports = getenv('TYPEPHP_WASM_INTERFACE_ASYNC_EXPORTS');
-        $wasmPackage = getenv('TYPEPHP_WASM_PACKAGE');
-        $wasmWorld = getenv('TYPEPHP_WASM_WORLD');
-        if (!is_string($wasmWit) || $wasmWit === ''
-            || !is_string($wasmAdapter) || $wasmAdapter === ''
-            || !is_string($wasmAsyncExports) || $wasmAsyncExports === ''
-            || !is_string($wasmPackage) || $wasmPackage === ''
-            || !is_string($wasmWorld) || $wasmWorld === '') {
-            throw new RuntimeException('Incomplete internal WASM interface configuration');
-        }
-        $translator->writeWasmInterface(
-            $wasmManifest,
-            $wasmWit,
-            $wasmAdapter,
-            $wasmAsyncExports,
-            $wasmPackage,
-            $wasmWorld,
-        );
-        $sourceFiles[] = $wasmAdapter;
-    }
-
-    // --dry mode: only generate the C++ code, without compiling.
-    if ($translator->isDryRun()) {
-        $buildDir = $translator->getBuildDir();
-        $count = count($sourceFiles);
-        $sourceListFile = getenv('TYPEPHP_GENERATED_SOURCE_LIST');
-        if (is_string($sourceListFile) && $sourceListFile !== '') {
-            $sourceListDir = dirname($sourceListFile);
-            if (!is_dir($sourceListDir) && !mkdir($sourceListDir, 0777, true) && !is_dir($sourceListDir)) {
-                throw new RuntimeException("Unable to create generated source manifest directory: {$sourceListDir}");
-            }
-            if (file_put_contents($sourceListFile, implode(PHP_EOL, $sourceFiles) . PHP_EOL) === false) {
-                throw new RuntimeException("Unable to write generated source manifest: {$sourceListFile}");
-            }
-        }
-        $translator->output("Dry run completed: {$count} C++ source file(s) generated in {$buildDir}", 'lightBlue');
-        return;
-    }
-
-    // Compile all C++ source files.
-    $objectFiles = [
-        ...$translator->compile($sourceFiles),
-        ...$translator->getProjectObjectFiles(),
-    ];
-    // Link all object files to produce the executable.
-    $binaryFile = $translator->build($objectFiles);
-    // If --run / -r was specified, execute immediately after compilation.
-    if ($translator->isRunRequested()) {
-        $translator->run($binaryFile); // never returns
-    }
+    (new ProjectBuildRunner(Translator::getInstance($runtime)))->run($argv);
 }
 
 /**
- * Locate the Composer autoloader that ships with the compiler.
- *
- * A source checkout and a Unix-like package keep it below TYPEPHP_ROOT_PATH,
- * while a packaged SDK extracts it below PHP_HOME.
+ * Export an explicit CLI proxy for every network-capable child process. The
+ * downloader still receives the value directly so credentials can be redacted
+ * from its diagnostics, while tools such as package managers inherit the
+ * conventional proxy variables from the compiler process.
  */
-function resolveComposerAutoloader(): string
+function configureProxyEnvironment(array $argv): void
 {
-    $candidates = [];
-    $roots = [TYPEPHP_ROOT_PATH, getenv('PHP_HOME') ?: null];
-    foreach ($roots as $root) {
-        if (!is_string($root) || $root === '') {
+    $proxy = null;
+    for ($i = 1, $count = count($argv); $i < $count; ++$i) {
+        $argument = $argv[$i];
+        if ($argument === '--proxy') {
+            if (!isset($argv[$i + 1]) || trim($argv[$i + 1]) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            $proxy = trim($argv[++$i]);
             continue;
         }
-        $autoloadFile = rtrim($root, '/\\') . '/vendor/autoload.php';
-        if (!in_array($autoloadFile, $candidates, true)) {
-            $candidates[] = $autoloadFile;
+        if (str_starts_with($argument, '--proxy=')) {
+            $proxy = trim(substr($argument, strlen('--proxy=')));
+            if ($proxy === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
         }
     }
 
-    foreach ($candidates as $candidate) {
-        if (is_file($candidate)) {
-            return $candidate;
-        }
+    if ($proxy === null) {
+        return;
     }
-
-    fwrite(STDERR, "Unable to find the Composer autoloader (vendor/autoload.php).\n");
-    fwrite(STDERR, "Searched in:\n");
-    foreach ($candidates as $candidate) {
-        fwrite(STDERR, "  - {$candidate}\n");
+    foreach (['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'] as $name) {
+        putenv($name . '=' . $proxy);
+        $_ENV[$name] = $proxy;
     }
-    fwrite(STDERR, "\nInstall the TypePHP dependencies with Composer first:\n");
-    fwrite(STDERR, "  cd " . TYPEPHP_ROOT_PATH . " && composer install\n");
-    fwrite(STDERR, "Or point PHP_HOME at a TypePHP installation that already contains vendor/autoload.php.\n");
-    exit(1);
 }
 
 function shouldCompileNativeSourceProject(array $argv): bool
 {
-    foreach (array_slice($argv, 1) as $argument) {
+    $arguments = array_slice($argv, 1);
+    for ($i = 0, $count = count($arguments); $i < $count; ++$i) {
+        $argument = $arguments[$i];
+        if ($argument === '--proxy') {
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            continue;
+        }
         if ($argument === '' || $argument[0] === '-') {
             continue;
         }
@@ -188,7 +140,7 @@ function shouldCompileNativeSourceProject(array $argv): bool
     return false;
 }
 
-function compileNativeSourceProject(array $argv): void
+function compileNativeSourceProject(array $argv, CompilerRuntime $runtime): void
 {
     $input = null;
     $buildDir = null;
@@ -198,6 +150,21 @@ function compileNativeSourceProject(array $argv): void
         $argument = $arguments[$i];
         if ($argument === '--run' || $argument === '-r') {
             $run = true;
+            continue;
+        }
+        if ($argument === '--proxy') {
+            if (!isset($arguments[$i + 1]) || $arguments[$i + 1] === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            if (substr($argument, strlen('--proxy=')) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
             continue;
         }
         if ($argument === '--build-dir') {
@@ -234,7 +201,7 @@ function compileNativeSourceProject(array $argv): void
 
     try {
         $project = NativeSourceProjectConfig::load($input, $buildDir);
-        $builder = new NativeSourceProjectBuilder();
+        $builder = new NativeSourceProjectBuilder(compilerRuntime: $runtime);
         $result = $builder->build($project);
         fwrite(
             STDOUT,
@@ -256,7 +223,7 @@ function compileNativeSourceProject(array $argv): void
  * The lower-level build scripts are implementation details and are not part of
  * the user-facing workflow.
  */
-function compileWasmProgram(array $argv): void
+function compileWasmProgram(array $argv, CompilerRuntime $runtime): void
 {
     $input = null;
     $buildDir = null;
@@ -270,6 +237,21 @@ function compileWasmProgram(array $argv): void
         }
         if ($argument === '--nano') {
             $nano = true;
+            continue;
+        }
+        if ($argument === '--proxy') {
+            if (!isset($arguments[$i + 1]) || $arguments[$i + 1] === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            if (substr($argument, strlen('--proxy=')) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
             continue;
         }
         if (str_starts_with($argument, '--wasm=')) {
@@ -323,7 +305,7 @@ function compileWasmProgram(array $argv): void
             $input,
             $buildDir,
             $workingDirectory,
-            TYPEPHP_ROOT_PATH . DIRECTORY_SEPARATOR . 'build',
+            $runtime->installationRoot . DIRECTORY_SEPARATOR . 'build',
             $profile,
         );
     } catch (RuntimeException $exception) {
@@ -331,7 +313,7 @@ function compileWasmProgram(array $argv): void
         exit(1);
     }
 
-    $builder = dirname(__DIR__) . '/wasm/'
+    $builder = $runtime->installationRoot . '/wasm/'
         . ($nano ? 'build-nano-program.sh' : 'build-program.sh');
     if (!is_executable($builder)) {
         fwrite(STDERR, "TypePHP WASI builder is not executable: {$builder}\n");
@@ -359,9 +341,6 @@ function compileWasmProgram(array $argv): void
     }
 
     $environment = getenv();
-    if (!is_array($environment)) {
-        $environment = [];
-    }
     $environment['TYPEPHP_WASI_CC'] = $tools['clang'];
     $environment['TYPEPHP_WASI_CXX'] = $tools['clang++'];
     $environment['TYPEPHP_WASI_AR'] = $tools['llvm-ar'];
@@ -382,8 +361,7 @@ function compileWasmProgram(array $argv): void
     $environment['TYPEPHP_WASM_PACKAGE'] = $project->package;
     $environment['TYPEPHP_WASM_WORLD'] = $project->world;
     $environment['TYPEPHP_WASM_NANO'] = $nano ? '1' : '0';
-    $compilerExecutable = realpath($argv[0]);
-    if ($compilerExecutable === false || !is_executable($compilerExecutable)) {
+    if (!is_file($runtime->executable) || !is_executable($runtime->executable)) {
         fwrite(STDERR, "Unable to resolve the current TypePHP compiler executable: {$argv[0]}\n");
         exit(1);
     }
@@ -392,7 +370,7 @@ function compileWasmProgram(array $argv): void
     }
 
     try {
-        $phpxDir = PhpxLocator::resolve(TYPEPHP_ROOT_PATH);
+        $phpxDir = PhpxLocator::resolve($runtime->installationRoot);
     } catch (RuntimeException $exception) {
         fwrite(STDERR, "Unable to locate PHPX: {$exception->getMessage()}\n");
         exit(1);
@@ -400,7 +378,7 @@ function compileWasmProgram(array $argv): void
     if ($project->mode === 'library') {
         $environment['TYPEPHP_WIT_BINDGEN'] = $tools['wit-bindgen'];
     }
-    $command = [$builder, $project->input, $project->output ?? '-', $phpxDir, $compilerExecutable];
+    $command = [$builder, $project->input, $project->output ?? '-', $phpxDir, $runtime->executable];
 
     $process = proc_open(
         $command,
@@ -429,7 +407,16 @@ function shouldCompileWasm(array $argv): bool
     }
 
     $workingDirectory = getcwd();
-    foreach (array_slice($argv, 1) as $argument) {
+    $arguments = array_slice($argv, 1);
+    for ($i = 0, $count = count($arguments); $i < $count; ++$i) {
+        $argument = $arguments[$i];
+        if ($argument === '--proxy') {
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            continue;
+        }
         if ($argument === '' || $argument[0] === '-') {
             continue;
         }

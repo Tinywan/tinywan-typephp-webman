@@ -12,7 +12,7 @@ class Ios extends UnixPlatform
 {
     public static function supportsTarget(string $target): bool
     {
-        return preg_match('/^(?:arm64|aarch64)-apple-ios(?:\d+(?:\.\d+)*)?$/i', $target) === 1;
+        return preg_match('/^(?:arm64|aarch64)-apple-ios(?:\d+(?:\.\d+)*)?(?:-simulator)?$/i', $target) === 1;
     }
 
     public function getName(): string
@@ -45,7 +45,7 @@ class Ios extends UnixPlatform
      * Its path is resolved from PHPX_HOME by CompilerBase, and php-config is
      * never executed for the target.
      */
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         $paths = [
             $phpDir . '/include/php',

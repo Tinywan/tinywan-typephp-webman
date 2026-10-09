@@ -41,6 +41,12 @@ trait NativeCommandOptionsTrait
                 'PHPX_NANO=1',
                 '_POSIX_C_SOURCE=200809L',
             );
+            if ($this->isMacos() || $this->isIosTarget()) {
+                // A strict POSIX feature profile hides Darwin's BSD integer
+                // aliases (u_int/u_char/u_short), which are still used by
+                // public macOS and iOS SDK headers such as sys/sysctl.h.
+                $userDefines[] = '_DARWIN_C_SOURCE=1';
+            }
             array_push($userDefines, ...$this->nanoRuntimeDefines);
             if ($this->isWasiTarget()) {
                 $userDefines[] = 'ZEND_MM_ERROR=0';
@@ -54,7 +60,9 @@ trait NativeCommandOptionsTrait
             'sanitize' => $this->sanitize,
             'march' => $this->march,
             'target_platform' => $this->targetPlatform,
-            'is_zts' => $this->isPhpZts,
+            // Source-composed Nano owns its runtime configuration and uses the
+            // same single-threaded ABI on every native platform.
+            'is_zts' => $this->isNanoMode() ? false : $this->isPhpZts,
             'build_mode' => $this->buildMode,
             'enable_profiler' => $this->enableProfiler,
             'prof_output' => $this->targetName . '.prof',
@@ -156,6 +164,19 @@ trait NativeCommandOptionsTrait
         $libraries = array_merge($libraries, $this->linkLibs);
 
         $ldflags = $this->ldflags;
+        $postLdflags = '';
+        if ($this->isPhpBuilderBuild()
+            && $this->hasSapi('embed')
+            && $this->sapiPhpBuildDirectory !== null
+        ) {
+            $makefile = $this->sapiPhpBuildDirectory . '/Makefile';
+            $contents = is_file($makefile) ? (string) file_get_contents($makefile) : '';
+            if (preg_match('/^EXTRA_LIBS[ \t]*=[ \t]*(.*)$/m', $contents, $match) === 1) {
+                // Static libphp references these system libraries, so they must
+                // appear after -lphp on linkers that resolve archives left-to-right.
+                $postLdflags = trim($match[1]);
+            }
+        }
         $targetPlatform = $this->targetPlatform;
         if ($this->fullStatic) {
             // The bundled libphp.a carries musl libc, so the link must use musl's
@@ -168,8 +189,12 @@ trait NativeCommandOptionsTrait
             $ldflags = trim('-static -B ' . escapeshellarg($this->getFullStaticMuslDir()) . ' ' . $ldflags);
         }
         if ($this->isNanoMode()) {
-            $gcSections = $this->isMacos() ? '-Wl,-dead_strip' : '-Wl,--gc-sections';
-            $ldflags = trim($gcSections . ' ' . $ldflags);
+            if (!$this->isWindows()) {
+                $gcSections = ($this->isMacos() || $this->isIosTarget())
+                    ? '-Wl,-dead_strip'
+                    : '-Wl,--gc-sections';
+                $ldflags = trim($gcSections . ' ' . $ldflags);
+            }
             if ($this->isWasiTarget()) {
                 $ldflags = trim(
                     '-fwasm-exceptions -lsetjmp -lunwind ' . $ldflags,
@@ -181,13 +206,16 @@ trait NativeCommandOptionsTrait
             'library_paths' => $libraryPaths,
             'libraries' => $libraries,
             'ldflags' => $ldflags,
+            'post_ldflags' => $postLdflags,
             'debug' => $this->debug,
             'no_console' => $this->noConsole,
             'build_mode' => $this->buildMode,
             'sanitize' => $this->sanitize,
             'lto' => $this->enableLto,
+            'section_gc' => $this->isNanoMode(),
             'target_platform' => $targetPlatform,
-            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR
+            'response_file' => $this->getBuildDir() . DIRECTORY_SEPARATOR . 'cache'
+                . DIRECTORY_SEPARATOR . 'link' . DIRECTORY_SEPARATOR
                 . basename($this->getTargetFileName()) . '.rsp',
         ];
 

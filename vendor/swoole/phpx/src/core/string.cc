@@ -17,6 +17,7 @@
 #include "phpx.h"
 
 #include "slice.h"
+#include "std/string.h"
 
 extern "C" {
 #include "ext/pcre/php_pcre.h"
@@ -64,7 +65,7 @@ String String::unescape(const int flags, const char *charset) const {
 }
 
 String String::trim(const char *what, TrimMode mode) const {
-    return String(php_trim(str(), what, strlen(what), mode), Ctor::Move);
+    return String(php_trim(str(), what, what ? strlen(what) : 0, mode), Ctor::Move);
 }
 
 String String::lower() const {
@@ -120,21 +121,24 @@ static Array php_do_pcre_match(String &str, const String &regx, Int flags, Int s
     pcre_cache_entry *pce; /* Compiled regular expression */
 
     /* Compile regex or get it from cache. */
-    if ((pce = pcre_get_compiled_regex_cache(regx.str())) == nullptr) {
+    pce = pcre_get_compiled_regex_cache(regx.str());
+    throwErrorIfOccurred();
+    if (pce == nullptr) {
         throwError("Failed to compile regular expression");
         return {};
     }
 
     zval count = {};
-    zval return_value = {};
+    Variant return_value;
     php_pcre_pce_incref(pce);
-    php_pcre_match_impl(pce, str.str(), &count, &return_value, global, flags, start_offset);
+    php_pcre_match_impl(pce, str.str(), &count, return_value.ptr(), global, flags, start_offset);
     php_pcre_pce_decref(pce);
+    throwErrorIfOccurred();
 
-    if (!zval_is_array(&return_value)) {
+    if (!return_value.isArray()) {
         return {};
     }
-    return Array{&return_value, Ctor::Move};
+    return Array(return_value);
 }
 
 Array String::match(const String &regx, Int flags, Int start_offset) {
@@ -153,13 +157,11 @@ String String::substr(Int f, Int l) const {
 }
 
 Array String::split(const String &delim, const Int limit) const {
-    Array retval;
-    php_explode(delim.str(), str(), retval.ptr(), limit);
-    return retval;
+    return fn::explode(delim, *this, limit);
 }
 
 String String::stripTags(const String &allow, bool allow_tag_spaces) const {
-    auto new_str = zend_string_copy(str());
+    auto new_str = zend_string_init(data(), length(), false);
     new_str->len = php_strip_tags_ex(new_str->val, new_str->len, allow.data(), allow.length(), allow_tag_spaces);
     new_str->val[new_str->len] = '\0';
     return String(new_str, Ctor::Move);
@@ -174,14 +176,14 @@ String String::basename(const String &suffix) const {
 }
 
 String String::dirname() const {
-    auto new_str = zend_string_copy(str());
+    auto new_str = zend_string_init(data(), length(), false);
     new_str->len = php_dirname(new_str->val, new_str->len);
     new_str->val[new_str->len] = '\0';
     return String(new_str, Ctor::Move);
 }
 
 String String::stripSlashes() const {
-    auto new_str = zend_string_copy(str());
+    auto new_str = zend_string_init(data(), length(), false);
     php_stripslashes(new_str);
     return String(new_str, Ctor::Move);
 }

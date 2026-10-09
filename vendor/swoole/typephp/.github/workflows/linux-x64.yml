@@ -120,8 +120,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
@@ -149,6 +151,7 @@ jobs:
             third_party/phpx/lib/libphpx.so
             third_party/phpx/include/**
             third_party/phpx/src/misc/**
+            third_party/phpx/thirdparty/opcache/**
             third_party/phpx/thirdparty/mpdecimal/libmpdec/**
             third_party/phpx/thirdparty/mpdecimal/libmpdec++/**
             third_party/phpy/modules/phpy.so
@@ -230,8 +233,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
@@ -328,15 +333,28 @@ jobs:
         run: |
           test -f ./tpc
           test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f third_party/phpy/modules/phpy.so
           test -f "${PHP_HOME}/lib/libphp.so"
           chmod +x ./tpc
           echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${PHP_HOME}/lib" >> "${GITHUB_ENV}"
+
+      - name: Enable phpy extension for compiler
+        shell: bash
+        run: |
+          php_ini_dir="$(php-config --ini-dir)"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "TYPEPHP_COMPILER_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          PHP_INI_SCAN_DIR="${php_ini_dir}" php --ri phpy
 
       - name: Run EXT/LIB integration tests
         shell: bash
         run: |
           php -n bin/run-integration-tests.php \
             --compiler=./tpc \
+            --compiler-ini-scan-dir="${TYPEPHP_COMPILER_INI_SCAN_DIR}" \
             --php="$(command -v php)" \
             --php-fpm="${PHP_FPM}"
 
@@ -439,8 +457,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
@@ -461,28 +481,53 @@ jobs:
           c++ --version
 
       - name: Run compiler PHPT suite with bootstrap compiler
+        shell: bash
+        env:
+          TYPEPHP_OBSERVED_BINARY: ./tpc
+          TYPEPHP_TPC_METRICS_FILE: ${{ github.workspace }}/build/phpt-metrics/tpc-invocations.tsv
         run: |
-          mkdir -p build
-          php run-tests.php -q -j8 --compiler ./tpc \
+          mkdir -p build/phpt-metrics
+          .github/scripts/observe-command.sh build/phpt-metrics -- \
+            php run-tests.php -q -j8 --compiler .github/scripts/observe-tpc.sh \
             -w build/failed-tests.txt -W build/test-results.txt tests/compiler
 
+      - name: Summarize PHPT compiler metrics
+        if: always()
+        shell: bash
+        run: |
+          python3 .github/scripts/summarize-tpc-metrics.py \
+            build/phpt-metrics/tpc-invocations.tsv \
+            | tee build/phpt-metrics/tpc-invocations-summary.txt
+
+      - name: Upload PHPT performance metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpt-metrics-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: warn
+          retention-days: 14
+          path: build/phpt-metrics
+
       - name: Package tested Linux compiler
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
+          php bin/tpc.php project-release.yml --job 2 --no-progress
+          test -x ./tpc
+          ./tpc --version
           export TYPEPHP_PACKAGE_VERSION="${GITHUB_REF_NAME}"
           php package.php
-          test "$(find . -maxdepth 1 -name 'tpc_v*_linux_*.tar.gz' -type f | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name 'tpc_v*_linux_x64_php${{ matrix.php }}.*-zts.tar.gz' -type f | wc -l)" -eq 1
 
       - name: Upload Linux release package
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-x64-php-${{ matrix.php }}-zts
           if-no-files-found: error
           retention-days: 1
-          path: tpc_v*_linux_*.tar.gz
+          path: tpc_v*_linux_x64_php${{ matrix.php }}.*-zts.tar.gz
 
       - name: Upload PHPT failure artifacts
         if: failure()

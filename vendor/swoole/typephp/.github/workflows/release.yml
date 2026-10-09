@@ -104,10 +104,14 @@ jobs:
               --pattern 'release-macos-arm64-*' \
               --dir dist/macos-arm64
 
-          test "$(find dist -type f -name 'tpc_v*_linux_x64.tar.gz' | wc -l)" -eq 1
-          test "$(find dist -type f -name 'tpc_v*_linux_arm64.tar.gz' | wc -l)" -eq 1
-          test "$(find dist -type f -name 'tpc_v*_macos_arm64.tar.gz' | wc -l)" -eq 1
-          test "$(find dist -type f -name 'tpc_v*_windows_x64.zip' | wc -l)" -eq 1
+          for platform in linux_x64 linux_arm64 macos_arm64; do
+              for php_version in 8.4 8.5; do
+                  test "$(find dist -type f -name "tpc_v*_${platform}_php${php_version}.*-zts.tar.gz" | wc -l)" -eq 1
+              done
+          done
+          for php_version in 8.4 8.5; do
+              test "$(find dist -type f -name "tpc_v*_windows_x64_php${php_version}.*-zts.zip" | wc -l)" -eq 1
+          done
 
       - name: Prepare release assets
         shell: bash
@@ -116,7 +120,7 @@ jobs:
           mkdir -p release-assets
           find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
               -exec cp '{}' release-assets/ \;
-          test "$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 4
+          test "$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 8
           (
               cd release-assets
               sha256sum ./*.tar.gz ./*.zip > SHA256SUMS

@@ -361,6 +361,11 @@ PHPX_API uint32_t getPropertyOffset(zend_class_entry *ce, const String &prop);
 
 PHPX_API Int toSize(const String &str);
 PHPX_API Array toArray(const Variant &v);
+enum class TypedArrayValueType : uint8_t { Int, Float, Bool, String, Array, Object, Any };
+PHPX_API Array toTypedArray(const Array &values,
+                            bool string_keys,
+                            TypedArrayValueType value_type,
+                            zend_class_entry *value_class = nullptr);
 PHPX_API Object toObject(const Variant &v);
 PHPX_API Object toObject(const Variant &v, const String &class_name);
 
@@ -1242,7 +1247,10 @@ class Variant {
     }
     Variant &operator=(const std::string &str) {
         if (UNEXPECTED(isByteOfStr())) {
-            setByteOfStr(str.at(0));
+            if (str.size() != 1) {
+                throwError("Can only be assigned a single-byte string to a string offset");
+            }
+            setByteOfStr(str[0]);
         } else {
             destroy();
             ZVAL_STRINGL(unwrap_ptr(), str.c_str(), str.length());
@@ -1251,6 +1259,9 @@ class Variant {
     }
     Variant &operator=(const char *str) {
         if (UNEXPECTED(isByteOfStr())) {
+            if (str[0] == '\0' || str[1] != '\0') {
+                throwError("Can only be assigned a single-byte string to a string offset");
+            }
             setByteOfStr(str[0]);
         } else {
             destroy();
@@ -1957,7 +1968,7 @@ class String : public Variant {
         return equals(v);
     }
     static String format(const char *format, ...);
-    String trim(const char *what = " \t\n\r\v\0", TrimMode mode = TRIM_BOTH) const;
+    String trim(const char *what = nullptr, TrimMode mode = TRIM_BOTH) const;
     String lower() const;
     String upper() const;
     String base64Encode() const;

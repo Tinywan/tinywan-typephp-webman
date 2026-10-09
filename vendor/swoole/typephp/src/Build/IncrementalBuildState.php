@@ -115,29 +115,7 @@ final class IncrementalBuildState
             'generatorFingerprint' => $generatorFingerprint,
             'files' => $files,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL;
-        $directory = dirname($this->file);
-        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
-            throw new \RuntimeException('Cannot create incremental build state directory: ' . $directory);
-        }
-        $temporary = tempnam($directory, '.graph-');
-        if ($temporary === false) {
-            throw new \RuntimeException('Cannot create incremental build state temporary file');
-        }
-        try {
-            if (file_put_contents($temporary, $contents, LOCK_EX) === false) {
-                throw new \RuntimeException('Cannot write incremental build state: ' . $this->file);
-            }
-            if (!@rename($temporary, $this->file)) {
-                @unlink($this->file);
-                if (!@rename($temporary, $this->file)) {
-                    throw new \RuntimeException('Cannot write incremental build state: ' . $this->file);
-                }
-            }
-        } finally {
-            if (is_file($temporary)) {
-                @unlink($temporary);
-            }
-        }
+        AtomicFile::write($this->file, $contents, '.graph-');
         $this->generatorFingerprint = $generatorFingerprint;
         $this->files = $files;
     }

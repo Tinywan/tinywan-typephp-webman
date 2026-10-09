@@ -32,7 +32,7 @@ class Container
      */
     public static function instance(string $plugin = '')
     {
-        return Config::get($plugin ? "plugin.$plugin.container" : 'container') ?: new \Webman\Container();
+        return Config::get($plugin ? "plugin.$plugin.container" : 'container');
     }
 
     /**

@@ -2,10 +2,11 @@
 
 namespace TypePhp\Backend;
 
-use TypePhp\Platform\PlatformBase;
-use TypePhp\Platform\Windows;
+use TypePhp\Build\ExecutableLocator;
 use TypePhp\Platform\Linux;
 use TypePhp\Platform\Macos;
+use TypePhp\Platform\PlatformBase;
+use TypePhp\Platform\Windows;
 
 /**
  * Compiler factory.
@@ -101,37 +102,7 @@ class CompilerFactory
             return false;
         }
 
-        if (self::isPathLikeCommand($program)) {
-            return is_file($program) && is_executable($program);
-        }
-
-        $path = getenv('PATH');
-        if ($path === false || $path === '') {
-            return false;
-        }
-
-        $extensions = [''];
-        if (DIRECTORY_SEPARATOR === '\\') {
-            $pathext = getenv('PATHEXT') ?: '.COM;.EXE;.BAT;.CMD';
-            $extensions = array_filter(array_map('strtolower', explode(';', $pathext)));
-            if (preg_match('/\.[A-Za-z0-9]+$/', $program)) {
-                array_unshift($extensions, '');
-            }
-        }
-
-        foreach (explode(PATH_SEPARATOR, $path) as $dir) {
-            if ($dir === '') {
-                continue;
-            }
-            foreach ($extensions as $extension) {
-                $candidate = rtrim($dir, DIRECTORY_SEPARATOR . '/\\') . DIRECTORY_SEPARATOR . $program . $extension;
-                if (is_file($candidate) && is_executable($candidate)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return ExecutableLocator::resolve($program) !== null;
     }
 
     /**
@@ -190,8 +161,7 @@ class CompilerFactory
             }
         }
 
-        $firstToken = strtok($command, " \t\r\n");
-        return $firstToken === false ? '' : $firstToken;
+        return strtok($command, " \t\r\n");
     }
 
     private static function normalizeCompilerName(string $compilerName): string
@@ -205,12 +175,5 @@ class CompilerFactory
         $name = strtolower($name);
 
         return preg_replace('/\.exe$/', '', $name);
-    }
-
-    private static function isPathLikeCommand(string $program): bool
-    {
-        return str_contains($program, '/')
-            || str_contains($program, '\\')
-            || preg_match('/^[A-Za-z]:[\/\\\\]/', $program) === 1;
     }
 }

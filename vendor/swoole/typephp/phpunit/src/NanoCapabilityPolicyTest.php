@@ -23,7 +23,7 @@ final class NanoCapabilityPolicyCompiler extends CompilerTest
         $this->file = 'nano-policy.php';
     }
 
-    public function enableFullRuntimeNanoPolicyForTest(): void
+    public function enableNanoPolicyWithoutRuntimeForTest(): void
     {
         $this->nanoMode = false;
         $this->nanoPolicyMode = true;
@@ -108,12 +108,12 @@ final class NanoCapabilityPolicyTest extends BaseTest
         }
     }
 
-    public function testFullRuntimeNanoPolicyRejectsExternalCommandsOnly(): void
+    public function testNanoPolicyAlwaysUsesSourceRuntimeCapabilitySet(): void
     {
         $compiler = new NanoCapabilityPolicyCompiler(TYPEPHP_ROOT_PATH);
-        $compiler->enableFullRuntimeNanoPolicyForTest();
+        $compiler->enableNanoPolicyWithoutRuntimeForTest();
 
-        foreach (['exec', 'passthru', 'pcntl_exec', 'popen', 'proc_open', 'proc_terminate', 'shell_exec', 'system'] as $name) {
+        foreach (['exec', 'getenv', 'parse_str', 'stream_socket_client'] as $name) {
             try {
                 $compiler->validateNanoFunction($name);
                 self::fail("{$name} was accepted");
@@ -122,62 +122,6 @@ final class NanoCapabilityPolicyTest extends BaseTest
             }
         }
 
-        // Windows uses the complete PHP/PHPX DLL runtime. The php-nano-only
-        // capability reductions are therefore not applied to that target.
-        foreach (['getenv', 'parse_str', 'stream_socket_client'] as $name) {
-            $compiler->validateNanoFunction($name);
-        }
-        self::addToAssertionCount(3);
-    }
-
-    public function testFullRuntimeNanoEntryCallsGeneratedMainWithoutEval(): void
-    {
-        global $translator;
-        $previousTranslator = $translator ?? null;
-        $directory = sys_get_temp_dir() . '/typephp_nano_policy_' . bin2hex(random_bytes(6));
-        mkdir($directory, 0777, true);
-        $source = $directory . '/main.php';
-        file_put_contents($source, "<?php\nfunction main(): void {}\n");
-
-        try {
-            $compiler = new NanoCapabilityPolicyCompiler($directory);
-            $compiler->enableFullRuntimeNanoPolicyForTest();
-            $compiler->setBuildMode(\TypePhp\CompilerBase::BUILD_MODE_BIN);
-            $compiler->setTargetName('nano_policy_entry');
-            $translator = $compiler;
-            $compiler->addFiles([$source]);
-            $compiler->prepareFile($source);
-            $compiler->convertFile($source);
-            $extension = file_get_contents($compiler->genExtension());
-
-            self::assertIsString($extension);
-            self::assertStringContainsString('php_main();', $extension);
-            self::assertStringNotContainsString('php::eval(', $extension);
-            self::assertStringContainsString(
-                'zend_disable_functions("exec,passthru,pcntl_exec,popen,proc_close,proc_get_status,proc_nice,proc_open,proc_terminate,shell_exec,system")',
-                $extension,
-            );
-            self::assertStringContainsString('_SERVER.item("SCRIPT_FILENAME", true)', $extension);
-        } finally {
-            $translator = $previousTranslator;
-            self::removeDirectory($directory);
-        }
-    }
-
-    private static function removeDirectory(string $directory): void
-    {
-        if (!is_dir($directory)) {
-            return;
-        }
-        foreach (array_diff(scandir($directory), ['.', '..']) as $entry) {
-            $path = $directory . DIRECTORY_SEPARATOR . $entry;
-            if (is_dir($path)) {
-                self::removeDirectory($path);
-            } else {
-                unlink($path);
-            }
-        }
-        rmdir($directory);
     }
 
     public function testKeepsFileStreamsAndFileHashesAvailable(): void

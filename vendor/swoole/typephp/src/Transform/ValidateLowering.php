@@ -151,7 +151,7 @@ final class ValidateLowering
             return null;
         }
         foreach ($options->items as $item) {
-            if ($item?->key instanceof Node\Scalar\String_ && $item->key->value === 'flags') {
+            if ($item->key instanceof Node\Scalar\String_ && $item->key->value === 'flags') {
                 return self::resolveFlags($item->value);
             }
         }
@@ -202,10 +202,10 @@ final class ValidateLowering
         }
         $flagsItem = null;
         foreach ($options->items as $item) {
-            if ($item?->unpack) {
+            if ($item->unpack) {
                 throw new SyntaxError('Validate $options does not support array unpacking');
             }
-            if ($item !== null && $item->key instanceof Node\Scalar\String_ && $item->key->value === 'flags') {
+            if ($item->key instanceof Node\Scalar\String_ && $item->key->value === 'flags') {
                 $flagsItem = $item;
             }
         }

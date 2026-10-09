@@ -24,7 +24,7 @@ final class PhpxLocatorTest extends TestCase
         } else {
             putenv('PHPX_HOME=' . $this->originalPhpxHome);
         }
-        rmdir($this->phpxHome);
+        $this->removeDirectory($this->phpxHome);
     }
 
     public function testPhpxHomeHasPriorityAndReturnsAnAbsolutePath(): void
@@ -43,5 +43,27 @@ final class PhpxLocatorTest extends TestCase
             realpath($projectRoot . '/vendor/swoole/phpx'),
             PhpxLocator::resolve($projectRoot),
         );
+    }
+
+    public function testCompilerLocalInstallationPrecedesComposerMetadata(): void
+    {
+        putenv('PHPX_HOME=' . $this->phpxHome . '/missing');
+        $projectRoot = $this->phpxHome . '/compiler';
+        $localPhpx = $projectRoot . '/vendor/swoole/phpx';
+        mkdir($localPhpx, 0777, true);
+
+        self::assertSame(realpath($localPhpx), PhpxLocator::resolve($projectRoot));
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        $items = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST,
+        );
+        foreach ($items as $item) {
+            $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+        }
+        rmdir($directory);
     }
 }

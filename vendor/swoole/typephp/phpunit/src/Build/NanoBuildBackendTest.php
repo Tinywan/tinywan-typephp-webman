@@ -7,22 +7,17 @@ use TypePhp\Build\NanoBuildBackend;
 
 final class NanoBuildBackendTest extends TestCase
 {
-    public function testWindowsKeepsTheHostDllBuildBackend(): void
-    {
-        self::assertSame(NanoBuildBackend::WINDOWS_DLL, NanoBuildBackend::forHost('Windows'));
-        self::assertFalse(NanoBuildBackend::composesRuntimeSources('Windows'));
-    }
-
-    /** @dataProvider nonWindowsHosts */
-    public function testNonWindowsHostsComposeComposerRuntimeSources(string $osFamily): void
+    /** @dataProvider nativeHosts */
+    public function testEveryNativeHostComposesComposerRuntimeSources(string $osFamily): void
     {
         self::assertSame(NanoBuildBackend::COMPOSER_SOURCES, NanoBuildBackend::forHost($osFamily));
         self::assertTrue(NanoBuildBackend::composesRuntimeSources($osFamily));
     }
 
-    public static function nonWindowsHosts(): array
+    public static function nativeHosts(): array
     {
         return [
+            ['Windows'],
             ['Linux'],
             ['Darwin'],
             ['BSD'],

@@ -213,6 +213,27 @@ class BackendTest extends TestCase
         $this->assertStringContainsString('-fno-rtti', $cmd);
     }
 
+    public function testGccOnWindowsUsesGccIncludeSyntaxForAllSourceTypes(): void
+    {
+        $compiler = new Gcc(new Windows());
+        $includePaths = ['C:\\phpx\\include', 'C:\\Program Files\\PHP\\include'];
+        $options = [
+            'include_paths' => $includePaths,
+        ];
+        $commands = [
+            $compiler->buildCompileCommand('test.cpp', 'test.obj', $options),
+            $compiler->buildCCompileCommand('test.c', 'test.obj', $options),
+            $compiler->buildNativeCompileCommand('test.S', 'test.obj', $options, 'assembler'),
+        ];
+
+        foreach ($commands as $cmd) {
+            foreach ($includePaths as $path) {
+                $this->assertStringContainsString('-I' . escapeshellarg($path), $cmd);
+            }
+            $this->assertStringNotContainsString('/I ', $cmd);
+        }
+    }
+
     public function testGccBuildCCompileCommandKeepsSharedCompilerOptions(): void
     {
         $platform = new Linux();

@@ -65,6 +65,7 @@ PHP);
         $providerHeader = $compiler->getDeclarationHeaderFile($this->provider);
         $consumerHeader = $compiler->getDeclarationHeaderFile($this->consumer);
         $consumerCpp = $this->invoke($compiler, 'getCppFile', $this->consumer);
+        $providerCpp = $this->invoke($compiler, 'getCppFile', $this->provider);
 
         self::assertFileExists($providerHeader);
         self::assertFileExists($consumerHeader);
@@ -84,9 +85,11 @@ PHP);
         );
         self::assertStringContainsString('php_incremental__answer(', $providerDeclarations);
         self::assertStringContainsString('_const_var_Incremental__LIMIT', $providerDeclarations);
-        self::assertStringContainsString('_global_var_shared', $providerDeclarations);
+        self::assertStringNotContainsString('_global_var_shared', $providerDeclarations);
+        self::assertStringContainsString('extern THREAD_LOCAL php::Var _global_var_shared;', file_get_contents($providerCpp));
         self::assertStringNotContainsString('_global_var_shared', $consumerDeclarations);
         self::assertStringNotContainsString('_global_var_shared', $runtimeDeclarations);
+        self::assertStringContainsString('extern THREAD_LOCAL php::Var _global_var_shared;', $consumerCode);
         self::assertStringNotContainsString('php_main(', $providerDeclarations);
         self::assertStringContainsString('php_main(', $consumerDeclarations);
         self::assertStringContainsString(
@@ -117,6 +120,78 @@ PHP);
         $symbols = $this->property($compiler, 'symbolDeclInFile');
         self::assertSame($this->provider, $symbols['function:incremental\\answer']);
         self::assertSame($this->provider, $symbols['constant:Incremental\\LIMIT']);
+    }
+
+    public function testGroupedDeclarationsPreserveHelpersAndFilesWithoutFunctions(): void
+    {
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+namespace Incremental;
+abstract class Base
+{
+    abstract public function amount(int $value = 5): int;
+}
+function answer(int $value = 42, string ...$labels): int { return $value; }
+PHP);
+        file_put_contents($this->consumer, "<?php\nfunction main(): int { return \\Incremental\\answer(); }\n");
+        file_put_contents($this->independent, "<?php\nconst MARKER = 1;\n");
+
+        $compiler = $this->convertProject();
+        foreach ([$this->provider, $this->consumer, $this->independent] as $file) {
+            $expected = $this->invoke($compiler, 'renderFunctionDeclarations', $file)
+                . $this->invoke($compiler, 'renderDataDeclarations', $file, false, false);
+            self::assertSame($expected, file_get_contents($compiler->getDeclarationHeaderFile($file)));
+        }
+        $provider = file_get_contents($compiler->getDeclarationHeaderFile($this->provider));
+        self::assertStringContainsString('php_incremental__answer_arg_0_default_value();', $provider);
+        self::assertStringContainsString('php_incremental__answer_arg_1_default_value();', $provider);
+        self::assertStringContainsString('php_incremental__base__amount_arg_0_default_value();', $provider);
+        self::assertStringNotContainsString('php_main(', $provider);
+        $independent = file_get_contents($compiler->getDeclarationHeaderFile($this->independent));
+        self::assertStringNotContainsString('php_incremental__answer', $independent);
+        self::assertStringNotContainsString('php_main(', $independent);
+        self::assertStringNotContainsString('_default_value', $independent);
+
+        $aggregate = $this->invoke($compiler, 'renderFunctionDeclarations');
+        self::assertStringContainsString('php_incremental__answer(', $aggregate);
+        self::assertStringContainsString('php_main(', $aggregate);
+        self::assertStringContainsString('php_incremental__base__amount_arg_0_default_value();', $aggregate);
+    }
+
+    public function testSuperglobalsAreDeclaredInEachUsingSource(): void
+    {
+        file_put_contents($this->provider, <<<'PHP'
+<?php
+function readGlobals(): array
+{
+    return [$_GET, $_POST, $_COOKIE, $_SERVER, $_FILES, $_SESSION, $_REQUEST, $_ENV, $GLOBALS];
+}
+PHP);
+        file_put_contents($this->consumer, "<?php\nfunction main(): void {}\n");
+
+        foreach ([1, 2] as $_) {
+            $compiler = $this->convertProject();
+            $runtimeHeader = $this->buildDirectory . '/include/php_incremental_runtime_decl.h';
+            $providerCpp = $this->invoke($compiler, 'getCppFile', $this->provider);
+            $consumerCpp = $this->invoke($compiler, 'getCppFile', $this->consumer);
+
+            $declarations = (string) file_get_contents($providerCpp);
+            foreach (['_GET', '_POST', '_COOKIE', '_SERVER', '_FILES', '_SESSION', '_REQUEST', '_ENV', 'GLOBALS'] as $name) {
+                self::assertStringContainsString(
+                    'extern THREAD_LOCAL php::Var _global_var_' . $name . ';',
+                    $declarations,
+                );
+            }
+            self::assertStringNotContainsString('_global_var_', (string) file_get_contents($runtimeHeader));
+            self::assertStringContainsString(
+                'extern THREAD_LOCAL php::Var _global_var__SERVER;',
+                (string) file_get_contents($consumerCpp),
+            );
+            self::assertStringContainsString(
+                'php::Var &_SERVER = _global_var__SERVER;',
+                (string) file_get_contents($consumerCpp),
+            );
+        }
     }
 
     public function testStdContainerParameterContractsSurviveWarmConversionAndInvalidateCallers(): void
@@ -341,7 +416,7 @@ PHP);
         $objects = [$firstObject, $secondObject];
         $this->invoke($compiler, 'writeLinkCache', $objects, $target);
         self::assertFileExists(
-            $this->buildDirectory . '/incremental-bin.typephp-link-cache',
+            $this->buildDirectory . '/cache/link/incremental-bin.typephp-link-cache',
         );
         self::assertFileDoesNotExist($target . '.typephp-link-cache');
         self::assertTrue($this->invoke($compiler, 'hasLinkCache', $objects, $target));

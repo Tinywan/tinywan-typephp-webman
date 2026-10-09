@@ -619,20 +619,10 @@ class Request implements Stringable
 
         if ($filesEncodeString) {
             parse_str($filesEncodeString, $this->data['files']);
-            $this->data['files'] = static::mapFilesArray($this->data['files'], $files);
+            array_walk_recursive($this->data['files'], function (&$value) use ($files) {
+                $value = $files[$value];
+            });
         }
-    }
-
-    protected static function mapFilesArray(array $arr, array $files): array
-    {
-        foreach ($arr as $k => $v) {
-            if (is_array($v)) {
-                $arr[$k] = static::mapFilesArray($v, $files);
-            } else if (isset($files[$v])) {
-                $arr[$k] = $files[$v];
-            }
-        }
-        return $arr;
     }
 
     /**

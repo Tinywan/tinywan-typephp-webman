@@ -98,7 +98,6 @@ trait PreparedProjectCacheTrait
         if ($this->externalImportStubFiles !== []) {
             return;
         }
-        $temporary = '';
         $bodies = [];
         try {
             // Conversion always loads a fresh pristine AST. The prepared tree
@@ -133,23 +132,12 @@ trait PreparedProjectCacheTrait
                 $state[$field] = $this->{$field};
             }
             $file = $this->preparedProjectCacheFile();
-            if (!is_dir(dirname($file)) && !mkdir(dirname($file), 0777, true) && !is_dir(dirname($file))) {
-                return;
-            }
-            $candidate = tempnam(dirname($file), '.prepared-');
-            if (is_string($candidate)) {
-                $temporary = $candidate;
-                $this->writeFile($temporary, $key . "\n" . serialize($state));
-                @rename($temporary, $file);
-            }
+            AtomicFile::write($file, $key . "\n" . serialize($state), '.prepared-');
         } catch (\Throwable) {
             // Optional cache failures must not fail a valid compilation.
         } finally {
             foreach ($bodies as [$node, $statements]) {
                 $node->stmts = $statements;
-            }
-            if (is_string($temporary) && is_file($temporary)) {
-                @unlink($temporary);
             }
         }
     }

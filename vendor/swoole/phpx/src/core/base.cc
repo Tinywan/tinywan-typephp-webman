@@ -423,11 +423,7 @@ zend_class_entry *getInternalClassEntrySafe(const String &name) {
 }
 
 zend_function *getMethod(const String &class_name, const String &name) {
-    const auto ce = getClassEntrySafe(class_name);
-    if (UNEXPECTED(!ce)) {
-        return nullptr;
-    }
-    return getMethod(ce, name);
+    return getMethod(getClassEntrySafe(class_name), name);
 }
 
 zend_function *getMethod(zend_class_entry *ce, const String &name) {
@@ -778,6 +774,24 @@ class LexicalCallScopeGuard final {
 
 zend_class_entry *detail::getLexicalCallScope() {
     return lexical_call_scope;
+}
+
+Array Args::toArray() const {
+    Array array(params.size());
+    for (const auto &param : params) {
+        // Borrow the stable Args slot. Array::append() performs the one owning
+        // ZVAL_COPY required by the result; CopyRef here would add and release
+        // an otherwise redundant temporary reference for every argument.
+        array.append(Variant(&param, Ctor::Indirect));
+    }
+    return array;
+}
+
+Variant Args::get(size_t i) const {
+    if (i >= count()) {
+        return null;
+    }
+    return {&params.at(i), Ctor::CopyRef};
 }
 
 Variant call(zend_class_entry *ce, zend_function *func, zend_array *named_args) {

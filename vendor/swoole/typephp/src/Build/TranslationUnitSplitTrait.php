@@ -12,7 +12,15 @@ trait TranslationUnitSplitTrait
     protected function getSplitTranslationUnits(string $source): array
     {
         $primary = $this->getCppFile($source);
-        $manifest = $primary . '.parts.json';
+        $manifest = $this->splitTranslationUnitManifestPath($primary);
+        $legacy = $primary . '.parts.json';
+        if (is_file($legacy)) {
+            $contents = file_get_contents($legacy);
+            if (!is_file($manifest) && is_string($contents) && $contents !== '[]') {
+                $this->writeFile($manifest, $contents);
+            }
+            unlink($legacy);
+        }
         $parts = is_file($manifest) ? json_decode((string) file_get_contents($manifest), true) : [];
         if (!is_array($parts)) {
             return [];
@@ -21,6 +29,11 @@ trait TranslationUnitSplitTrait
         // arbitrary paths supplied by a damaged or edited cache file.
         return array_values(array_filter($parts, static fn($part): bool => is_string($part)
             && preg_match('/^' . preg_quote($primary, '/') . '\\.part-[0-9]+\\.cc$/D', $part) === 1));
+    }
+
+    private function splitTranslationUnitManifestPath(string $primary): string
+    {
+        return $this->getBuildDir() . '/cache/parts/' . hash('sha256', $primary) . '.json';
     }
 
     private function splitLargeTranslationUnit(string $code, string $primary, bool $force): string
@@ -64,8 +77,11 @@ trait TranslationUnitSplitTrait
                 $parts[] = $part;
             }
         }
-        if ($this->splitTranslationUnitsEnabled || $oldParts !== []) {
-            $this->writeFile($primary . '.parts.json', json_encode($parts, JSON_THROW_ON_ERROR));
+        $manifest = $this->splitTranslationUnitManifestPath($primary);
+        if ($parts !== []) {
+            $this->writeFile($manifest, json_encode($parts, JSON_THROW_ON_ERROR));
+        } elseif (is_file($manifest)) {
+            unlink($manifest);
         }
         foreach (array_diff($oldParts, $parts) as $obsolete) {
             foreach ([$obsolete, $this->getObjectFile($obsolete),

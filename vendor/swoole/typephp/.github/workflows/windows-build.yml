@@ -30,11 +30,11 @@ jobs:
       - name: Checkout TypePHP
         uses: actions/checkout@v4
 
-      - name: Checkout PHPX master
+      - name: Checkout PHPX v2.9.3
         uses: actions/checkout@v4
         with:
           repository: swoole/phpx
-          ref: master
+          ref: v2.9.3
           path: third_party/phpx
 
       - name: Setup PHP
@@ -42,7 +42,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-          extensions: zip
+          extensions: zip, mbstring
           tools: composer:v2
         env:
           fail-fast: true
@@ -350,11 +350,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $env:PHPRC = Join-Path $env:PHP_HOME 'php.ini'
           $env:PATH = "$env:PHPX_HOME\build;$env:PATH"
           & .\tpc.exe tests\windows\smoke\project.yml --job 1 --no-progress
           if ($LASTEXITCODE -ne 0) {
               throw "Windows smoke project compilation failed with exit code $LASTEXITCODE"
           }
+          Remove-Item Env:PHPRC
 
           $smokeExe = Join-Path '${{ github.workspace }}' 'tests\windows\smoke\windows_smoke.exe'
           if (-not (Test-Path $smokeExe)) {
@@ -384,18 +386,139 @@ jobs:
               throw "Windows smoke executable failed with exit code $($process.ExitCode)"
           }
           if ($stdout.Trim() -ne 'windows-smoke-ok:zts') {
-              throw "Unexpected Windows smoke output: $stdout"
+            throw "Unexpected Windows smoke output: $stdout"
           }
 
-      - name: Package tested Windows compiler
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+      - name: Run Windows Nano smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $env:PHPRC = Join-Path $env:PHP_HOME 'php.ini'
+          $env:PATH = "$env:PHPX_HOME\build;$env:PATH"
+          $nanoExe = Join-Path '${{ github.workspace }}' 'tests\windows\smoke\windows_nano_smoke.exe'
+          $nanoBuildDir = Join-Path $env:RUNNER_TEMP 'typephp-windows-nano-console-build'
+          & .\tpc.exe tests\windows\smoke\project.yml --nano --build-dir $nanoBuildDir --output $nanoExe --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "Windows Nano smoke project compilation failed with exit code $LASTEXITCODE"
+          }
+          Remove-Item Env:PHPRC
+
+          if (-not (Test-Path $nanoExe)) {
+              throw "Windows Nano smoke executable was not generated: $nanoExe"
+          }
+
+          $nanoImports = (& dumpbin.exe /imports $nanoExe | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed for Windows Nano executable with exit code $LASTEXITCODE"
+          }
+          if ($nanoImports -match '(?im)^\s*php(?:x|\d.*)?\.dll\s*$') {
+              throw "Windows Nano executable imports a PHP/PHPX runtime DLL:`n$nanoImports"
+          }
+
+          $processInfo = [Diagnostics.ProcessStartInfo]::new()
+          $processInfo.FileName = $nanoExe
+          $processInfo.ArgumentList.Add('nts')
+          $processInfo.UseShellExecute = $false
+          $processInfo.RedirectStandardOutput = $true
+          $processInfo.RedirectStandardError = $true
+          $processInfo.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+          $processInfo.Environment.Remove('PHPRC')
+
+          $process = [Diagnostics.Process]::new()
+          $process.StartInfo = $processInfo
+          if (-not $process.Start()) {
+              throw 'Unable to start the Windows Nano smoke executable'
+          }
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+
+          Write-Host "Windows Nano smoke stdout: $stdout"
+          Write-Host "Windows Nano smoke stderr: $stderr"
+          Write-Host "Windows Nano smoke exit code: $($process.ExitCode)"
+          if ($process.ExitCode -ne 0) {
+              throw "Windows Nano smoke executable failed with exit code $($process.ExitCode)"
+          }
+          if ($stdout.Trim() -ne 'windows-smoke-ok:nts') {
+            throw "Unexpected Windows Nano smoke output: $stdout"
+          }
+
+          $policyInfo = [Diagnostics.ProcessStartInfo]::new()
+          $policyInfo.FileName = $nanoExe
+          $policyInfo.ArgumentList.Add('nts')
+          $policyInfo.ArgumentList.Add('nano')
+          $policyInfo.UseShellExecute = $false
+          $policyInfo.RedirectStandardOutput = $true
+          $policyInfo.RedirectStandardError = $true
+          $policyInfo.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+          $policyInfo.Environment.Remove('PHPRC')
+
+          $policyProcess = [Diagnostics.Process]::new()
+          $policyProcess.StartInfo = $policyInfo
+          if (-not $policyProcess.Start()) {
+              throw 'Unable to start the Windows Nano policy probe'
+          }
+          if (-not $policyProcess.WaitForExit(30000)) {
+              $policyProcess.Kill()
+              $policyProcess.WaitForExit()
+              throw 'Windows Nano policy probe timed out'
+          }
+          $policyStdout = $policyProcess.StandardOutput.ReadToEnd()
+          $policyStderr = $policyProcess.StandardError.ReadToEnd()
+
+          Write-Host "Windows Nano policy stdout: $policyStdout"
+          Write-Host "Windows Nano policy stderr: $policyStderr"
+          Write-Host "Windows Nano policy exit code: $($policyProcess.ExitCode)"
+          if ($policyProcess.ExitCode -eq 0) {
+              throw 'Windows Nano policy probe unexpectedly succeeded'
+          }
+          $policyOutput = "$policyStdout`n$policyStderr"
+          if (-not $policyOutput.Contains("function 'call_user_func' is undefined.")) {
+              throw "Windows Nano policy probe returned an unexpected error: $policyOutput"
+          }
+
+          # A GUI-subsystem Nano application uses the same source-composed
+          # runtime, but must also link without a console window.
+          $nanoGuiExe = Join-Path '${{ github.workspace }}' 'tests\windows\smoke\windows_nano_gui_smoke.exe'
+          $nanoGuiBuildDir = Join-Path $env:RUNNER_TEMP 'typephp-windows-nano-gui-build'
+          $env:PHPRC = Join-Path $env:PHP_HOME 'php.ini'
+          & .\tpc.exe tests\windows\smoke\project.yml --nano --no-console --build-dir $nanoGuiBuildDir --output $nanoGuiExe --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "Windows Nano GUI project compilation failed with exit code $LASTEXITCODE"
+          }
+          Remove-Item Env:PHPRC
+          if (-not (Test-Path $nanoGuiExe)) {
+              throw "Windows Nano GUI executable was not generated: $nanoGuiExe"
+          }
+          $guiImports = (& dumpbin.exe /imports $nanoGuiExe | Out-String)
+          if ($guiImports -match '(?im)^\s*php(?:x|\d.*)?\.dll\s*$') {
+              throw "Windows Nano GUI executable imports a PHP/PHPX runtime DLL:`n$guiImports"
+          }
+          $guiHeaders = (& dumpbin.exe /headers $nanoGuiExe | Out-String)
+          if ($guiHeaders -notmatch '(?im)^\s*2\s+subsystem\b') {
+              throw "Windows Nano GUI executable is not linked with the Windows GUI subsystem:`n$guiHeaders"
+          }
+
+      - name: Package tested Windows compiler
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PHPRC = Join-Path $env:PHP_HOME 'php.ini'
+          $env:PATH = "$env:PHPX_HOME\build;$env:PATH"
+
           composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
           if ($LASTEXITCODE -ne 0) {
               throw "Production Composer install failed with exit code $LASTEXITCODE"
+          }
+          php bin\tpc.php project-release.yml --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone TypePHP release build failed with exit code $LASTEXITCODE"
+          }
+          & .\tpc.exe --version
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone TypePHP release compiler failed with exit code $LASTEXITCODE"
           }
           $env:TYPEPHP_PACKAGE_VERSION = $env:GITHUB_REF_NAME
           php package.php
@@ -403,17 +526,17 @@ jobs:
               throw "Windows packaging failed with exit code $LASTEXITCODE"
           }
 
-          $packages = @(Get-ChildItem 'tpc_v*_windows_*.zip' -File)
+          $packages = @(Get-ChildItem 'tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip' -File)
           if ($packages.Count -ne 1) {
               throw "Expected one Windows release package, found $($packages.Count)"
           }
 
       - name: Verify portable Windows PHP configuration
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $package = Get-ChildItem 'tpc_v*_windows_*.zip' -File | Select-Object -First 1
+          $package = Get-ChildItem 'tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip' -File | Select-Object -First 1
           $destination = Join-Path $env:RUNNER_TEMP ('typephp-release-check-' + [guid]::NewGuid())
           Expand-Archive -LiteralPath $package.FullName -DestinationPath $destination
           $roots = @(Get-ChildItem $destination -Directory)
@@ -421,7 +544,11 @@ jobs:
               throw "Expected one release package directory, found $($roots.Count)"
           }
           $root = $roots[0].FullName
+          if (Test-Path (Join-Path $root 'vendor')) {
+              throw 'Release package must not contain a vendor directory'
+          }
           $phpExe = Join-Path $root 'php.exe'
+          $compilerExe = Join-Path $root 'tpc.exe'
           $phpIni = Join-Path $root 'php.ini'
           $checkFile = Join-Path $destination 'check-php-ini.php'
           $check = @'
@@ -437,6 +564,16 @@ jobs:
           try {
               # Ignore the runner's extra ini files; test the relocated package.
               $env:PHP_INI_SCAN_DIR = ''
+              Push-Location $root
+              try {
+                  $compilerOutput = (& $compilerExe --version 2>&1 | Out-String).Trim()
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Relocated TypePHP compiler failed: $compilerOutput"
+                  }
+                  Write-Host "Relocated TypePHP compiler: $compilerOutput"
+              } finally {
+                  Pop-Location
+              }
               foreach ($workingDirectory in @($root, $destination)) {
                   Push-Location $workingDirectory
                   try {
@@ -453,13 +590,13 @@ jobs:
           }
 
       - name: Upload Windows release package
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: release-windows-x64-php-${{ matrix.php }}-zts
           if-no-files-found: error
           retention-days: 1
-          path: tpc_v*_windows_*.zip
+          path: tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip
 
       - name: Upload Windows build outputs
         if: always()
@@ -471,6 +608,7 @@ jobs:
           path: |
             tpc.exe
             tests/windows/smoke/windows_smoke.exe
+            tests/windows/smoke/windows_nano_smoke.exe
             tests/windows/smoke/build/**/*.cc
             tests/windows/smoke/build/**/*.h
             tests/windows/smoke/build/**/*.rsp

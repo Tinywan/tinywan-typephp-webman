@@ -24,11 +24,6 @@ use Workerman\Coroutine;
  */
 class Parallel
 {
-    private static function toMixed(mixed $value): mixed
-    {
-        return $value;
-    }
-
     /**
      * @var Channel|null
      */
@@ -84,7 +79,7 @@ class Parallel
      */
     public function wait(): array
     {
-        $barrier = self::toMixed(Barrier::create());
+        $barrier = Barrier::create();
         foreach ($this->callbacks as $key => $callback) {
             $this->channel?->push(true);
             // A completed Fiber may retain its closure until the caller frame returns.

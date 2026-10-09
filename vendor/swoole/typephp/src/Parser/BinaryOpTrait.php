@@ -143,17 +143,21 @@ trait BinaryOpTrait
         }
 
         if ($op === '%') {
-            if (!($leftType === Type::INT and $rightType === Type::INT)) {
-                return 'php::fn::mod(' . $leftExpr . ', ' . $rightExpr . ')';
-            }
+            $requiresRuntimeModulo = $leftType !== Type::INT || $rightType !== Type::INT;
             // varint_types retains PHP's catchable modulo errors and
             // PHP_INT_MIN % -1 behavior. Native integers use raw C++ rules.
-            if ($this->varIntTypes
+            if (!$requiresRuntimeModulo
+                && $this->varIntTypes
                 && !$this->isExplicitNativeArithmeticExpr($left)
                 && !$this->isExplicitNativeArithmeticExpr($right)
                 && $this->evaluateConstantIntArithmetic($left, $right, '%') === null
             ) {
-                return 'php::fn::mod(' . $leftExpr . ', ' . $rightExpr . ')';
+                $requiresRuntimeModulo = true;
+            }
+            if ($requiresRuntimeModulo) {
+                return $this->convertIntExpr(
+                    'php::fn::mod(' . $leftExpr . ', ' . $rightExpr . ')',
+                );
             }
         }
 
@@ -754,6 +758,13 @@ trait BinaryOpTrait
                 if ($def && $this->isNativePropertyTypedValue($expr)) {
                     return $def->type;
                 }
+            }
+            $def = $this->getNativePropertyDef($expr);
+            if ($def !== null
+                && in_array($def->type, [Type::INT, Type::FLOAT, Type::BOOL], true)
+                && $this->isNativePropertyTypedValue($expr)
+            ) {
+                return $def->type;
             }
             return Type::VAR;
         }

@@ -67,6 +67,9 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-d`, `--debug` | 调试构建；关闭优化、增加调试符号和 TypePHP 源码跟踪。 |
 | `-o`, `--output <file>` | 输出文件名。 |
 | `-m`, `--mode <bin|lib|ext>` | 构建模式，默认 `bin`。 |
+| `--sapi <embed|cli|fpm>` | `bin` 目标使用的 SAPI，支持逗号分隔的多个值；默认 `embed`。 |
+| `--entry <file>` | CLI SAPI 启动时执行的 PHP 入口文件；命令行配置覆盖 YAML 的 `entry`。 |
+| `--php-builder[=<配置>]` | 从 php-src 构建 PHP；省略配置时默认为 `{}`，例如 `--php-builder='extensions: [swoole, mongodb]; zts: on'`。 |
 | `-r`, `--run` | 构建成功后运行。 |
 | `-j`, `--job <num>` | 并行编译任务数，默认 `4`。 |
 | `-f`, `--force` | 忽略 phpx misc 对象缓存，强制重新编译。 |
@@ -75,8 +78,28 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | 对生成代码运行 clang-format。 |
 | `--no-progress` | 不显示进度条，逐文件输出进度。 |
 | `--no-color` | 禁用彩色输出。 |
+| `--proxy <url>` | 所有网络传输使用 HTTP(S) 或 SOCKS 代理。 |
 
 `-v` / `--version` 只显示版本，不是 verbose 选项。
+
+`mode` 表达产物类型，`sapi` 表达 PHP 进程接口；`cli` 和 `fpm` 不是构建模式。
+两者都强依赖 `php-builder`。`embed` 既可使用默认的宿主机 `libphp`，也可使用
+私有的静态 PHP 运行时。当默认 Embed 构建找不到宿主库时，交互式运行会询问是否启用
+`php-builder`；CI 中应显式传入该选项。
+
+等价的 YAML 配置为：
+
+```yaml
+mode: bin
+sapi: [cli, fpm, embed]
+php-builder:
+  extensions: [swoole, mongodb]
+  zts: on
+```
+
+`php-builder` 不依赖宿主机 PHP 运行时，也不会修改下载的 php-src 原始目录。它会从
+项目源码、YAML 和 Composer 元数据收集扩展依赖，自动生成 configure 参数，并使用
+操作系统提供的底层库构建私有静态运行时。
 
 ## 目标和工具链
 
@@ -117,6 +140,20 @@ TypePHP 和 PHPX 的最低运行时版本均为 PHP 8.4。`--php-version` 与实
 
 传入 `project.yml` 时，命令行参数优先于 YAML 中的同名配置。项目文件格式参见用户文档及代码中的项目配置解析器。
 
+### 符号链接的源码目录
+
+扫描源码目录时会进入符号链接指向的目录，因此通过 Composer path 仓库安装的依赖
+（以符号链接方式安装）会像其他源码一样被编译。指向自身上级目录的链接不会无限
+递归；通过多个链接都能访问到的文件只会被编译一次。
+
+如需排除，使用常规的 `ignore` 配置，并按访问该目录所用的路径书写，而不是链接
+指向的目标路径：
+
+```yaml
+ignore:
+  - vendor/vendor/mylib
+```
+
 ### 预编译对象文件
 
 项目可以把外部工具链生成的对象文件作为通用链接输入：
@@ -136,6 +173,24 @@ tpc 产出 ELF 后由项目自己的构建流程另行封装。
 使用 `cxx-flags`、`c-flags`、`asm-flags` 和 `ld-flags` 分别设置项目级
 C++、C、汇编和链接参数。
 
+### 扩展元数据
+
+扩展项目可以在 `project.yml` 中声明元数据：
+
+```yaml
+name: my_extension
+mode: ext
+version: 1.0.0
+info:
+  Author: Example Team
+  Description: Example native extension
+  License: Apache-2.0
+```
+
+`version` 会写入 Zend 模块入口，并可通过 `ReflectionExtension::getVersion()` 获取。
+`info` 映射接受任意行标签和标量值，TypePHP 会保持配置顺序，并将它们显示在模块独立的
+`phpinfo()` 区块中。
+
 ### PHP 扩展依赖
 
 程序依赖其他 PHP 扩展时，可以将必需模块写入 Zend 模块依赖表：
@@ -149,6 +204,21 @@ extension-dependencies:
 `ext-deps` 是等价的简写名称。一个项目中只能使用其中一个配置名；同时出现 `extension-dependencies` 和 `ext-deps` 会产生配置错误。
 
 编译器会为每一项生成 `ZEND_MOD_REQUIRED`。Zend 在加载 TypePHP 模块时检查这些扩展是否已加载。该配置不表示原生链接库；C/C++ 链接依赖仍使用 `link-libs`。
+
+### 内嵌 PHP 依赖和资源
+
+发布用的 `mode: bin` 项目可以通过 `embedded-files` 将 Composer vendor、PHP
+fallback 文件和只读资源打包进可执行文件：
+
+```yaml
+embedded-files:
+  - vendor
+  - resources
+```
+
+构建时需要匹配的 PHP CLI 和 OPcache；运行时不需要 PHP CLI、OPcache、Composer
+安装或磁盘 vendor。完整用法和限制见
+[将 PHP 依赖嵌入可执行文件](EMBEDDED_FILES.md)。
 
 ## 查看权威帮助
 

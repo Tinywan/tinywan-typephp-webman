@@ -332,6 +332,12 @@ trait SsaTypeOptimizer
             return $this->detectConstType($expr) === Type::INT;
         }
 
+        if ($expr instanceof Node\Expr\FuncCall && $expr->name instanceof Node\Name) {
+            $target = $this->resolveStaticFunctionCallTarget($expr->name);
+            return $target['definitelyGlobal']
+                && $this->detectMathCallReturnType($target['lower'], $expr) === Type::INT;
+        }
+
         if ($expr instanceof Node\Expr\BitwiseNot) {
             return $this->isSafeSsaIntExpr($expr->expr);
         }

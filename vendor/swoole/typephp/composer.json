@@ -22,14 +22,14 @@
     "marcj/topsort": "^2.0",
     "symfony/var-dumper": "^8.0",
     "symfony/yaml": "^8.0",
-    "swoole/phpx": "~2.9.0",
+    "swoole/phpx": "~2.9.3",
     "ajaxray/ansikit": "^0.3"
   },
   "require-dev": {
     "phpunit/phpunit": "^10.4",
     "friendsofphp/php-cs-fixer": "^3.40",
     "phpstan/phpstan": "^2.2",
-    "swoole/php-nano": "^1.0.0"
+    "swoole/php-nano": "^1.1"
   },
   "autoload": {
     "psr-4": {

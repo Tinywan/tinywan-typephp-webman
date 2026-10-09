@@ -51,6 +51,17 @@ abstract class GccLikeBackend extends CompilerBackend
         return '-o';
     }
 
+    /** Include flag syntax is defined by the compiler driver, not the host platform. */
+    protected function formatIncludePaths(array $includePaths): string
+    {
+        $flags = [];
+        foreach ($includePaths as $path) {
+            $flags[] = '-I' . escapeshellarg($path);
+        }
+
+        return implode(' ', $flags);
+    }
+
     /** Format the sanitizer flag. */
     protected function formatSanitizerFlag(string $sanitizer): string
     {
@@ -280,6 +291,9 @@ abstract class GccLikeBackend extends CompilerBackend
 
         if (!empty($options['libraries'])) {
             $cmd .= ' ' . $this->formatLibraries($options['libraries']);
+        }
+        if (!empty($options['post_ldflags'])) {
+            $cmd .= ' ' . $options['post_ldflags'];
         }
 
         return $cmd;

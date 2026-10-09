@@ -61,7 +61,7 @@ class Worker
      *
      * @var string
      */
-    final public const VERSION = '5.2.2';
+    final public const VERSION = '5.2.3';
 
     /**
      * Status initial.
@@ -188,6 +188,28 @@ class Worker
      * @var ?callable
      */
     public $onWebSocketConnected = null;
+
+    /**
+     * Emitted when a websocket connection is closed by the peer (Only works when protocol is ws).
+     *
+     * @var ?callable
+     */
+    public $onWebSocketClose = null;
+
+    /**
+     * Emitted when a websocket ping frame is received (Only works when protocol is ws).
+     * Without a handler the ping is answered with a pong automatically.
+     *
+     * @var ?callable
+     */
+    public $onWebSocketPing = null;
+
+    /**
+     * Emitted when a websocket pong frame is received (Only works when protocol is ws).
+     *
+     * @var ?callable
+     */
+    public $onWebSocketPong = null;
 
     /**
      * Emitted when data is received.
@@ -546,11 +568,11 @@ class Worker
     protected static bool $outputDecorated;
 
     /**
-     * Worker object's hash id(unique identifier).
+     * Worker object's id(unique identifier).
      *
-     * @var ?string
+     * @var ?int
      */
-    protected ?string $workerId = null;
+    protected ?int $workerId = null;
 
     /**
      * Constructor.
@@ -561,7 +583,7 @@ class Worker
     public function __construct(?string $socketName = null, array $socketContext = [])
     {
         // Save all worker instances.
-        $this->workerId = spl_object_hash($this);
+        $this->workerId = spl_object_id($this);
         $this->context = new stdClass();
         static::$workers[$this->workerId] = $this;
         static::$pidMap[$this->workerId] = [];
@@ -615,8 +637,8 @@ class Worker
      */
     protected static function checkSapiEnv(): void
     {
-        // Only for cli, micro, and embed (TypePHP)
-        if (!in_array(PHP_SAPI, ['cli', 'micro', 'embed', 'cli-server', 'phpdbg'])) {
+        // Only for cli, micro and embed.
+        if (!in_array(PHP_SAPI, ['cli', 'micro', 'embed'])) {
             exit("Only run in command line mode" . PHP_EOL);
         }
         // Check pcntl and posix extension for unix.
@@ -718,6 +740,10 @@ class Worker
     protected static function init(): void
     {
         set_error_handler(static function (int $code, string $msg, string $file, int $line): bool {
+            // A custom handler is called even for diagnostics silenced with @, so honour the mask ourselves.
+            if (!(error_reporting() & $code)) {
+                return true;
+            }
             static::safeEcho(sprintf("%s \"%s\" in file %s on line %d\n", static::getErrorType($code), $msg, $file, $line));
             return true;
         });
@@ -1159,7 +1185,6 @@ class Worker
                     }
                     static::safeEcho("\nPress Ctrl+C to quit.\n\n");
                 }
-                break;
             case 'connections':
                 // Delete status file on shutdown
                 register_shutdown_function(static function () {
@@ -1596,7 +1621,7 @@ class Worker
             static::$status = static::STATUS_RUNNING;
 
             // Register shutdown function for checking errors.
-            register_shutdown_function([static::class, 'checkErrors']);
+            register_shutdown_function(static::checkErrors(...));
 
             // Create a global event loop.
             if (static::$globalEvent === null) {
@@ -1745,7 +1770,7 @@ class Worker
             static::$status = static::STATUS_RUNNING;
 
             // Register shutdown function for checking errors.
-            register_shutdown_function([static::class, 'checkErrors']);
+            register_shutdown_function(static::checkErrors(...));
 
             // Create a global event loop.
             if (static::$globalEvent === null) {
@@ -1784,11 +1809,11 @@ class Worker
     /**
      * Get worker id.
      *
-     * @param string $workerId
+     * @param int $workerId
      * @param int $pid
      * @return false|int|string
      */
-    protected static function getId(string $workerId, int $pid): false|int|string
+    protected static function getId(int $workerId, int $pid): false|int|string
     {
         return array_search($pid, static::$idMap[$workerId]);
     }
@@ -1937,7 +1962,7 @@ class Worker
      */
     protected static function monitorWorkersForWindows(): void
     {
-        Timer::add(1, [static::class, 'checkWorkerStatusForWindows']);
+        Timer::add(1, static::checkWorkerStatusForWindows(...));
 
         static::$globalEvent->run();
     }
@@ -2022,7 +2047,7 @@ class Worker
             posix_kill($oneWorkerPid, $sig);
             // If the process does not exit after stopTimeout seconds try to kill it.
             if (!static::getGracefulStop()) {
-                Timer::add(static::$stopTimeout, 'posix_kill', [$oneWorkerPid, SIGKILL], false);
+                Timer::add(static::$stopTimeout, posix_kill(...), [$oneWorkerPid, SIGKILL], false);
             }
         } // For child processes.
         else {
@@ -2066,12 +2091,12 @@ class Worker
             foreach ($workerPidArray as $workerPid) {
                 // Fix exit with status 2 for php8.2
                 if ($sig === SIGINT && !static::$daemonize) {
-                    Timer::add(1, 'posix_kill', [$workerPid, SIGINT], false);
+                    Timer::add(1, posix_kill(...), [$workerPid, SIGINT], false);
                 } else {
                     posix_kill($workerPid, $sig);
                 }
                 if (!static::getGracefulStop()) {
-                    Timer::add(ceil(static::$stopTimeout), 'posix_kill', [$workerPid, SIGKILL], false);
+                    Timer::add(ceil(static::$stopTimeout), posix_kill(...), [$workerPid, SIGKILL], false);
                 }
             }
             Timer::add(1, static::checkIfChildRunning(...));
@@ -2166,7 +2191,7 @@ class Worker
             file_put_contents(static::$statisticsFile, '');
             chmod(static::$statisticsFile, 0722);
             file_put_contents(static::$statisticsFile, serialize($allWorkerInfo) . "\n", FILE_APPEND);
-            $loadavg = function_exists('sys_getloadavg') ? array_map('round', sys_getloadavg(), [2, 2, 2]) : ['-', '-', '-'];
+            $loadavg = function_exists('sys_getloadavg') ? array_map(round(...), sys_getloadavg(), [2, 2, 2]) : ['-', '-', '-'];
             file_put_contents(static::$statisticsFile,
                 (static::$daemonize ? "Start worker in DAEMON mode." : "Start worker in DEBUG mode.") . "\n", FILE_APPEND);
             file_put_contents(static::$statisticsFile,
@@ -2438,8 +2463,13 @@ class Worker
 
         $msg = str_replace(['<n>', '<w>', '<g>'], [$line, $white, $green], $msg);
         $msg = str_replace(['</n>', '</w>', '</g>'], $end, $msg);
+        // The stream is normally set up by runAll(), but safeEcho() is also reachable from plain
+        // client scripts. The resource check also handles a closed handle without another warning.
+        if (static::$outputStream === null) {
+            static::initStdOut();
+        }
         set_error_handler(static fn (...$args): bool => true);
-        if (!feof(self::$outputStream)) {
+        if (is_resource(self::$outputStream) && !feof(self::$outputStream)) {
             fwrite(self::$outputStream, $msg);
             fflush(self::$outputStream);
         }
@@ -2618,9 +2648,9 @@ class Worker
         // Register a listener to be notified when server socket is ready to read.
         if (static::$globalEvent !== null && ($this->pauseAccept === null || $this->pauseAccept === true) && $this->mainSocket !== null) {
             if ($this->transport !== 'udp') {
-                static::$globalEvent->onReadable($this->mainSocket, [$this, 'acceptTcpConnection']);
+                static::$globalEvent->onReadable($this->mainSocket, $this->acceptTcpConnection(...));
             } else {
-                static::$globalEvent->onReadable($this->mainSocket, [$this, 'acceptUdpConnection']);
+                static::$globalEvent->onReadable($this->mainSocket, $this->acceptUdpConnection(...));
             }
             $this->pauseAccept = false;
         }

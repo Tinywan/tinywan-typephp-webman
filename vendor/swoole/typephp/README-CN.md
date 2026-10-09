@@ -150,10 +150,12 @@ Android `arm64-v8a`、iPhoneOS `arm64` 和 WASI 后端；具体主机能否构�
 [Android 原生应用示例](examples/android-native/)和
 [iOS/macOS 原生应用示例](examples/apple-native/)。
 
-原生 Release Assets 默认使用 PHP 8.5 ZTS 的最新版本构建，提供 Linux x64、Linux
-ARM64、macOS ARM64 和 Windows x64 四个平台包；不提供原生 NTS 或 32 位 x86 包。
-Linux 与 macOS 包包含编译器和 production Composer 依赖，Windows 包则包含完整且
-匹配的 PHP/PHPX 运行时与 SDK。
+Linux、macOS 和 Windows Release Assets 分别使用最新的 PHP 8.4 ZTS 和 PHP 8.5
+ZTS 构建，文件名包含构建使用的完整 PHP 版本与 ZTS ABI。Linux 与 macOS 用户必须
+选择与宿主机 PHP 匹配的版本；Windows x64 发布包已包含匹配的 PHP/PHPX 运行时与
+SDK，用户可直接选择希望使用的内置 PHP 版本。不提供原生 NTS 或 32 位 x86 包。
+Linux 与 macOS 包只包含编译器、中英文 README 和 LICENSE，production Composer
+依赖已嵌入 `tpc`；Windows 包同样不再携带独立的 `vendor` 目录。
 
 ## 安装
 
@@ -188,11 +190,11 @@ php bin/tpc.php --help
 embed 安装前缀；在类 Unix 系统中，该目录应包含 `bin/php-config`、PHP 头文件和
 `lib/libphp.so`。
 
-### 构建 `libphp.so`
+### PHP 运行时选择
 
-二进制和共享库构建需要 PHP 的 `embed` SAPI。如果 Linux 上缺少 `libphp.so`，
-`tpc.php` 可以交互式下载 PHP 源码并自动构建。PHP 扩展构建从宿主 SAPI 解析 Zend
-符号，不能再加载第二份 `libphp`。详见[自动构建 libphp.so](docs/zh-cn/LIBPHP_INSTALLER.md)。
+二进制模式默认使用 Embed SAPI 和宿主机 `libphp`。找不到该库时，交互式构建会询问
+是否启用 `php-builder`，从 php-src 构建私有静态运行时。CLI 和 FPM 目标始终要求
+启用 `php-builder`。详见 [PHP builder](docs/zh-cn/LIBPHP_INSTALLER.md)。
 
 ## 快速开始
 
@@ -241,20 +243,19 @@ string(16) "Linux ..."
 默认可执行文件生成在执行 `tpc` 时的当前目录；普通模式与 Nano 模式共用
 `build` 目录保存生成代码、目标文件等中间产物。可使用 `-o` 显式修改输出路径。
 
-PHP 与 Composer 仅用于编译期。在 Linux、macOS、iOS、Android 上，生成的程序
-使用静态选定的 Nano 运行时及仅文件模式的 stream。Native Nano 可使用 C11、
-C++17 与 POSIX.1-2008，但依然不提供 socket、DNS、网络、远程 stream、动态 PHP
-加载及进程执行能力。WASI 是更小的能力子集，直接调用目标不支持的 API 会在
-编译期报错。
+PHP 与 Composer 仅用于编译期。在 Windows、Linux、macOS、iOS、Android 上，
+生成程序都会把选中的 PHP Nano 与 PHPX 源码直接编译进最终 exe 或库，不导入
+`php.dll`、`phpx.dll`，也不依赖宿主 `libphp`/`libphpx`。运行时使用仅文件模式的
+stream，依然不提供 socket、DNS、网络、远程 stream、动态 PHP 加载及进程执行
+能力。WASI 是更小的能力子集，直接调用目标不支持的 API 会在编译期报错。
 
 所有平台的 `--nano` 都会拒绝 `eval`、`include`、`include_once`、`require`、
 `require_once` 等 VM 入口以及匿名类。
 
-Windows 的差异在于构建后端：即使指定 `--nano`，也仍走原有的宿主机编译、链接
-流程，通过 import library 连接 `php.dll` 与 `phpx.dll`。Windows 不加载
-`swoole/php-nano`、`swoole/phpx` 的源码清单，也不会把它们的 C/C++ 源文件加入
-项目 `sources`。外部命令 API 与反引号语法依然会被拒绝；请求启动时还会从 Zend
-函数表移除这些命令函数，避免变量函数或回调形式绕过编译期检查。
+Windows 的 `mode: bin` 和 `mode: lib` 与 Linux、macOS 使用相同的源码组合契约：
+MSVC 将 C11 PHP Nano、C++17 PHPX 与生成的 TypePHP 源码连接为同一个 PE 产物；
+仅允许保留正常的 Windows 系统库和编译器运行库依赖。外部命令 API 与反引号语法
+在所有平台均由相同的 Nano 能力策略拒绝。
 
 除运行时 sources、头文件目录、编译宏和链接输入外，Nano 与普通模式共用同一套
 命令行参数解析、TypePHP 代码生成、并行任务调度、编译进度条、输出路径规则以及
@@ -290,6 +291,10 @@ bin/tpc.php lib/ -m lib -o mylib
 ```yaml
 name: myapp
 mode: bin
+version: 1.0.0
+info:
+  Author: TypePHP Team
+  Description: My TypePHP application
 php-version: "8.5"
 optimize: 2
 job: 8
@@ -303,6 +308,10 @@ sources:
     if: PHP_VERSION_ID >= 80500
   - path: src/windows
     if: PHP_OS_FAMILY == "Windows"
+
+# 将文件打包到二进制，并为 ZendVM 提供字节码及内存文件读取。
+embedded-files:
+  - vendor
 
 # 由项目自身的原生构建流程预编译。
 objects:
@@ -329,10 +338,50 @@ ext-deps:
   - curl
 ```
 
-路径以 YAML 文件所在目录为基准。source 可以是文件或目录；条件 source 支持
+项目文件可以通过 `include` 复用公共配置：
+
+```yaml
+include: project.yml
+embedded-files:
+  - vendor
+```
+
+`include` 可填写一个 YAML 路径或路径列表。被包含文件按顺序合并，当前文件最后覆盖；
+映射递归合并，列表整体替换。被包含文件可以继续包含下一级文件，但同一个规范化文件不能
+在一条尚未完成的 include 链中重复出现；已经完成解析的公共文件可以被后续 section 再次
+包含。项目中的相对路径统一以最外层项目文件为基准解析。
+
+路径以最外层项目 YAML 文件所在目录为基准。source 可以是文件或目录；条件 source 支持
 `PHP_VERSION`、`PHP_VERSION_ID` 和 `PHP_OS_FAMILY`。命令行参数优先于 YAML
-中的同名配置。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
+中的同名配置。扫描源码目录时会进入符号链接指向的目录，因此通过 Composer path
+仓库安装的依赖（以符号链接方式安装）会像其他源码一样被编译；如需排除，请在
+`ignore` 中按访问该目录所用的路径书写。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
 `ZEND_MOD_REQUIRED`，缺少所需 PHP 扩展时由 Zend 拒绝加载模块。
+`version` 用于设置 Zend 模块版本。`info` 映射可配置任意标签和值，并显示在模块
+独立的 `phpinfo()` 区块中。
+`embedded-files` 支持与 `sources` 相同的文件、目录及条件写法，仅在显式配置时启用。
+完整的开发/发布配置、Composer autoload 接入、构建依赖、缓存规则和排错方法见
+[将 PHP 依赖嵌入可执行文件](docs/zh-cn/EMBEDDED_FILES.md)。
+所列文件全部打包进二进制；未通过 `sources` 成功原生编译的 PHP 文件由 OPcache
+生成字节码。用于 API 声明的 `.stub.php` 文件仍保留在原始文件包中，不生成可执行字节码。
+其他无法由 OPcache 编译的内嵌 PHP 文件会输出跳过日志，原始文件仍保留，但不进入
+可执行字节码表。运行时的 `require` 和 `require_once` 从内存交给 ZendVM 执行，
+无需读取磁盘上的 PHP 文件。构建字节码的 PHP CLI、OPcache 与目标 PHP 运行时需匹配。
+因此使用 `embedded-files` 构建时，宿主机必须提供相应的 `php`/`php.exe` 和
+OPcache 扩展；只有 `tpc` 无法生成字节码。
+运行二进制文件时无需 Composer 安装、磁盘 vendor 文件或 OPcache 扩展；Composer
+自动加载文件也已嵌入，仍按需加载类。构建时有 OPcache 的情况下，匿名类在首次执行
+对应 `new class` 表达式时从同一字节码表加载。未配置 `embedded-files` 且缺少
+OPcache 时，匿名类退回内嵌 PHP 代码方式。
+仅当目录名为 `vendor` 且目录下存在 `autoload.php` 时，才会使用字节码缓存；
+目录 mtime 及构建用的 PHP/OPcache 未变化时复用字节码。其他 `embedded-files`
+文件（包括缺少 `autoload.php` 的同名目录）每次构建都重新生成。
+修改目录下已有文件不会更新目录 mtime；这种情况可用 `--force` 重新生成
+vendor 字节码。不可执行的 vendor PHP 文件也会缓存跳过结果，`--force` 可重新尝试。
+编译器生成的匿名类字节码按生成的 PHP 内容及构建用的 PHP/OPcache 单独缓存；
+未变化的匿名类不会导致内嵌归档重新编译。
+Windows 上，TypePHP 通过 `rc.exe` 把归档链接为 PE 资源，由 phpx 字节码 helper
+读取；归档未变化时复用 `.res` 文件。
 通用的 `objects` 列表会把已有 `.o`/`.obj` 文件直接加入链接步骤。TypePHP
 不会重新编译这些文件；原生编译器、目标架构、编译参数和增量构建均由项目负责。
 使用目标通用参数的原生文件仍应放入 `sources`；仅当某个编译单元需要不同参数且
@@ -341,8 +390,9 @@ ext-deps:
 项目级 `cxx-flags`、`c-flags`、`asm-flags` 和 `ld-flags` 分别应用于
 C++、C、汇编和链接命令。
 
-构建目录保存生成的 C++、依赖对象和预编译头缓存。复用同一个构建目录可以显著加快
-增量构建；仅在确实需要重编 PHPX 公共对象时使用 `--force`。
+构建目录中的可读 C++ 和头文件与内部产物分开存放。对象文件、opcode 字节码、
+二进制归档、清单、链接响应文件和预编译头均放在 `build-dir/cache` 下。复用同一个
+构建目录可以显著加快增量构建；仅在确实需要重编 PHPX 公共对象时使用 `--force`。
 
 全部项目配置项及命令行优先级详见[编译器命令行](docs/zh-cn/COMPILER_CLI.md)。
 
@@ -636,12 +686,16 @@ bin/tpc.php --wasm=browser app.php
 | `-d`, `--debug` | 调试构建，带符号和源码跟踪 |
 | `-o`, `--output <file>` | 输出文件名 |
 | `-m`, `--mode <bin\|lib\|ext>` | 构建模式（默认 `bin`） |
+| `--sapi <embed\|cli\|fpm>` | 二进制使用的 SAPI（默认 `embed`，支持逗号分隔多个值） |
+| `--entry <file>` | CLI SAPI 启动时执行的 PHP 入口文件 |
+| `--php-builder[=<配置>]` | 从 php-src 构建私有 PHP 运行时；省略配置时默认为 `{}` |
 | `-r`, `--run` | 构建成功后运行 |
 | `-j`, `--job <num>` | 并行编译任务数（默认 `4`） |
 | `-f`, `--force` | 不使用缓存，重新编译可复用 PHPX 对象 |
 | `--build-dir <dir>` | 生成 C++ 与中间产物的目录 |
 | `--dry` | 只生成 C++，跳过编译与链接 |
 | `--php-version <8.4\|8.5>` | 接受的 PHP 语法版本 |
+| `--proxy <url>` | 所有网络传输使用的代理 |
 | `--cxx-std <ver>` | C++ 标准（如 `c++17`、`c++20`） |
 | `--march <arch>` | 目标指令集（如 `native`） |
 | `--target-platform <triple>` | 交叉编译目标 triple |
@@ -662,8 +716,9 @@ source <(./tpc --generate-completion=bash)
 
 ## 常见问题
 
-- **缺少 `libphp.so` / `libphp.dylib`：** 安装或编译与当前 PHP 匹配的 embed SAPI，设置
-  `PHP_HOME`，或使用 `bin/tpc.php` 在 Linux 上提供的交互式安装流程。
+- **缺少 `libphp.so` / `libphp.dylib`：** 安装匹配的 Embed SAPI、设置 `PHP_HOME`、
+  接受交互式 `php-builder` 提示，或在非交互构建中传入
+  `--php-builder='extensions: []; zts: off'`。
 - **找不到 PHPX：** 将 `PHPX_HOME` 指向包含 `include/` 和
   `lib/libphpx.so`（或对应平台文件）的 PHPX 安装目录，并在编译项目前先构建 PHPX。
 - **启动崩溃或出现 ABI 错误：** PHP 头文件、`php-config`、`libphp` 和扩展 ABI
@@ -706,6 +761,14 @@ PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
 ```
 
+开发和 PHPT 使用的 `project.yml` 直接使用源码树中的 Composer 安装。发布打包阶段
+安装生产依赖，并使用 `project-release.yml` 单独构建可独立运行的编译器：
+
+```bash
+composer install --no-dev --classmap-authoritative
+PHPX_HOME=/path/to/phpx php bin/tpc.php project-release.yml --job 2 --no-progress
+```
+
 静态分析与从测试源码生成的覆盖矩阵是两项独立检查：
 
 ```bash
@@ -725,6 +788,7 @@ GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。�
 ## 文档
 
 - [快速入门](docs/zh-cn/QUICKSTART.md) —— 最小编译流程
+- [内嵌 PHP 依赖](docs/zh-cn/EMBEDDED_FILES.md) —— 将 Composer vendor 和运行时资源打包进可执行文件
 - [变更记录](CHANGELOG.md) —— 破坏性变更与 1.0 前升级说明
 - [编译模式](docs/zh-cn/COMPILATION_MODES.md) —— `bin`、`ext`、`lib`
 - [编译器命令行](docs/zh-cn/COMPILER_CLI.md) —— CLI 参数与项目配置

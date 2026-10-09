@@ -28,6 +28,8 @@ class PropertyDef
     public string $class = '';
     public array $typeCheck = [];
     public string $typeStr = '';
+    /** Optional fixed-width C++ storage used only by Native Class fields. */
+    public string $nativeStorageType = '';
     public bool $promoted = false;
     public bool $readonly = false;
     /** The generated Zend property table cannot represent this default exactly. */

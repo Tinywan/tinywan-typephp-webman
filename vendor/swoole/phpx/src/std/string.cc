@@ -52,10 +52,16 @@ Array explode(const String &delimiter, const String &string, Int limit) {
 // ========================
 
 String implode(const String &glue, const Array &pieces) {
-    zval rv;
-    ZVAL_NULL(&rv);
-    php_implode(glue.str(), pieces.array(), &rv);
-    return String(&rv, Ctor::Move);
+    Variant result;
+    {
+        // Element conversion may invoke user code that replaces either input.
+        String stable_glue(glue);
+        Array stable_pieces(pieces.unwrap_ptr());
+        php_implode(stable_glue.str(), stable_pieces.array(), result.ptr());
+    }
+    // Include exceptions raised while releasing the last reference to an element.
+    throwErrorIfOccurred();
+    return String(result);
 }
 
 // ========================
@@ -67,10 +73,6 @@ Variant strpos(const String &haystack, const String &needle, Int offset) {
     size_t haystack_len = haystack.length();
     size_t needle_len = needle.length();
 
-    if (needle_len == 0) {
-        return Variant(Int(0));
-    }
-
     if (offset < 0) {
         offset += (Int) haystack_len;
     }
@@ -78,6 +80,10 @@ Variant strpos(const String &haystack, const String &needle, Int offset) {
         php::throwException(zend_ce_value_error,
                             "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)");
         return Variant();
+    }
+
+    if (needle_len == 0) {
+        return Variant(offset);
     }
 
     found =
@@ -97,10 +103,6 @@ Variant stripos(const String &haystack, const String &needle, Int offset) {
     size_t haystack_len = haystack.length();
     size_t needle_len = needle.length();
 
-    if (needle_len == 0) {
-        return Variant(Int(0));
-    }
-
     if (offset < 0) {
         offset += (Int) haystack_len;
     }
@@ -108,6 +110,10 @@ Variant stripos(const String &haystack, const String &needle, Int offset) {
         php::throwException(zend_ce_value_error,
                             "stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)");
         return Variant();
+    }
+
+    if (needle_len == 0) {
+        return Variant(offset);
     }
 
     const char *found = (const char *) php_memnistr(
@@ -126,11 +132,6 @@ Variant stripos(const String &haystack, const String &needle, Int offset) {
 Variant strrpos(const String &haystack, const String &needle, Int offset) {
     size_t haystack_len = haystack.length();
     size_t needle_len = needle.length();
-
-    if (needle_len == 0) {
-        // Empty needle matches at the end of the string (PHP 8.x behavior)
-        return Variant((Int) haystack_len);
-    }
 
     const char *p, *e;
 
@@ -154,6 +155,10 @@ Variant strrpos(const String &haystack, const String &needle, Int offset) {
         } else {
             e = haystack.data() + haystack_len + offset + needle_len;
         }
+    }
+
+    if (needle_len == 0) {
+        return Variant((Int) (e - haystack.data()));
     }
 
     const char *found = (const char *) zend_memnrstr(p, needle.data(), needle_len, e);
@@ -272,6 +277,11 @@ String substr(const String &s, Int offset, const Variant &length) {
 // ========================
 
 String dirname(const String &path, int levels) {
+    if (levels < 1) {
+        php::throwException(zend_ce_value_error,
+                            "dirname(): Argument #2 ($levels) must be greater than or equal to 1");
+        return String();
+    }
     size_t len = path.length();
     if (len == 0) {
         return String();

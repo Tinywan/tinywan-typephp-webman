@@ -1,5 +1,6 @@
 #include <phpx.h>
 #include <typephp_runtime.h>
+#include <typephp_opcode_table.h>
 
 BEGIN_EXTERN_C()
 #include "ext/standard/basic_functions.h"
@@ -10,7 +11,12 @@ BEGIN_EXTERN_C()
 END_EXTERN_C()
 
 static void module_init(zend_module_entry *module) {
-    if (zend_register_module_ex(module, MODULE_PERSISTENT) == nullptr) {
+    // php_embed_init() has already started the request. Registering another
+    // persistent module at this point appends persistent function/class keys
+    // after Zend's request cleanup boundary. A temporary module is the Zend
+    // supported form for a module loaded during a request, and its destructor
+    // removes those symbols before shutdown_executor() walks the tables.
+    if (zend_register_module_ex(module, MODULE_TEMPORARY) == nullptr) {
         zend_error(E_ERROR, "Failed to register module [%s]", module->name);
         exit(255);
     }
@@ -60,28 +66,38 @@ static void cli_register_file_handles() {
 }
 
 static void module_shutdown(zend_module_entry *module) {
-    /**
-     * There is a bug in PHP's handling of internal strings. All interned strings are released in the request shutdown
-     * function, but then released again in the php_embed_shutdown function, resulting in a use-after-free issue. These
-     * must be manually removed from the module table to prevent double release.
-     */
+    // Remove the late temporary module before shutdown_executor() traverses
+    // the function and class tables. Its destructor runs MSHUTDOWN and removes
+    // the module's internal symbols.
     auto name_len = strlen(module->name);
-    auto lcname = zend_string_alloc(name_len, module->type == MODULE_PERSISTENT);
+    auto lcname = zend_string_alloc(name_len, false);
     zend_str_tolower_copy(ZSTR_VAL(lcname), module->name, name_len);
     zend_hash_del(&module_registry, lcname);
+    zend_string_release(lcname);
 }
 
 static zend_module_entry *typephp_runtime_module = nullptr;
+static typephp_module_pre_shutdown typephp_runtime_pre_shutdown = nullptr;
+static uint32_t typephp_runtime_persistent_functions = 0;
+static uint32_t typephp_runtime_persistent_classes = 0;
+static uint32_t typephp_runtime_persistent_constants = 0;
 static bool typephp_runtime_started = false;
 
-extern "C" int typephp_runtime_start(typephp_module_getter get_module, int argc, char **argv) {
+extern "C" int typephp_runtime_start(
+    typephp_module_getter get_module, typephp_module_pre_shutdown pre_shutdown, int argc, char **argv) {
     if (typephp_runtime_started) {
         return 0;
     }
 
     php_embed_init(argc, argv);
 
+    typephp_opcode_table_install();
+
+    typephp_runtime_persistent_functions = EG(persistent_functions_count);
+    typephp_runtime_persistent_classes = EG(persistent_classes_count);
+    typephp_runtime_persistent_constants = EG(persistent_constants_count);
     typephp_runtime_module = get_module();
+    typephp_runtime_pre_shutdown = pre_shutdown;
     module_init(typephp_runtime_module);
 
 #if !defined(PHP_WIN32) && !defined(__wasi__) && !defined(PHPX_IOS) && !defined(PHPX_ANDROID)
@@ -139,14 +155,43 @@ extern "C" void typephp_runtime_stop(void) {
     }
     zend_end_try();
 
-    // Keep this manual cleanup and registry removal. Registering an internal
-    // module after request startup exposes a PHP Embed double-release bug for
-    // its persistent strings if the module remains registered through
-    // php_module_shutdown().
+    // The TypePHP module was registered after request startup and therefore is
+    // absent from PHP's precomputed shutdown lists. Run and unload it manually.
     typephp_runtime_module->request_shutdown_func(typephp_runtime_module->type, typephp_runtime_module->module_number);
+    // Temporary-module class metadata must remain valid until every request
+    // object has been destroyed. Cycles are normally collected later by
+    // shutdown_executor(), but this late module has to be removed before that
+    // point. Collect them after RSHUTDOWN has dropped module-owned roots and
+    // while class entries, property_info and enum constant ASTs are still
+    // alive. This is an embed process-shutdown cost, not an extension
+    // RINIT/RSHUTDOWN cost.
+    zend_try {
+        gc_collect_cycles();
+    }
+    zend_end_try();
+    // Zend's generic temporary-module destructor removes classes before
+    // MSHUTDOWN. Give generated code a narrow hook to release class-owned data
+    // that requires the reverse ordering, without moving the rest of
+    // MSHUTDOWN ahead of normal module cleanup.
+    if (typephp_runtime_pre_shutdown != nullptr) {
+        typephp_runtime_pre_shutdown();
+    }
     module_shutdown(typephp_runtime_module);
+
+    // Embedded opcode blobs allocate their user functions/classes in the
+    // request arena. Match Zend's release-build fast-shutdown behavior: remove
+    // those table tails without running per-symbol destructors, then let the
+    // request memory manager reclaim the arena as a whole. Debug PHP builds
+    // otherwise report these intentionally bulk-freed allocations as leaks.
+    zend_hash_discard(EG(function_table), typephp_runtime_persistent_functions);
+    zend_hash_discard(EG(class_table), typephp_runtime_persistent_classes);
+    zend_hash_discard(EG(zend_constants), typephp_runtime_persistent_constants);
+    PG(report_memleaks) = false;
+
+    typephp_opcode_table_uninstall();
     php_embed_shutdown();
 
     typephp_runtime_module = nullptr;
+    typephp_runtime_pre_shutdown = nullptr;
     typephp_runtime_started = false;
 }

@@ -71,7 +71,7 @@ final class Android extends UnixPlatform
         return [];
     }
 
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         $paths = [
             $phpDir . '/include/php',

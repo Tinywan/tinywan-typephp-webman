@@ -242,6 +242,9 @@ final class InvalidContext
 | `bool` | `php::Bool` | 原生值字段 |
 | `int` | `php::Int` | 原生值字段 |
 | `float` | `php::Float` | 原生值字段 |
+| `int8` / `int16` / `int32` | `int8_t` / `int16_t` / `int32_t` | 按指定位宽存储；表达式类型仍为 `php::Int` |
+| `uint8` / `uint16` / `uint32` | `uint8_t` / `uint16_t` / `uint32_t` | 按指定位宽存储；表达式类型仍为 `php::Int` |
+| `float32` | `float` | 4 字节存储；表达式类型仍为 `php::Float` |
 | `string` | `php::Str` | TypePHP 当前使用的 PHPX RAII 字符串类型 |
 | `array` | `php::Array` | PHPX RAII 数组，保留 PHP COW 语义 |
 | 确定的 Zend class | `php::Object` | 保存 Zend Object，并在赋值入口验证 class |
@@ -254,6 +257,8 @@ final class InvalidContext
 | BigInt/BigFloat/Decimal | `php::Var` | 保存 PHPX boxed 高精度值；字段寻址仍是固定偏移，运算复用现有 Variant ABI |
 
 `string`、`array`、Zend Object、Stream 和 mixed 字段仍然直接位于 C++ `struct` 的固定偏移处。它们持有的底层 zval 或 zend 对象由 PHPX RAII 类型管理，但属性读取不需要属性哈希表、object handler 或 ZendVM 分派。
+
+定宽标量名称只适用于 Native Class 属性，用于选择字段存储，不会引入新的 PHP 表达式类型。布局仍遵循 C++ 的自然对齐和尾部填充，TypePHP 不生成 packed class。仅包含标量字段且没有多态机制的 Native Class，其 payload 布局和尺寸与生成的 C++ class 一致；Native Heap 的 GC header 位于 payload 之前，不计入 C++ 对象尺寸。
 
 PHP 本身不允许将 `resource` 写成属性类型；TypePHP 中的 stream resource 应使用已有的 `Stream` 伪类型声明。`void`、`never`、`callable` 等 PHP 本身禁止用于属性声明的类型，在 Native Class 中同样禁止。
 

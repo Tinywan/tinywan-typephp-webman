@@ -88,6 +88,51 @@ class PlatformTest extends TestCase
         }
     }
 
+    public function testLinuxFindsEmbedLibraryOutsidePhpConfigLibDir(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            self::markTestSkipped('The fake php-config fixture requires a POSIX shell');
+        }
+
+        $sdk = sys_get_temp_dir() . '/typephp-linux-sdk-' . bin2hex(random_bytes(6));
+        mkdir($sdk . '/bin', 0777, true);
+        mkdir($sdk . '/extensions', 0777, true);
+        mkdir($sdk . '/lib', 0777, true);
+        touch($sdk . '/lib/libphp.so');
+        $phpConfig = $sdk . '/bin/php-config';
+        $script = "#!/bin/sh\ncase \"\$1\" in\n"
+            . "  --version) printf '%s\\n' " . escapeshellarg(PHP_VERSION) . ";;\n"
+            . "  --prefix) printf '%s\\n' " . escapeshellarg($sdk) . ";;\n"
+            . "  --lib-dir) printf '%s\\n' " . escapeshellarg($sdk . '/extensions') . ";;\n"
+            . "  --lib-embed) printf '%s\\n' libphp.so;;\n"
+            . "esac\n";
+        file_put_contents($phpConfig, $script);
+        chmod($phpConfig, 0755);
+
+        try {
+            $platform = new Linux();
+            self::assertSame(
+                [$sdk . '/extensions', $sdk . '/lib'],
+                $platform->buildPhpLibPaths($sdk),
+            );
+            self::assertSame(
+                [
+                    'embed' => $sdk . '/lib/libphp.so',
+                    'static' => null,
+                    'is_shared' => true,
+                ],
+                $platform->detectPhpLibs($sdk),
+            );
+        } finally {
+            unlink($phpConfig);
+            unlink($sdk . '/lib/libphp.so');
+            rmdir($sdk . '/extensions');
+            rmdir($sdk . '/lib');
+            rmdir($sdk . '/bin');
+            rmdir($sdk);
+        }
+    }
+
     /**
      * 测试 Windows 平台基本功能
      */

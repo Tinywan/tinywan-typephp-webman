@@ -573,7 +573,7 @@ class Route
         static::$registeringSource = null;
 
         static::$dispatcher = simpleDispatcher(function (RouteCollector $route) use ($paths) {
-            static::setCollector($route);
+            Route::setCollector($route);
             foreach ($paths as $configPath) {
                 $routeConfigFile = $configPath . '/route.php';
                 if (is_file($routeConfigFile)) {
@@ -588,8 +588,7 @@ class Route
                     if ($file->getBaseName('.php') !== 'route') {
                         continue;
                     }
-                    $filePath = $file->getPathname();
-                    $appConfigFile = pathinfo($filePath, PATHINFO_DIRNAME) . '/app.php';
+                    $appConfigFile = pathinfo($file, PATHINFO_DIRNAME) . '/app.php';
                     if (!is_file($appConfigFile)) {
                         continue;
                     }
@@ -597,7 +596,7 @@ class Route
                     if (empty($appConfig['enable'])) {
                         continue;
                     }
-                    require_once $filePath;
+                    require_once $file;
                 }
             }
             static::loadAnnotationRoutes();

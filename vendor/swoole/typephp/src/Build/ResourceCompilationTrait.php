@@ -19,7 +19,7 @@ trait ResourceCompilationTrait
             return false;
         }
         $generator = $this->createResourceGenerator();
-        return $generator !== null && $generator->hasResource();
+        return ($generator !== null && $generator->hasResource()) || $this->embeddedArchiveFile !== null;
     }
 
     public function getResourceRcFile(): string
@@ -48,18 +48,39 @@ trait ResourceCompilationTrait
         }
 
         $generator = $this->createResourceGenerator();
-        if ($generator === null || !$generator->hasResource()) {
+        if (($generator === null || !$generator->hasResource()) && $this->embeddedArchiveFile === null) {
             return;
         }
 
         $rcFile = $this->getResourceRcFile();
-        $rcContent = $generator->generate();
+        $rcContent = $generator?->generate() ?? '';
+        if ($this->embeddedArchiveFile !== null) {
+            $archive = $this->embeddedArchiveFile;
+            $archivePath = str_replace('\\', '/', $archive);
+            $rcContent .= '// archive-sha256: ' . hash_file('sha256', $archive) . PHP_EOL;
+            $rcContent .= '24103 RCDATA "' . addcslashes($archivePath, '"') . '"' . PHP_EOL;
+        }
         $this->writeFile($rcFile, "\xEF\xBB\xBF" . $rcContent);
         $this->climate->info('Generated resource file: ' . $rcFile);
 
         $backend = $this->getCompilerBackend();
         if ($backend instanceof Msvc) {
             $resFile = $this->getResourceResFile();
+            $inputs = [$rcContent];
+            if ($generator !== null) {
+                foreach ([$generator->getIconPath(), $generator->getManifestPath()] as $file) {
+                    if ($file !== null && is_file($file)) {
+                        $inputs[] = hash_file('sha256', $file);
+                    }
+                }
+            }
+            $cacheKey = hash('sha256', implode("\n", $inputs));
+            $cacheFile = $this->getBuildDir() . '/cache/resource/app_resource.sha256';
+            if (!$this->climate->arguments->defined('force') && is_file($resFile)
+                && is_file($cacheFile) && trim((string) file_get_contents($cacheFile)) === $cacheKey) {
+                $this->climate->darkGray('Resource compiled: ' . $resFile . ' [cache]');
+                return;
+            }
             $cmd = $backend->compileResourceFile($rcFile, $resFile);
             $this->climate->comment($cmd);
 
@@ -75,9 +96,16 @@ trait ResourceCompilationTrait
             if (!file_exists($resFile)) {
                 $this->error('Resource file not generated: ' . $resFile);
             }
+            if (!is_dir(dirname($cacheFile)) && !mkdir(dirname($cacheFile), 0777, true)
+                && !is_dir(dirname($cacheFile))) {
+                throw new \RuntimeException('Cannot create resource cache directory: ' . dirname($cacheFile));
+            }
+            if (file_put_contents($cacheFile, $cacheKey . PHP_EOL) === false) {
+                throw new \RuntimeException('Cannot write resource cache metadata: ' . $cacheFile);
+            }
             $this->climate->green('Resource compiled: ' . $resFile);
         } else {
-            $this->climate->warning('Resource files are only supported with MSVC backend on Windows');
+            $this->climate->out('Resource files are only supported with MSVC backend on Windows');
         }
     }
 }

@@ -16,7 +16,7 @@ TEST(base_extra, args_to_array_preserves_order) {
 // Test include with REQUIRE type
 TEST(base_extra, include_require) {
     auto rs = include(get_include_dir() + "/../include/return_const.php", REQUIRE);
-    ASSERT_STREQ(rs.toCString(), PHP_VERSION);
+    ASSERT_EQ(rs.toString(), get_runtime_php_version());
 
     try_call([]() { include("/nonexistent/file.php", REQUIRE); }, "");
 }
@@ -28,7 +28,7 @@ TEST(base_extra, include_value_path) {
 
     auto result = include_value(Variant(filename), REQUIRE);
 
-    ASSERT_STREQ(result.toCString(), PHP_VERSION);
+    ASSERT_EQ(result.toString(), get_runtime_php_version());
 }
 
 TEST(base_extra, persistent_zend_string_owns_storage) {
@@ -324,7 +324,7 @@ TEST(base_extra, getClassEntry_edge) {
     ASSERT_NE(ce1, nullptr);
     ASSERT_STREQ(ce1->name->val, "stdClass");
 
-    try_call([]() { getClassEntry("ClassNotExists"); }, "class 'ClassNotExists' is undefined");
+    ASSERT_EQ(getClassEntry("ClassNotExists"), nullptr);
 }
 
 // Test getClassEntrySafe (throws on unknown class)
@@ -333,6 +333,12 @@ TEST(base_extra, getClassEntrySafe) {
     ASSERT_NE(ce1, nullptr);
 
     try_call([]() { getClassEntrySafe("ClassDefinitelyNotExists"); }, "class 'ClassDefinitelyNotExists' is undefined");
+}
+
+TEST(base_extra, internal_class_entry_lookup) {
+    ASSERT_EQ(getInternalClassEntry("eXcEpTiOn"), zend_ce_exception);
+    ASSERT_EQ(getInternalClassEntry("PHPXMissingInternalClass"), nullptr);
+    ASSERT_EQ(getInternalClassEntrySafe("Exception"), zend_ce_exception);
 }
 
 // Test error with different levels
@@ -357,6 +363,12 @@ TEST(base_extra, getMethod) {
     auto ce = getClassEntry("DateTime");
     auto fn = getMethod(ce, "createFromFormat");
     ASSERT_NE(fn, nullptr);
+}
+
+TEST(base_extra, getMethod_by_class_name) {
+    auto *method = getMethod("DateTime", "createFromFormat");
+    ASSERT_NE(method, nullptr);
+    ASSERT_STREQ(ZSTR_VAL(method->common.function_name), "createFromFormat");
 }
 
 // Test call with array
@@ -407,6 +419,42 @@ TEST(base_extra, call_variant_with_array_and_named_args) {
     ASSERT_TRUE(rs.item("vip").toBool());
 }
 
+TEST(base_extra, call_variant_with_fixed_args) {
+    std::array<Variant, 1> values{"phpx"};
+    FixedArgs args{values};
+
+    ASSERT_EQ(call(Variant("strlen"), args).toInt(), 4);
+}
+
+TEST(base_extra, static_and_known_method_argument_overloads) {
+    eval(R"PHP(
+        class PhpxBaseCallOverloads {
+            public static function noArgs(): string { return 'none'; }
+            public static function join(string $left, string $right): string {
+                return $left . ':' . $right;
+            }
+        }
+    )PHP");
+
+    Variant class_name = "PhpxBaseCallOverloads";
+    ASSERT_STREQ(callStaticMethod(class_name, "noArgs").toCString(), "none");
+
+    Array variant_array_args{"variant", "array"};
+    ASSERT_STREQ(callStaticMethod(class_name, "join", variant_array_args).toCString(), "variant:array");
+
+    auto *class_entry = getClassEntrySafe("PhpxBaseCallOverloads");
+    Args dynamic_args{ArgList{"dynamic", "args"}};
+    ASSERT_STREQ(callStaticMethod(class_entry, "join", dynamic_args).toCString(), "dynamic:args");
+
+    Array class_array_args{"class", "array"};
+    ASSERT_STREQ(callStaticMethod(class_entry, "join", class_array_args).toCString(), "class:array");
+
+    auto *method = getMethod(class_entry, "join");
+    std::array<Variant, 2> fixed_values{"known", "fixed"};
+    FixedArgs fixed_args{fixed_values};
+    ASSERT_STREQ(call(class_entry, method, fixed_args).toCString(), "known:fixed");
+}
+
 TEST(base_extra, scoped_call_array_overloads) {
     eval(R"PHP(
         class PhpxScopedArrayArguments {
@@ -427,6 +475,30 @@ TEST(base_extra, scoped_call_array_overloads) {
     Array callback{object, "join"};
     Array callback_args{"first", "second"};
     ASSERT_STREQ(callScoped(callback, scope, callback_args).toCString(), "first:second");
+}
+
+TEST(base_extra, scoped_call_fixed_args_overloads) {
+    eval(R"PHP(
+        class PhpxScopedFixedArguments {
+            public function scopeAnchor(): void {}
+            private function join(string $left, string $right): string {
+                return $left . ':' . $right;
+            }
+        }
+    )PHP");
+
+    Object object = newObject("PhpxScopedFixedArguments");
+    auto *scope_ce = object.ce();
+    CallableScope scope{getMethod(scope_ce, "scopeAnchor"), scope_ce, object.object()};
+
+    std::array<Variant, 2> method_values{"method", "fixed"};
+    FixedArgs method_args{method_values};
+    ASSERT_STREQ(callScoped(object, "join", scope, method_args).toCString(), "method:fixed");
+
+    Array callback{object, "join"};
+    std::array<Variant, 2> callback_values{"callback", "fixed"};
+    FixedArgs callback_args{callback_values};
+    ASSERT_STREQ(callScoped(callback, scope, callback_args).toCString(), "callback:fixed");
 }
 
 TEST(base_extra, include_with_explicit_symbol_table) {
@@ -520,6 +592,16 @@ TEST(base_extra, unset_with_chain) {
         php::unset(string, {{ArrayDimFetch, 0}});
     }, "Cannot unset offsets");
     try_call([&]() { php::unset(outer, {}); }, "non-empty operation chain");
+}
+
+TEST(base_extra, unset_rvalue_preserves_object_identity) {
+    Object object = newObject("stdClass");
+    object.setProperty("remove", 1);
+    Variant temporary = object;
+
+    php::unset(std::move(temporary), {{PropertyFetch, "remove"}});
+
+    ASSERT_FALSE(object.propertyExists("remove"));
 }
 
 // Test call via string function name

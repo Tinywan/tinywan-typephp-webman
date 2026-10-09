@@ -18,11 +18,12 @@ final class IntegrationFailure extends RuntimeException
 {
 }
 
-/** @return array{compiler: string, php: string, php_fpm: string, keep: bool, suite: string} */
+/** @return array{compiler: string, compiler_ini_scan_dir: string, php: string, php_fpm: string, keep: bool, suite: string} */
 function parseIntegrationOptions(array $argv): array
 {
     $options = [
         'compiler' => TYPEPHP_INTEGRATION_ROOT . '/tpc',
+        'compiler_ini_scan_dir' => '',
         'php' => PHP_BINARY,
         'php_fpm' => '',
         'keep' => false,
@@ -38,7 +39,7 @@ function parseIntegrationOptions(array $argv): array
             $options['suite'] = substr($argument, strlen('--suite='));
             continue;
         }
-        foreach (['compiler', 'php', 'php-fpm'] as $name) {
+        foreach (['compiler', 'compiler-ini-scan-dir', 'php', 'php-fpm'] as $name) {
             $prefix = '--' . $name . '=';
             if (str_starts_with($argument, $prefix)) {
                 $key = str_replace('-', '_', $name);
@@ -59,6 +60,16 @@ function parseIntegrationOptions(array $argv): array
             throw new IntegrationFailure("{$name} is not executable: {$options[$name]}");
         }
         $options[$name] = $path;
+    }
+
+    if ($options['compiler_ini_scan_dir'] !== '') {
+        $path = realpath($options['compiler_ini_scan_dir']);
+        if ($path === false || !is_dir($path)) {
+            throw new IntegrationFailure(
+                'compiler ini scan directory does not exist: ' . $options['compiler_ini_scan_dir'],
+            );
+        }
+        $options['compiler_ini_scan_dir'] = $path;
     }
 
     if ($options['suite'] !== 'lib') {
@@ -183,6 +194,18 @@ function runIntegrationCommand(
 function integrationEnvironment(): array
 {
     return getenv();
+}
+
+/**
+ * @param array{compiler_ini_scan_dir: string} $options
+ * @return array<string, string>
+ */
+function integrationCompilerEnvironment(array $options): array
+{
+    if ($options['compiler_ini_scan_dir'] === '') {
+        return [];
+    }
+    return ['PHP_INI_SCAN_DIR' => $options['compiler_ini_scan_dir']];
 }
 
 function assertIntegrationSame(string $expected, string $actual, string $message): void
@@ -461,7 +484,7 @@ function runExtIntegration(array $options, string $temporaryRoot): void
             '--build-dir', $temporaryRoot . '/ext-build-' . $name,
             '--job', '1',
             '--no-progress',
-        ]);
+        ], environment: integrationCompilerEnvironment($options));
         assertIntegrationTrue(is_file($extension), 'Extension artifact was not generated: ' . $extension);
         $extensions[$name] = $extension;
     }
@@ -601,7 +624,7 @@ function runLibIntegration(array $options, string $temporaryRoot): void
             $options['compiler'], $providerRoot . '/project.yml',
             '--output', $providerRoot . '/' . $target . '.' . PHP_SHLIB_SUFFIX,
             '--build-dir', $providerRoot . '/build', '--job', '1', '--no-progress',
-        ]);
+        ], environment: integrationCompilerEnvironment($options));
 
         $library = $providerRoot . '/' . $target . '.' . PHP_SHLIB_SUFFIX;
         $stub = $providerRoot . '/' . $target . '.stub.php';
@@ -648,7 +671,7 @@ function runLibIntegration(array $options, string $temporaryRoot): void
         '--build-dir', $consumerRoot . '/build',
         '--link-path', $linkRoot,
         '--job', '1', '--no-progress',
-    ]);
+    ], environment: integrationCompilerEnvironment($options));
     $libraryPath = $linkRoot;
     $environment = PHP_OS_FAMILY === 'Darwin'
         ? ['DYLD_LIBRARY_PATH' => $libraryPath . ':' . (getenv('DYLD_LIBRARY_PATH') ?: '')]

@@ -39,8 +39,8 @@ final class CallCacheCodegenTest extends BaseTest
 
         self::assertStringContainsString('php::FunctionCallCacheSlot function_call_cache_map[1]', $extension);
         self::assertStringContainsString('php::MethodCallCacheSlot method_call_cache_map[2]', $extension);
-        self::assertStringContainsString('typephp_get_function_call_cache(FunctionCallCacheId cache_id)', $extension);
-        self::assertStringContainsString('typephp_get_method_call_cache(MethodCallCacheId cache_id)', $extension);
+        self::assertStringContainsString('get_function_call_cache(FunctionCallCacheId cache_id)', $extension);
+        self::assertStringContainsString('get_method_call_cache(MethodCallCacheId cache_id)', $extension);
     }
 
     public function testSlotAccessorsDeclareNoexceptWithoutChangingResolvingLookups(): void
@@ -61,8 +61,8 @@ final class CallCacheCodegenTest extends BaseTest
             $extension = file_get_contents($compiler->genExtension());
             foreach ([
                 'get_property_cache(PropertyCacheId cache_id)',
-                'typephp_get_method_call_cache(MethodCallCacheId cache_id)',
-                'typephp_get_function_call_cache(FunctionCallCacheId cache_id)',
+                'get_method_call_cache(MethodCallCacheId cache_id)',
+                'get_function_call_cache(FunctionCallCacheId cache_id)',
             ] as $signature) {
                 self::assertStringContainsString($signature . ' noexcept;', $header);
                 self::assertStringContainsString($signature . ' noexcept {', $extension);

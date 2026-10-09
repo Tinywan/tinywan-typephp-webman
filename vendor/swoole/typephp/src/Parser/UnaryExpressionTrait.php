@@ -14,6 +14,56 @@ use TypePhp\Type;
 
 trait UnaryExpressionTrait
 {
+    protected function unaryPlusOperandType(Expr $operand): string
+    {
+        if ($operand instanceof Expr\ErrorSuppress) {
+            return $this->unaryPlusOperandType($operand->expr);
+        }
+        if ($operand instanceof Expr\Assign) {
+            if ($operand->var instanceof Expr\Variable
+                && is_string($operand->var->name)
+                && !$this->hasVar($this->parseVariable($operand->var))) {
+                // A fresh local has no target type until assignment registers it.
+                return $this->unaryPlusOperandType($operand->expr);
+            }
+            // Assignment evaluates to the value after conversion to its target
+            // type, which can differ from the RHS (e.g. int to float).
+            return $this->unaryPlusOperandType($operand->var);
+        }
+        if ($operand instanceof Expr\Ternary) {
+            $ifType = $this->unaryPlusOperandType($operand->if ?? $operand->cond);
+            $elseType = $this->unaryPlusOperandType($operand->else);
+            return $ifType === $elseType ? $ifType : Type::VAR;
+        }
+        $type = $this->detectTypeOfExpr($operand);
+        if ($operand instanceof Expr\PropertyFetch && $this->isIdExpr($operand->name)) {
+            $class = $this->resolveObjectClassDef($operand->var);
+            $name = $operand->name->toString();
+            if ($class !== null && $class->hasProperty($name) && $class->getProperty($name)->nullable) {
+                return Type::VAR;
+            }
+        }
+        if ($operand instanceof Expr\StaticPropertyFetch && $this->getNativePropertyDef($operand)?->nullable) {
+            return Type::VAR;
+        }
+        return $type;
+    }
+
+    protected function constantUnaryPlusValue(Expr\UnaryPlus $expr): int|float|null
+    {
+        if ($expr->expr instanceof \PhpParser\Node\Scalar\String_ && is_numeric($expr->expr->value)) {
+            return +$expr->expr->value;
+        }
+        if ($expr->expr instanceof Expr\ConstFetch) {
+            return match (strtolower($expr->expr->name->toString())) {
+                'true' => 1,
+                'false', 'null' => 0,
+                default => null,
+            };
+        }
+        return null;
+    }
+
     protected function parseCastVoid(Expr\Cast\Void_ $node): string
     {
         if (!$node->getAttribute(VoidCastValidationVisitor::ALLOWED_ATTRIBUTE, false)) {
@@ -148,6 +198,22 @@ trait UnaryExpressionTrait
         }
         $this->assertNativeObjectOperatorOperandSupported($expr->expr, $expr, '+', true);
         $this->assertExprCanBeUsedAsValue($expr->expr, 'unary operand');
-        return $this->parseExprAsValue($expr->expr);
+        $type = $this->unaryPlusOperandType($expr->expr);
+        $constant = $this->constantUnaryPlusValue($expr);
+        if ($constant !== null) {
+            return is_float($constant)
+                ? $this->genFloatLiteral($constant)
+                : $this->genIntegerLiteral($constant);
+        }
+        $code = $this->parseExprAsValue($expr->expr);
+        if ($type === Type::BOOL) {
+            return $this->convertIntExpr($code);
+        }
+        if (in_array($type, [Type::INT, Type::FLOAT, Type::BIGINT, Type::BIGFLOAT, Type::DECIMAL], true)) {
+            return $code;
+        }
+        // Zend lowers unary plus to multiplication by one, preserving numeric
+        // conversion, warnings, TypeError, and the sign of floating-point zero.
+        return '(php::Variant(' . $code . ') * 1)';
     }
 }

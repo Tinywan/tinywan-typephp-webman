@@ -183,8 +183,7 @@ trait ImmutableSupportTrait
         }
         $type = $this->detectTypeOfExpr($call->var);
         $method = $call->name->toString();
-        $definition = self::UNIVERSAL_METHODS[$type][$method] ?? null;
-        if ($definition !== null && in_array($definition['handler'], self::MUTATING_HANDLERS, true)) {
+        if ($this->isUniversalMethodMutating($type, $method)) {
             $this->fatalError(
                 $call,
                 "Cannot call mutating method `{$method}()` on immutable value `"
@@ -331,7 +330,7 @@ trait ImmutableSupportTrait
         if (!$staticallyResolved) {
             return;
         }
-        foreach ($call->args as $index => $argument) {
+        foreach ($call->getRawArgs() as $index => $argument) {
             if ($argument instanceof Node\VariadicPlaceholder) {
                 continue;
             }

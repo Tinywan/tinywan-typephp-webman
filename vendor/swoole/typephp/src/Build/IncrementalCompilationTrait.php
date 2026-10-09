@@ -371,7 +371,7 @@ trait IncrementalCompilationTrait
         // Reading and hashing a 20+ MB executable on every tiny build costs more
         // than processing the consumer source. Keep the executable fallback for
         // binaries built before this metadata was introduced.
-        if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')
+        if (!$this->compilerRuntime->sourceEntry
             && defined('TYPEPHP_COMPILER_BUILD_FINGERPRINT')) {
             $snapshot = constant('TYPEPHP_COMPILER_BUILD_FINGERPRINT');
             if (is_string($snapshot) && preg_match('/^[a-f0-9]{64}$/D', $snapshot) === 1) {
@@ -386,10 +386,9 @@ trait IncrementalCompilationTrait
         // Zend bridge. Fingerprint the executable snapshot with one native hash
         // operation instead. The interpreted development entry keeps the source
         // walk below so edits invalidate generated-code caches immediately.
-        if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')
-            && defined('TYPEPHP_COMPILER_EXECUTABLE')) {
-            $executable = constant('TYPEPHP_COMPILER_EXECUTABLE');
-            if (is_string($executable) && is_file($executable)) {
+        if (!$this->compilerRuntime->sourceEntry) {
+            $executable = $this->compilerRuntime->executable;
+            if (is_file($executable)) {
                 hash_update($context, str_replace('\\', '/', $executable) . "\0");
                 if (!hash_update_file($context, $executable)) {
                     throw new \RuntimeException(

@@ -182,6 +182,7 @@ trait TypedArrayTrait
             Type::ARRAY => 'Array',
             Type::OBJECT => 'Object',
             Type::VAR => 'Any',
+            default => throw new \LogicException('Unknown typed array value type: ' . $definition['type']),
         };
         $valueClass = $definition['class'] !== null && $definition['class'] !== ''
             ? $this->getClassEntryPtr($definition['class'])

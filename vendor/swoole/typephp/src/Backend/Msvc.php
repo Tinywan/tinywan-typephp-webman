@@ -39,7 +39,7 @@ class Msvc extends CompilerBackend
         // Generated code/templates can exceed ordinary COFF section limits.
         $cmd = ' /bigobj';
 
-        $cmd .= ' /utf-8 /DZEND_WIN32 /DPHP_WIN32 /DZEND_DEBUG=0 /DENABLE_INTSAFE_SIGNED_FUNCTIONS';
+        $cmd .= ' /utf-8 /Zc:preprocessor /DZEND_WIN32 /DPHP_WIN32 /DZEND_DEBUG=0 /DENABLE_INTSAFE_SIGNED_FUNCTIONS';
 
         if (!empty($config['is_zts'])) {
             $cmd .= ' /DZTS';
@@ -92,13 +92,22 @@ class Msvc extends CompilerBackend
             $cmd .= ' /GL';
         }
 
+        // Match -ffunction-sections/-fdata-sections used by the other Nano
+        // backends. /OPT:REF can discard an unused runtime function only when
+        // MSVC emitted it as an individual COMDAT.
+        if (!empty($config['section_gc'])) {
+            $cmd .= ' /Gy /Gw /Zc:inline';
+        }
+
+        // Keep every translation unit on the same dynamic CRT. In particular,
+        // source-composed Nano mixes PHP C sources with PHPX/TypePHP C++.
+        $cmd .= ' /MD';
+
         if ($includeCppOptions) {
             $cmd .= ' /EHsc';
             if (!empty($config['cpp_std'])) {
                 $cmd .= ' /std:' . $config['cpp_std'];
             }
-
-            $cmd .= ' /MD';
 
             if (!empty($config['cxxflags'])) {
                 $cmd .= ' ' . $config['cxxflags'];
@@ -107,8 +116,13 @@ class Msvc extends CompilerBackend
             if (!empty($config['forced_include'])) {
                 $cmd .= ' /FI' . escapeshellarg($config['forced_include']);
             }
-        } elseif (!empty($config['cflags'])) {
-            $cmd .= ' ' . $config['cflags'];
+        } else {
+            if (!empty($config['c_std'])) {
+                $cmd .= ' /std:' . $config['c_std'];
+            }
+            if (!empty($config['cflags'])) {
+                $cmd .= ' ' . $config['cflags'];
+            }
         }
 
         $cmd .= ' /nologo';
@@ -151,7 +165,7 @@ class Msvc extends CompilerBackend
         // Platform macro definitions.
         $cmd .= $this->buildCommonCompileFlags($options, false);
 
-        // Note: C files do not use C++-specific options such as /EHsc, /std:c++17, /MD.
+        // Note: C files do not use C++-specific options such as /EHsc or /std:c++17.
 
         return $cmd;
     }
@@ -259,6 +273,10 @@ class Msvc extends CompilerBackend
         // LTO (Link Time Code Generation).
         if (!empty($config['lto'])) {
             $cmd .= ' /LTCG';
+        }
+
+        if (!empty($config['section_gc'])) {
+            $cmd .= ' /OPT:REF /OPT:ICF';
         }
 
         return $cmd;

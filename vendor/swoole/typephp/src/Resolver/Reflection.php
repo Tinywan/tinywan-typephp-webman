@@ -16,6 +16,14 @@ class Reflection
     private static array $classes = [];
     private static array $interfaces = [];
 
+    /** Release reflector wrappers before an embedded compiler unloads its module. */
+    public static function clearCaches(): void
+    {
+        self::$functions = [];
+        self::$classes = [];
+        self::$interfaces = [];
+    }
+
     public static function isTypePhpExtension(mixed $extensionName): bool
     {
         return is_string($extensionName)

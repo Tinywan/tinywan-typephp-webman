@@ -183,15 +183,14 @@ final readonly class PrecompiledHeaderManager
         }
 
         if ($digests !== $saved && is_dir($cacheDirectory)) {
-            $temporary = tempnam($cacheDirectory, '.pch-digests-');
-            if ($temporary !== false) {
-                try {
-                    if (file_put_contents($temporary, json_encode($digests, JSON_THROW_ON_ERROR)) !== false) {
-                        @rename($temporary, $digestFile);
-                    }
-                } finally {
-                    @unlink($temporary);
-                }
+            try {
+                AtomicFile::write(
+                    $digestFile,
+                    json_encode($digests, JSON_THROW_ON_ERROR),
+                    '.pch-digests-',
+                );
+            } catch (\Throwable) {
+                // Digest reuse is optional; hashing every dependency remains correct.
             }
         }
 

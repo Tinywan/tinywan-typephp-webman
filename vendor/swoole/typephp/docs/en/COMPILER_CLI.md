@@ -67,6 +67,9 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-d`, `--debug` | Debug build; disables optimization and adds debug symbols and TypePHP source tracking. |
 | `-o`, `--output <file>` | Output file name. |
 | `-m`, `--mode <bin|lib|ext>` | Build mode, default `bin`. |
+| `--sapi <embed|cli|fpm>` | SAPI used by a `bin` target; accepts a comma-separated list. Default: `embed`. |
+| `--entry <file>` | PHP entry file executed by the CLI SAPI; the CLI value overrides YAML `entry`. |
+| `--php-builder[=<config>]` | Build PHP from php-src; omitted config defaults to `{}`, for example `--php-builder='extensions: [swoole, mongodb]; zts: on'`. |
 | `-r`, `--run` | Run after a successful build. |
 | `-j`, `--job <num>` | Number of parallel compilation jobs, default `4`. |
 | `-f`, `--force` | Ignore the phpx misc object cache and force recompilation. |
@@ -75,8 +78,31 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | Run clang-format on the generated code. |
 | `--no-progress` | Do not show the progress bar; output progress per file. |
 | `--no-color` | Disable colored output. |
+| `--proxy <url>` | Use an HTTP(S) or SOCKS proxy for network transfers. |
 
 `-v` / `--version` only displays the version; it is not a verbose option.
+
+`mode` describes the artifact type, while `sapi` describes the PHP process
+interface. `cli` and `fpm` are not build modes. They require `php-builder`;
+`embed` can use either the host `libphp` (the default) or a private static PHP
+runtime. When the default Embed build cannot find the host library, an
+interactive invocation offers to enable `php-builder`. In CI, pass the option
+explicitly.
+
+The equivalent YAML is:
+
+```yaml
+mode: bin
+sapi: [cli, fpm, embed]
+php-builder:
+  extensions: [swoole, mongodb]
+  zts: on
+```
+
+`php-builder` does not depend on the host PHP runtime or modify the downloaded
+php-src tree. It collects extension requirements from project sources, YAML,
+and Composer metadata, then configures a private static runtime using libraries
+provided by the operating system.
 
 ## Target and Toolchain
 
@@ -117,6 +143,21 @@ Corresponding long options:
 
 When a `project.yml` is passed, command-line arguments take precedence over same-named settings in the YAML. For the project file format, see the user documentation and the project configuration parser in the code.
 
+### Symlinked source directories
+
+Scanning a source directory descends into symlinked directories, so a dependency
+installed by a Composer path repository -- which is installed as a symlink -- is
+compiled like any other source. A link pointing at one of its own ancestors does
+not recurse, and a file reached through more than one link is compiled once.
+
+Excluding one is the ordinary `ignore` entry, written as the path that reaches
+it rather than the path it points at:
+
+```yaml
+ignore:
+  - vendor/vendor/mylib
+```
+
 ### Precompiled object files
 
 A project can add object files produced by an external native toolchain as
@@ -139,6 +180,25 @@ project-owned packaging step after tpc emits its ELF.
 Use `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` for project-wide C++,
 C, assembler, and linker options.
 
+### Extension metadata
+
+An extension project can declare metadata in `project.yml`:
+
+```yaml
+name: my_extension
+mode: ext
+version: 1.0.0
+info:
+  Author: Example Team
+  Description: Example native extension
+  License: Apache-2.0
+```
+
+`version` is exposed through the Zend module entry, including
+`ReflectionExtension::getVersion()`. The `info` mapping accepts arbitrary row
+labels and scalar values. TypePHP preserves their order in the module's
+dedicated `phpinfo()` section.
+
 ### PHP Extension Dependencies
 
 When a program depends on other PHP extensions, the required modules can be written into the Zend module dependency table:
@@ -152,6 +212,22 @@ extension-dependencies:
 `ext-deps` is an equivalent shorthand name. Only one of these names can be used in a project; using both `extension-dependencies` and `ext-deps` produces a configuration error.
 
 The compiler generates a `ZEND_MOD_REQUIRED` for each entry. Zend checks whether these extensions are loaded when loading the TypePHP module. This setting does not represent native link libraries; C/C++ link dependencies still use `link-libs`.
+
+### Embedded PHP dependencies and resources
+
+A release `mode: bin` project can package Composer vendor files, PHP fallback
+files, and read-only resources through `embedded-files`:
+
+```yaml
+embedded-files:
+  - vendor
+  - resources
+```
+
+The build needs matching PHP CLI and OPcache installations. The runtime does
+not need PHP CLI, OPcache, Composer installation, or a disk vendor tree. See
+[Embedding PHP Dependencies in an Executable](EMBEDDED_FILES.md) for the full
+workflow and limitations.
 
 ## Viewing the Authoritative Help
 

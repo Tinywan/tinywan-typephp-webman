@@ -178,7 +178,7 @@ final class ConstantExpressionValidator
 
         if ($expression instanceof Expr\Array_) {
             foreach ($expression->items as $item) {
-                if ($item === null || $item->byRef) {
+                if ($item->byRef) {
                     $this->invalidOperation();
                 }
                 if ($item->key !== null) {

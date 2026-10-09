@@ -4,6 +4,77 @@
 
 using namespace php;
 
+TEST(string_extra, transforms_preserve_shared_input) {
+    const auto check = [](const char *input, const char *expected, const auto &transform) {
+        SCOPED_TRACE(input);
+        for (bool interned : {false, true}) {
+            SCOPED_TRACE(interned);
+            String source(interned ? zend_string_init_interned(input, strlen(input), false)
+                                   : zend_string_init(input, strlen(input), false),
+                          Ctor::Move);
+            String alias(source);
+            const auto original_hash = source.hashCode();
+            Array lookup;
+            lookup.set(source, 42);
+            auto result = transform(source);
+            EXPECT_TRUE(result.equals(expected));
+            EXPECT_TRUE(source.equals(input));
+            EXPECT_TRUE(alias.equals(input));
+            EXPECT_EQ(source.hashCode(), original_hash);
+            EXPECT_EQ(result.hashCode(), String(expected).hashCode());
+            EXPECT_EQ(lookup.get(String(input)).toInt(), 42);
+            result.offsetSet(0, "X");
+            EXPECT_TRUE(source.equals(input));
+            EXPECT_TRUE(alias.equals(input));
+        }
+    };
+    check("<b>hello</b>", "hello", [](const String &s) { return s.stripTags(""); });
+    check("/tmp/example.txt", "/tmp", [](const String &s) { return s.dirname(); });
+    check("hello\\'world", "hello'world", [](const String &s) { return s.stripSlashes(); });
+    check("", "", [](const String &s) { return s.stripTags(""); });
+    check("plain", "plain", [](const String &s) { return s.stripSlashes(); });
+}
+
+TEST(string_extra, split_matches_native_limits) {
+    const String inputs[] = {
+        String("a,b,c"), String(",a,,b,"), String("plain"), String(""), String("a\0b\0c", 5), String("a::b::c")};
+    const String delimiters[] = {String(","), String("\0", 1), String("::")};
+    const Int limits[] = {ZEND_LONG_MIN, -4, -2, -1, 0, 1, 2, 9, ZEND_LONG_MAX};
+    for (const auto &delimiter : delimiters) {
+        for (const auto &input : inputs) {
+            for (Int limit : limits) {
+                SCOPED_TRACE(delimiter.toStdString());
+                SCOPED_TRACE(input.toStdString());
+                SCOPED_TRACE(limit);
+                Array args{delimiter, input, limit};
+                auto expected = call("explode", args);
+                EXPECT_TRUE(input.split(delimiter, limit).equals(expected, true));
+            }
+        }
+    }
+}
+
+TEST(string_extra, split_rejects_empty_delimiter) {
+    for (const char *input : {"", "abc"}) {
+        for (Int limit : {Int(-1), Int(0), Int(1), ZEND_LONG_MAX}) {
+            bool caught = false;
+            try {
+                String(input).split("", limit);
+            } catch (zend_object *) {
+                caught = true;
+                auto exception = catchException();
+                EXPECT_TRUE(exception.instanceOf("ValueError"));
+                EXPECT_TRUE(exception.call("getMessage").toString().equals(
+                    "explode(): Argument #1 ($separator) must not be empty"));
+            }
+            if (!caught && EG(exception)) {
+                catchException();
+            }
+            EXPECT_TRUE(caught);
+        }
+    }
+}
+
 // Test equals with const char* and std::string overloads
 TEST(string_extra, equals_overloads) {
     String s("hello world");

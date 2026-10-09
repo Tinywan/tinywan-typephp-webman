@@ -8,3 +8,8 @@ function datetimeDirectCalls(int $timestamp): string
         . date('U', $timestamp)
         . $now;
 }
+
+function strtotimeNormalCall(string $datetime): int|false
+{
+    return strtotime($datetime);
+}

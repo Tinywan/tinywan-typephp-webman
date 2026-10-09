@@ -57,10 +57,10 @@ class Macos extends UnixPlatform
      * Add the standard Apple Silicon and Intel Homebrew prefixes after the
      * selected PHP installation's include paths.
      */
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         return array_values(array_unique(array_merge(
-            parent::buildPhpIncludePaths($phpDir),
+            parent::buildPhpIncludePaths($phpDir, $allowTargetVersion),
             self::HOMEBREW_INCLUDE_PATHS,
         )));
     }
@@ -75,29 +75,5 @@ class Macos extends UnixPlatform
             parent::buildPhpLibPaths($phpDir),
             self::HOMEBREW_LIBRARY_PATHS,
         )));
-    }
-
-    /**
-     * 获取默认的 RPATH 路径列表（macOS 需要）
-     */
-    public function getDefaultRpaths(?string $phpxDir = null, ?string $phpDir = null): array
-    {
-        $rpaths = [];
-
-        if ($phpxDir !== null) {
-            $phpxLibDir = $phpxDir . '/lib';
-            if (is_dir($phpxLibDir)) {
-                $rpaths[] = $phpxLibDir;
-            }
-        }
-
-        if ($phpDir !== null) {
-            $phpLibDir = $this->resolvePhpLibDir($phpDir);
-            if ($phpLibDir !== null) {
-                $rpaths[] = $phpLibDir;
-            }
-        }
-
-        return $rpaths;
     }
 }

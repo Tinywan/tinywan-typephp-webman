@@ -1,0 +1,6 @@
+/runtime.ini
+/*.sqlite
+/*.sqlite-shm
+/*.sqlite-wal
+/*.png
+/dist/

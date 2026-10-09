@@ -24,7 +24,7 @@ trait NameResolutionTrait
             $this->error('Class name can not be empty');
         }
         if ($class[0] === '\\') {
-            return ltrim($class, '\\');
+            return $this->recordReferencedClass($class);
         }
 
         $ns2 = explode('\\', trim($class, '\\'));
@@ -36,7 +36,7 @@ trait NameResolutionTrait
             if (count($ns2) > 1) {
                 $ns .= '\\' . implode('\\', array_slice($ns2, 1));
             }
-            return ltrim($ns, '\\');
+            return $this->recordReferencedClass($ns);
         }
 
         foreach ($this->useNamespaces as $useNamespace) {
@@ -53,7 +53,7 @@ trait NameResolutionTrait
         if (count($ns2) > 1) {
             foreach ($this->useNamespaces as $useNamespace) {
                 if (strcasecmp(trim($useNamespace, '\\'), $class) === 0) {
-                    return $class;
+                    return $this->recordReferencedClass($class);
                 }
             }
         }
@@ -62,10 +62,10 @@ trait NameResolutionTrait
             $currentNamespace = $this->namespace;
         }
         if (!empty($currentNamespace)) {
-            return trim($currentNamespace, '\\') . '\\' . $class;
+            return $this->recordReferencedClass(trim($currentNamespace, '\\') . '\\' . $class);
         }
 
-        return $class;
+        return $this->recordReferencedClass($class);
     }
 
     /**
@@ -76,26 +76,41 @@ trait NameResolutionTrait
      * gen_stub.php's SimpleType::fromNode() relies on isFullyQualified() to decide whether to re-resolve;
      * if the name is not upgraded to FullyQualified, the current namespace prefix is wrongly appended once the context is lost.
      */
-    protected function upgradeToFullyQualifiedName(?NodeAbstract $type): ?NodeAbstract
+    protected function upgradeToFullyQualifiedName(
+        Node\ComplexType|Node\Identifier|Node\Name|null $type,
+    ): Node\ComplexType|Node\Identifier|Node\Name|null
     {
         if ($type === null) {
             return null;
         }
         if ($type instanceof Node\NullableType) {
-            return new Node\NullableType($this->upgradeToFullyQualifiedName($type->type));
+            return new Node\NullableType($this->upgradeDeclaredTypeName($type->type));
         }
         if ($type instanceof Node\UnionType) {
             foreach ($type->types as $i => $subType) {
-                $type->types[$i] = $this->upgradeToFullyQualifiedName($subType);
+                $type->types[$i] = $subType instanceof Node\IntersectionType
+                    ? $this->upgradeIntersectionType($subType)
+                    : $this->upgradeDeclaredTypeName($subType);
             }
             return $type;
         }
         if ($type instanceof Node\IntersectionType) {
-            foreach ($type->types as $i => $subType) {
-                $type->types[$i] = $this->upgradeToFullyQualifiedName($subType);
-            }
-            return $type;
+            return $this->upgradeIntersectionType($type);
         }
+        return $this->upgradeDeclaredTypeName($type);
+    }
+
+    private function upgradeIntersectionType(Node\IntersectionType $type): Node\IntersectionType
+    {
+        foreach ($type->types as $i => $subType) {
+            $type->types[$i] = $this->upgradeDeclaredTypeName($subType);
+        }
+        return $type;
+    }
+
+    private function upgradeDeclaredTypeName(
+        Node\Identifier|Node\Name $type,
+    ): Node\Identifier|Node\Name {
         if ($type instanceof Node\Name\FullyQualified) {
             return $type;
         }

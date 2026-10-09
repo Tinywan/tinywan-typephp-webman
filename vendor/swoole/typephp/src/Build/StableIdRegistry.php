@@ -65,34 +65,12 @@ final class StableIdRegistry
         if (!$this->dirty || $this->file === '') {
             return;
         }
-        $directory = dirname($this->file);
-        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
-            throw new \RuntimeException('Cannot create stable ID cache directory: ' . $directory);
-        }
         $contents = json_encode([
             'schema' => self::SCHEMA_VERSION,
             'domains' => $this->domains,
             'nextIds' => $this->nextIds,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL;
-        $temporary = tempnam($directory, '.ids-');
-        if ($temporary === false) {
-            throw new \RuntimeException('Cannot create stable ID cache temporary file');
-        }
-        try {
-            if (file_put_contents($temporary, $contents, LOCK_EX) === false) {
-                throw new \RuntimeException('Cannot write stable ID cache: ' . $this->file);
-            }
-            if (!@rename($temporary, $this->file)) {
-                @unlink($this->file);
-                if (!@rename($temporary, $this->file)) {
-                    throw new \RuntimeException('Cannot replace stable ID cache: ' . $this->file);
-                }
-            }
-        } finally {
-            if (is_file($temporary)) {
-                @unlink($temporary);
-            }
-        }
+        AtomicFile::write($this->file, $contents, '.ids-');
         $this->dirty = false;
     }
 

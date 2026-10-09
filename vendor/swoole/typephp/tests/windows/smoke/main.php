@@ -9,7 +9,7 @@ function requireWindowsCondition(bool $condition, string $message): void
 
 function main(int $argc, array $argv): void
 {
-    requireWindowsCondition($argc === 2, 'Expected the thread-safety mode argument');
+    requireWindowsCondition($argc === 2 || $argc === 3, 'Expected the thread-safety mode argument');
 
     $expectedZts = $argv[1] === 'zts';
     requireWindowsCondition(PHP_OS_FAMILY === 'Windows', 'Expected PHP_OS_FAMILY=Windows');
@@ -29,6 +29,13 @@ function main(int $argc, array $argv): void
     requireWindowsCondition(file_put_contents($path, 'windows-file-api') === 16, 'Windows file write failed');
     requireWindowsCondition(file_get_contents($path) === 'windows-file-api', 'Windows file read failed');
     requireWindowsCondition(unlink($path), 'Windows file cleanup failed');
+
+    if ($argc === 3) {
+        requireWindowsCondition($argv[2] === 'nano', 'Unexpected Windows smoke mode');
+        $blockedFunction = 'exec';
+        call_user_func($blockedFunction, 'echo typephp-nano-policy-bypass');
+        requireWindowsCondition(false, 'Nano dynamic call reached exec()');
+    }
 
     echo 'windows-smoke-ok:', $expectedZts ? 'zts' : 'nts';
 }

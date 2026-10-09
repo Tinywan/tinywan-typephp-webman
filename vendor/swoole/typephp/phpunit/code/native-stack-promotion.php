@@ -74,3 +74,12 @@ function inheritedNativeObject(): int
     $value = new NativeStackPromotionChild();
     return $value->readFromBase();
 }
+
+#[Native]
+final class NativeCompactScalarFixture
+{
+    public int32 $number = 0;
+    public int8 $tag = 0;
+    public uint16 $flags = 0;
+    public float32 $ratio = 0.0;
+}

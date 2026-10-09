@@ -81,7 +81,7 @@ abstract class PlatformBase
     /**
      * Build the PHP include paths.
      */
-    abstract public function buildPhpIncludePaths(string $phpDir): array;
+    abstract public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array;
 
     /**
      * Build the PHP library paths.

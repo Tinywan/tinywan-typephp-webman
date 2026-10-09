@@ -20,7 +20,11 @@ static String count_method{ZEND_STRL("count"), true};
  * Search array for a value. Returns true/false or the key depending on behavior.
  * behavior: 0 = return bool (in_array), 1 = return key (array_search)
  */
-static Variant _search_array(const Variant &needle, zend_array *ht, bool strict, int behavior) {
+static Variant _search_array(const Variant &needle, const Array &haystack, bool strict, int behavior) {
+    // Loose comparisons can invoke user code that replaces the caller's inputs.
+    Variant search_value(needle);
+    Array values(haystack.unwrap_ptr());
+    zend_array *ht = values.array();
     zval *entry;
     zend_ulong num_idx;
     zend_string *str_idx;
@@ -28,7 +32,9 @@ static Variant _search_array(const Variant &needle, zend_array *ht, bool strict,
     if (strict) {
         ZEND_HASH_FOREACH_KEY_VAL(ht, num_idx, str_idx, entry) {
             ZVAL_DEREF(entry);
-            if (fast_is_identical_function(NO_CONST_V(needle), entry)) {
+            bool matches = fast_is_identical_function(NO_CONST_V(search_value), entry);
+            throwErrorIfOccurred();
+            if (matches) {
                 if (behavior == 0) {
                     return Variant(true);
                 } else {
@@ -44,7 +50,9 @@ static Variant _search_array(const Variant &needle, zend_array *ht, bool strict,
     } else {
         ZEND_HASH_FOREACH_KEY_VAL(ht, num_idx, str_idx, entry) {
             ZVAL_DEREF(entry);
-            if (fast_equal_check_function(NO_CONST_V(needle), entry)) {
+            bool matches = fast_equal_check_function(NO_CONST_V(search_value), entry);
+            throwErrorIfOccurred();
+            if (matches) {
                 if (behavior == 0) {
                     return Variant(true);
                 } else {
@@ -67,7 +75,9 @@ static Variant _search_array(const Variant &needle, zend_array *ht, bool strict,
 // ========================
 
 Bool in_array(const Variant &needle, const Array &haystack, bool strict) {
-    Variant result = _search_array(needle, haystack.array(), strict, 0);
+    Variant result = _search_array(needle, haystack, strict, 0);
+    // Releasing the snapshots can run user destructors after the last comparison.
+    throwErrorIfOccurred();
     return result.toBool();
 }
 
@@ -76,8 +86,13 @@ Bool in_array(const Variant &needle, const Array &haystack, bool strict) {
 // ========================
 
 Int count(const Variant &value, Int mode) {
+    if (mode != PHP_COUNT_NORMAL && mode != PHP_COUNT_RECURSIVE) {
+        throwException(zend_ce_value_error,
+                       "count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE");
+        return 0;
+    }
     if (value.isArray()) {
-        if (mode == 1) {
+        if (mode == PHP_COUNT_RECURSIVE) {
             return php_count_recursive(value.array());
         }
         return static_cast<Int>(zend_hash_num_elements(value.array()));
@@ -148,8 +163,10 @@ Array array_keys(const Array &array) {
 // 3b. array_keys with filter_value
 // ========================
 
-Array array_keys_filter(const Array &array, const Variant &filter_value, bool strict) {
-    zend_array *arrval = array.array();
+static Array _array_keys_filter(const Array &array, const Variant &filter_value, bool strict) {
+    Variant search_value(filter_value);
+    Array values(array.unwrap_ptr());
+    zend_array *arrval = values.array();
     zend_ulong elem_count = zend_hash_num_elements(arrval);
 
     if (elem_count == 0) {
@@ -164,7 +181,9 @@ Array array_keys_filter(const Array &array, const Variant &filter_value, bool st
     if (strict) {
         ZEND_HASH_FOREACH_KEY_VAL(arrval, num_idx, str_idx, entry) {
             ZVAL_DEREF(entry);
-            if (fast_is_identical_function(NO_CONST_V(filter_value), entry)) {
+            bool matches = fast_is_identical_function(NO_CONST_V(search_value), entry);
+            throwErrorIfOccurred();
+            if (matches) {
                 if (str_idx) {
                     zval zv;
                     ZVAL_STR_COPY(&zv, str_idx);
@@ -179,7 +198,9 @@ Array array_keys_filter(const Array &array, const Variant &filter_value, bool st
         ZEND_HASH_FOREACH_END();
     } else {
         ZEND_HASH_FOREACH_KEY_VAL(arrval, num_idx, str_idx, entry) {
-            if (fast_equal_check_function(NO_CONST_V(filter_value), entry)) {
+            bool matches = fast_equal_check_function(NO_CONST_V(search_value), entry);
+            throwErrorIfOccurred();
+            if (matches) {
                 if (str_idx) {
                     zval zv;
                     ZVAL_STR_COPY(&zv, str_idx);
@@ -194,6 +215,12 @@ Array array_keys_filter(const Array &array, const Variant &filter_value, bool st
         ZEND_HASH_FOREACH_END();
     }
 
+    return result;
+}
+
+Array array_keys_filter(const Array &array, const Variant &filter_value, bool strict) {
+    Array result = _array_keys_filter(array, filter_value, strict);
+    throwErrorIfOccurred();
     return result;
 }
 
@@ -231,12 +258,48 @@ Array array_merge() {
     return Array();
 }
 
+static bool array_merge_can_copy_first(zend_array *array) {
+    zend_long length = static_cast<zend_long>(zend_hash_num_elements(array));
+    return HT_IS_PACKED(array) && HT_IS_WITHOUT_HOLES(array) &&
+           array->nNextFreeElement == static_cast<uint32_t>(length);
+}
+
+static bool array_merge_can_copy_empty_pair(zend_array *array) {
+    if (HT_IS_PACKED(array)) {
+        return HT_IS_WITHOUT_HOLES(array);
+    }
+
+    zend_string *string_key;
+    ZEND_HASH_FOREACH_STR_KEY(array, string_key) {
+        if (string_key == nullptr) {
+            return false;
+        }
+    }
+    ZEND_HASH_FOREACH_END();
+    return true;
+}
+
 Array array_merge(const Array &array) {
-    return Array(array);
+    zend_array *arrval = array.array();
+    if (array_merge_can_copy_first(arrval)) {
+        return Array(array);
+    }
+
+    Array result;
+    php_array_merge(result.array(), arrval);
+    return result;
 }
 
 Array array_merge(const Array &array, const Array &other) {
-    Array result(array);
+    // PHP's two-argument empty-array shortcut preserves the next insertion index.
+    if (array.empty() && array_merge_can_copy_empty_pair(other.array())) {
+        return Array(other);
+    }
+    if (other.empty() && array_merge_can_copy_empty_pair(array.array())) {
+        return Array(array);
+    }
+
+    Array result = array_merge(array);
     SEPARATE_ARRAY(result.ptr());
     php_array_merge(result.array(), other.array());
     return result;
@@ -274,7 +337,9 @@ Int detail::array_push_impl(Variant &arg, const Variant *values, std::size_t val
 // ========================
 
 Variant array_search(const Variant &needle, const Array &haystack, bool strict) {
-    return _search_array(needle, haystack.array(), strict, 1);
+    Variant result = _search_array(needle, haystack, strict, 1);
+    throwErrorIfOccurred();
+    return result;
 }
 
 // ========================
@@ -353,9 +418,20 @@ Array array_fill(Int start_index, Int count, const Variant &value) {
     zend_array *dest = zend_new_array(static_cast<uint32_t>(count));
     zval val_copy;
 
-    for (Int i = 0; i < count; i++) {
-        ZVAL_COPY(&val_copy, value.unwrap_ptr());
-        zend_hash_index_update(dest, start_index + i, &val_copy);
+    if (start_index == 0) {
+        zend_hash_real_init_packed(dest);
+        ZEND_HASH_FILL_PACKED(dest) {
+            for (Int i = 0; i < count; i++) {
+                ZVAL_COPY(&val_copy, value.unwrap_ptr());
+                ZEND_HASH_FILL_ADD(&val_copy);
+            }
+        }
+        ZEND_HASH_FILL_END();
+    } else {
+        for (Int i = 0; i < count; i++) {
+            ZVAL_COPY(&val_copy, value.unwrap_ptr());
+            zend_hash_index_update(dest, start_index + i, &val_copy);
+        }
     }
 
     Array result;

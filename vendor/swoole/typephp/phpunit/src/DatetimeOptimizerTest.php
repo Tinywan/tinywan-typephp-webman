@@ -4,7 +4,7 @@ use TypePhp\CompilerTest;
 
 final class DatetimeOptimizerTest extends BaseTest
 {
-    public function testCoreDatetimeCallsUseDirectPhpxWrappers(): void
+    public function testOnlySupportedDatetimeCallsUseDirectPhpxWrappers(): void
     {
         global $translator;
 
@@ -20,7 +20,8 @@ final class DatetimeOptimizerTest extends BaseTest
         self::assertSame(1, substr_count($code, 'php::fn::time('));
         self::assertSame(2, substr_count($code, 'php::fn::date('));
         self::assertSame(1, substr_count($code, 'php::fn::gmdate('));
-        self::assertStringNotContainsString('get_persistent_func', $code);
-        self::assertStringNotContainsString('php::call(', $code);
+        self::assertStringNotContainsString('php::fn::strtotime(', $code);
+        self::assertSame(1, substr_count($code, 'get_persistent_func'));
+        self::assertSame(1, substr_count($code, 'php::call('));
     }
 }

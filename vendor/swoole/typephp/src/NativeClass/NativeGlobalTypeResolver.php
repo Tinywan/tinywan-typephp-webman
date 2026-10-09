@@ -12,6 +12,7 @@ use PhpParser\ConstExprEvaluator;
 use PhpParser\Node;
 use PhpParser\NodeAbstract;
 use TypePhp\Entity\ClassDef;
+use TypePhp\Entity\GlobalConstantDef;
 
 final class NativeGlobalConstantVisitState
 {
@@ -51,7 +52,7 @@ final class NativeGlobalTypeResolver
 
     /**
      * @param array<string, ClassDef> $classes
-     * @param array<string, object> $constants
+     * @param array<string, GlobalConstantDef> $constants
      */
     public function __construct(array $classes, array $constants = [])
     {
@@ -66,9 +67,7 @@ final class NativeGlobalTypeResolver
         }
 
         foreach ($constants as $constant) {
-            if (isset($constant->name) && is_string($constant->name)
-                && isset($constant->valueExpr) && $constant->valueExpr instanceof Node\Expr
-            ) {
+            if ($constant->valueExpr instanceof Node\Expr) {
                 $this->globalConstantExpressions[ltrim($constant->name, '\\')] = $constant->valueExpr;
             }
         }

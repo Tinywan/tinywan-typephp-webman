@@ -2,15 +2,20 @@
 
 namespace TypePhp\Installer;
 
+use TypePhp\Http\Downloader;
 use TypePhp\Platform\Linux;
 
 final class LibPhpInstaller
 {
     private const string RELEASE_API = 'https://www.php.net/releases/index.php?json=1&version=%s&max=100';
     private ?string $sourcePhpDir = null;
+    private readonly Downloader $downloader;
 
-    public function __construct(private readonly InteractiveConsole $console = new InteractiveConsole())
-    {
+    public function __construct(
+        private readonly InteractiveConsole $console = new InteractiveConsole(),
+        ?string $proxy = null,
+    ) {
+        $this->downloader = new Downloader($proxy);
     }
 
     public function ensure(string $currentPhpDir): ?string
@@ -25,27 +30,49 @@ final class LibPhpInstaller
         }
 
         $this->console->write("The current PHP installation does not provide libphp.so: {$currentPhpDir}");
+
+        $home = getenv('HOME') ?: (string) ($_SERVER['HOME'] ?? '');
+        $defaultPrefix = rtrim($home, '/') . '/.typephp';
+        $defaultVersion = PHP_VERSION;
+
+        // A build left by an earlier run answers every question below, so offer
+        // it before asking any of them. Both defaults are known without asking:
+        // the directory this installer always proposes, and the running PHP.
+        if ($this->offerInstalled($defaultPrefix, $defaultVersion)) {
+            return $this->activate($defaultPrefix);
+        }
+
         if (!$this->console->confirm('Build a private PHP embed library now?', true)) {
             return null;
         }
 
-        $defaultVersion = PHP_VERSION;
         $version = $this->console->ask("PHP version [{$defaultVersion}]: ", $defaultVersion);
         if (!preg_match('/^8\.[45]\.\d+$/', $version)) {
             throw new \RuntimeException('Only stable PHP 8.4.x and 8.5.x versions are supported by the automatic installer');
         }
-        $release = $this->release($version);
 
-        $home = getenv('HOME') ?: (string) ($_SERVER['HOME'] ?? '');
-        $defaultPrefix = rtrim($home, '/') . '/.typephp';
         $prefix = $this->expandHome($this->console->ask("Install directory [{$defaultPrefix}]: ", $defaultPrefix), $home);
-        if ($this->hasLibPhp($prefix) && $this->installedVersion($prefix) === $version
-            && $this->console->confirm("PHP {$version} with libphp.so already exists in {$prefix}; use it?", true)) {
-            putenv('PHP_HOME=' . $prefix);
-            $_ENV['PHP_HOME'] = $prefix;
-            return $prefix;
+        // The offer above covered only the default directory and the running
+        // PHP; the answers just given may name another build.
+        if (($prefix !== $defaultPrefix || $version !== $defaultVersion)
+            && $this->offerInstalled($prefix, $version)) {
+            return $this->activate($prefix);
         }
-        $this->install($release, $prefix);
+        // Reaching php.net is pointless until a build is known to be needed.
+        $this->install($this->release($version), $prefix);
+        return $this->activate($prefix);
+    }
+
+    private function offerInstalled(string $prefix, string $version): bool
+    {
+        return $this->hasLibPhp($prefix)
+            && $this->installedVersion($prefix) === $version
+            && $this->console->confirm("PHP {$version} with libphp.so already exists in {$prefix}; use it?", true);
+    }
+
+    /** Point this process, and the build it runs, at the selected installation. */
+    private function activate(string $prefix): string
+    {
         putenv('PHP_HOME=' . $prefix);
         $_ENV['PHP_HOME'] = $prefix;
         return $prefix;
@@ -97,7 +124,7 @@ final class LibPhpInstaller
 
     private function fetchReleaseList(string $branch): array
     {
-        $json = $this->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch)));
+        $json = $this->downloader->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch)));
         $data = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
         if (!is_array($data)) {
             throw new \RuntimeException('Invalid release list returned by PHP.net');
@@ -151,7 +178,7 @@ final class LibPhpInstaller
 
         if (!is_file($archive) || hash_file('sha256', $archive) !== $release['sha256']) {
             $this->console->write('Downloading ' . $release['url']);
-            $this->downloadFile($release['url'], $archive);
+            $this->downloader->downloadFile($release['url'], $archive);
         }
         if (hash_file('sha256', $archive) !== $release['sha256']) {
             throw new \RuntimeException('PHP source archive SHA-256 verification failed');
@@ -160,7 +187,10 @@ final class LibPhpInstaller
             $this->run(['tar', '-xJf', $archive, '-C', $workDir]);
         }
 
-        $this->console->write('Configuring PHP with the current installation options plus --enable-embed=shared');
+        $this->console->write(
+            'Configuring PHP with compatible current installation options, '
+            . '--enable-embed=shared, and --without-pear'
+        );
         $this->run([$sourceDir . '/configure', ...$options], $sourceDir);
         // PHP is a large build; capping parallelism avoids exhausting memory on
         // hosts that expose many CPUs (especially containers and CI runners).
@@ -295,33 +325,6 @@ final class LibPhpInstaller
             }
         }
         return null;
-    }
-
-    private function downloadText(string $url): string
-    {
-        $context = stream_context_create(['http' => ['timeout' => 30, 'user_agent' => 'TypePHP/tpc']]);
-        $data = @file_get_contents($url, false, $context);
-        if ($data === false) {
-            $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-            if ($curl !== '') {
-                return $this->capture([$curl, '--fail', '--location', '--retry', '3', $url]);
-            }
-            throw new \RuntimeException("Unable to download {$url}; enable allow_url_fopen or install curl");
-        }
-        return $data;
-    }
-
-    private function downloadFile(string $url, string $target): void
-    {
-        $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-        if ($curl !== '') {
-            $this->run([$curl, '--fail', '--location', '--retry', '3', '--output', $target, $url]);
-            return;
-        }
-        $data = $this->downloadText($url);
-        if (file_put_contents($target, $data) === false) {
-            throw new \RuntimeException("Unable to write {$target}");
-        }
     }
 
     private function run(array $command, ?string $cwd = null): void

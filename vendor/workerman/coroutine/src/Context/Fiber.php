@@ -103,3 +103,5 @@ class Fiber implements ContextInterface
     }
 
 }
+
+Fiber::initContext();

@@ -105,38 +105,4 @@ final class NanoSyntaxValidationVisitorTest extends TestCase
         self::assertCount(1, $traverser->traverse($nodes));
     }
 
-    public function testFullRuntimeNanoPolicyKeepsGeneratorsButRejectsVmEntrySyntax(): void
-    {
-        $parser = (new ParserFactory())->createForNewestSupportedVersion();
-        $accepted = $parser->parse(
-            '<?php function values(): Generator { yield 1; }',
-        );
-        self::assertNotNull($accepted);
-
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
-        $traverser->addVisitor(new NanoSyntaxValidationVisitor(
-            static function (Node $node, string $message): never {
-                throw new RuntimeException($message . ':' . $node->getStartLine());
-            },
-            false,
-        ));
-        self::assertCount(1, $traverser->traverse($accepted));
-
-        foreach ([
-            '<?php eval("return 1;");',
-            '<?php require "a.php";',
-            '<?php `uname`;',
-            '<?php $value = new class {};',
-        ] as $source) {
-            $nodes = $parser->parse($source);
-            self::assertNotNull($nodes);
-            try {
-                $traverser->traverse($nodes);
-                self::fail("Nano policy accepted unsupported source: {$source}");
-            } catch (RuntimeException) {
-                self::addToAssertionCount(1);
-            }
-        }
-    }
 }
