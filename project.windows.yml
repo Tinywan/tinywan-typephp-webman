@@ -55,8 +55,10 @@ ignore:
   - config
   - public
   - runtime
+  - app/view
   - app/model
   - app/process/Monitor.php
+  - vendor/workerman/webman-framework/src/support/view
   - vendor/workerman/webman-framework/src/support/bootstrap.php
   - vendor/workerman/webman-framework/src/support/helpers.php
   - vendor/workerman/webman-framework/src/start.php
