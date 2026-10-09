@@ -19,7 +19,6 @@ namespace Workerman\Coroutine;
 use ArrayObject;
 use Workerman\Coroutine\Context\ContextInterface;
 use Workerman\Events\Swoole;
-use Workerman\Events\Swow;
 use Workerman\Worker;
 
 /**
@@ -80,7 +79,6 @@ class Context implements ContextInterface
     {
         static::$driver ??= match (Worker::$eventLoopClass) {
             Swoole::class => Context\Swoole::class,
-            Swow::class => Context\Swow::class,
             default=> Context\Fiber::class,
         };
     }

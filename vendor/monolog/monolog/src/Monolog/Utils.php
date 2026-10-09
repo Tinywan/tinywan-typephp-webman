@@ -185,6 +185,7 @@ final class Utils
                 break;
             default:
                 $msg = 'Unknown error';
+                break;
         }
 
         throw new \RuntimeException('JSON encoding failed: '.$msg.'. Encoding: '.var_export($data, true));
@@ -249,13 +250,13 @@ final class Utils
         }
 
         $val = (int) $match['val'];
-        switch (strtolower($match['unit'])) {
-            case 'g':
-                $val *= 1024;
-            case 'm':
-                $val *= 1024;
-            case 'k':
-                $val *= 1024;
+        $unit = strtolower($match['unit']);
+        if ($unit === 'g') {
+            $val *= 1024 * 1024 * 1024;
+        } elseif ($unit === 'm') {
+            $val *= 1024 * 1024;
+        } elseif ($unit === 'k') {
+            $val *= 1024;
         }
 
         return $val;

@@ -20,9 +20,7 @@ use Workerman\Coroutine\Coroutine\CoroutineInterface;
 use Workerman\Coroutine\Coroutine\Fiber;
 use Workerman\Worker;
 use Workerman\Coroutine\Coroutine\Swoole as SwooleCoroutine;
-use Workerman\Coroutine\Coroutine\Swow as SwowCoroutine;
 use Workerman\Events\Swoole as SwooleEvent;
-use Workerman\Events\Swow as SwowEvent;
 
 /**
  * Class Coroutine
@@ -120,7 +118,6 @@ class Coroutine implements CoroutineInterface
     {
         static::$driverClass = match (Worker::$eventLoopClass ?? null) {
             SwooleEvent::class => SwooleCoroutine::class,
-            SwowEvent::class => SwowCoroutine::class,
             default => Fiber::class,
         };
     }

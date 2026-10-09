@@ -20,11 +20,9 @@ use InvalidArgumentException;
 use Workerman\Coroutine\Channel\ChannelInterface;
 use Workerman\Coroutine\Channel\Memory as ChannelMemory;
 use Workerman\Coroutine\Channel\Swoole as ChannelSwoole;
-use Workerman\Coroutine\Channel\Swow as ChannelSwow;
 use Workerman\Coroutine\Channel\Fiber as ChannelFiber;
 use Workerman\Events\Fiber;
 use Workerman\Events\Swoole;
-use Workerman\Events\Swow;
 use Workerman\Worker;
 
 /**
@@ -50,7 +48,6 @@ class Channel implements ChannelInterface
         }
         $this->driver = match (Worker::$eventLoopClass) {
             Swoole::class => new ChannelSwoole($capacity),
-            Swow::class => new ChannelSwow($capacity),
             Fiber::class => new ChannelFiber($capacity),
             default => new ChannelMemory($capacity),
         };

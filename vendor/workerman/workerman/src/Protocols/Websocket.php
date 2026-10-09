@@ -541,15 +541,15 @@ class Websocket
         $connection->websocketType ??= static::BINARY_TYPE_BLOB;
 
         if ($connection->headers) {
-            foreach ($connection->headers as $header) {
-                if (strpbrk($header, "\r\n") !== false) {
+            foreach ($connection->headers as $customHeader) {
+                if (strpbrk($customHeader, "\r\n") !== false) {
                     continue;
                 }
                 // Accepting the extension is what enables rsv1 compressed frames on this connection.
-                if (stripos($header, 'Sec-WebSocket-Extensions:') === 0 && stripos($header, 'permessage-deflate') !== false) {
+                if (stripos($customHeader, 'Sec-WebSocket-Extensions:') === 0 && stripos($customHeader, 'permessage-deflate') !== false) {
                     $connection->context->websocketPermessageDeflate = true;
                 }
-                $handshakeMessage .= "$header\r\n";
+                $handshakeMessage .= "$customHeader\r\n";
             }
         }
         $handshakeMessage .= "\r\n";

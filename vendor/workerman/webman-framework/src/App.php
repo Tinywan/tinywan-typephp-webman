@@ -604,18 +604,23 @@ class App
 
         if ($call instanceof Closure || is_string($call)) {
             $reflector = new ReflectionFunction($call);
-        } else {
-            $reflector = new ReflectionMethod($call[0], $call[1]);
+            if ($cacheKey !== null) {
+                static::$reflectorCache[$cacheKey] = $reflector;
+                if (count(static::$reflectorCache) > 1024) {
+                    unset(static::$reflectorCache[key(static::$reflectorCache)]);
+                }
+            }
+            return $reflector;
         }
 
+        $reflector2 = new ReflectionMethod($call[0], $call[1]);
         if ($cacheKey !== null) {
-            static::$reflectorCache[$cacheKey] = $reflector;
+            static::$reflectorCache[$cacheKey] = $reflector2;
             if (count(static::$reflectorCache) > 1024) {
                 unset(static::$reflectorCache[key(static::$reflectorCache)]);
             }
         }
-
-        return $reflector;
+        return $reflector2;
     }
 
     /**
@@ -1366,19 +1371,18 @@ class App
     protected static function stringify($data): string
     {
         $type = gettype($data);
-        switch ($type) {
-            case 'boolean':
-                return  $data ? 'true' : 'false';
-            case 'NULL':
-                return 'NULL';
-            case 'array':
-                return 'Array';
-            case 'object':
-                if (!method_exists($data, '__toString')) {
-                    return 'Object';
-                }
-            default:
-                return (string)$data;
+        if ($type === 'boolean') {
+            return $data ? 'true' : 'false';
         }
+        if ($type === 'NULL') {
+            return 'NULL';
+        }
+        if ($type === 'array') {
+            return 'Array';
+        }
+        if ($type === 'object' && !method_exists($data, '__toString')) {
+            return 'Object';
+        }
+        return (string)$data;
     }
 }

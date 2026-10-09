@@ -141,9 +141,9 @@ class JsonFormatter extends NormalizerFormatter
 
         $oldNewline = $this->appendNewline;
         $this->appendNewline = false;
-        array_walk($records, function (&$value, $key) use ($instance) {
-            $value = $instance->format($value);
-        });
+        foreach ($records as $key => $value) {
+            $records[$key] = $instance->format($value);
+        }
         $this->appendNewline = $oldNewline;
 
         return implode("\n", $records);

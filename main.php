@@ -21,8 +21,8 @@ function main(): void
     if (class_exists(\Workerman\Coroutine::class)) {
         \Workerman\Coroutine::init();
     }
-    if (class_exists(\Workerman\Coroutine\Fiber::class)) {
-        \Workerman\Coroutine\Fiber::init();
+    if (class_exists(\Workerman\Coroutine\Coroutine\Fiber::class)) {
+        \Workerman\Coroutine\Coroutine\Fiber::init();
     }
     if (class_exists(\Workerman\Coroutine\Context::class)) {
         \Workerman\Coroutine\Context::initDriver();

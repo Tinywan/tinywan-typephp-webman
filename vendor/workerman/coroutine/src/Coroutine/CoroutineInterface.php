@@ -17,7 +17,6 @@ declare(strict_types=1);
 namespace Workerman\Coroutine\Coroutine;
 
 use Fiber;
-use Swow\Coroutine as SwowCoroutine;
 
 /**
  * Interface CoroutineInterface
@@ -76,9 +75,9 @@ interface CoroutineInterface
     /**
      * Get the current coroutine.
      *
-     * @return CoroutineInterface|Fiber|SwowCoroutine|static
+     * @return CoroutineInterface|Fiber|static
      */
-    public static function getCurrent(): CoroutineInterface|Fiber|SwowCoroutine|static;
+    public static function getCurrent(): CoroutineInterface|Fiber|static;
 
     /**
      * Check if the current coroutine is in a coroutine.

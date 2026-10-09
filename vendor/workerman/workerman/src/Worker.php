@@ -1185,6 +1185,7 @@ class Worker
                     }
                     static::safeEcho("\nPress Ctrl+C to quit.\n\n");
                 }
+                break;
             case 'connections':
                 // Delete status file on shutdown
                 register_shutdown_function(static function () {
