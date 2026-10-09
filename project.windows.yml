@@ -65,7 +65,8 @@ ignore:
   - vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php
   - vendor/nikic/fast-route/src/functions.php
   - vendor/nikic/fast-route/src/bootstrap.php
-  - vendor/workerman/coroutine/src/Barrier/Swow.php
+  - vendor/workerman/coroutine/src/Barrier.php
+  - vendor/workerman/coroutine/src/Barrier
   - vendor/workerman/coroutine/src/Channel/Swow.php
   - vendor/workerman/coroutine/src/Context/Swow.php
   - vendor/workerman/coroutine/src/Coroutine/Swow.php

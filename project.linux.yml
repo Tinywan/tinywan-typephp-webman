@@ -77,7 +77,8 @@ ignore:
   # 2. 协程组件：Swow 扩展依赖排除
   # （由于环境未安装 ext-swow 扩展，防止编译期因缺少 Swow 命名空间报错）
   # ==========================================
-  - vendor/workerman/coroutine/src/Barrier/Swow.php
+  - vendor/workerman/coroutine/src/Barrier.php
+  - vendor/workerman/coroutine/src/Barrier
   - vendor/workerman/coroutine/src/Channel/Swow.php
   - vendor/workerman/coroutine/src/Context/Swow.php
   - vendor/workerman/coroutine/src/Coroutine/Swow.php
