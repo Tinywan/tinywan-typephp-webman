@@ -2,8 +2,9 @@ name: webman-server
 
 sources:
   - main.php
+  - support/helpers.php
+  - support/fast-route-functions.php
   - vendor/psr
-  - vendor/nikic/fast-route/src/functions.php
   - vendor/nikic/fast-route/src/BadRouteException.php
   - vendor/nikic/fast-route/src/DataGenerator.php
   - vendor/nikic/fast-route/src/Dispatcher.php
@@ -51,10 +52,13 @@ ignore:
   - app/model
   - app/process/Monitor.php
   - vendor/workerman/webman-framework/src/support/bootstrap.php
+  - vendor/workerman/webman-framework/src/support/helpers.php
   - vendor/workerman/webman-framework/src/start.php
   - vendor/workerman/webman-framework/src/windows.php
   - vendor/workerman/webman-framework/src/Install.php
   - vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php
+  - vendor/nikic/fast-route/src/functions.php
+  - vendor/nikic/fast-route/src/bootstrap.php
   - vendor/workerman/coroutine/src/Barrier/Swow.php
   - vendor/workerman/coroutine/src/Channel/Swow.php
   - vendor/workerman/coroutine/src/Context/Swow.php

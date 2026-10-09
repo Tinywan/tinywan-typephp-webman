@@ -2,8 +2,9 @@ name: webman-server
 
 sources:
   - main.php
+  - support/helpers.php
+  - support/fast-route-functions.php
   - vendor/psr
-  - vendor/nikic/fast-route/src/functions.php
   - vendor/nikic/fast-route/src/BadRouteException.php
   - vendor/nikic/fast-route/src/DataGenerator.php
   - vendor/nikic/fast-route/src/Dispatcher.php
@@ -58,10 +59,13 @@ ignore:
   # 2. Webman 框架初始化与辅助脚本排除
   # ==========================================
   - vendor/workerman/webman-framework/src/support/bootstrap.php # 框架传统的解释执行引导脚本（由 main.php 接管）
+  - vendor/workerman/webman-framework/src/support/helpers.php   # 包含顶层 if (!defined('BASE_PATH'))，由 support/helpers.php 接管
   - vendor/workerman/webman-framework/src/start.php             # 传统原生 CLI 启动入口
   - vendor/workerman/webman-framework/src/windows.php           # 传统 Windows 原生 CLI 启动脚本
   - vendor/workerman/webman-framework/src/Install.php           # Composer 安装后触发的脚手架安装器
   - vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php
+  - vendor/nikic/fast-route/src/functions.php                   # 包含顶层 if (!function_exists)，由 support/fast-route-functions.php 接管
+  - vendor/nikic/fast-route/src/bootstrap.php                   # 包含顶层 require 与 autoload 注册
 
   # ==========================================
   # 2. 协程组件：Swow 扩展依赖排除
