@@ -351,12 +351,18 @@ class Session
             self::$lifetime = (int)$gcMaxLifeTime;
         }
 
-        $sessionCookieParams = session_get_cookie_params();
-        static::$cookieLifetime = $sessionCookieParams['lifetime'];
-        static::$cookiePath = $sessionCookieParams['path'];
-        static::$domain = $sessionCookieParams['domain'];
-        static::$secure = $sessionCookieParams['secure'];
-        static::$httpOnly = $sessionCookieParams['httponly'];
+        $sessionCookieParams = function_exists('session_get_cookie_params') ? session_get_cookie_params() : [
+            'lifetime' => 0,
+            'path' => '/',
+            'domain' => '',
+            'secure' => false,
+            'httponly' => false,
+        ];
+        static::$cookieLifetime = $sessionCookieParams['lifetime'] ?? 0;
+        static::$cookiePath = $sessionCookieParams['path'] ?? '/';
+        static::$domain = $sessionCookieParams['domain'] ?? '';
+        static::$secure = !empty($sessionCookieParams['secure']);
+        static::$httpOnly = !empty($sessionCookieParams['httponly']);
     }
 
     /**
